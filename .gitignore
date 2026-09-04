@@ -1,0 +1,61 @@
+# ── 依赖 ──────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── 构建产物 ──────────────────────────────────────────
+dist/
+build/
+*.tsbuildinfo
+tsconfig.node.tsbuildinfo
+
+# vite.config.ts 的编译产物（源文件是 vite.config.ts）
+vite.config.js
+vite.config.d.ts
+
+# tsc -b 生成的类型声明文件（源文件是同名 .ts；前端 src/ 下无此类文件）
+server/**/*.d.ts
+shared/**/*.d.ts
+
+# shared/agentPrompt.ts 的编译产物（注意：postcss.config.js / tailwind.config.js 是真实配置，保留）
+shared/agentPrompt.js
+
+# ── 日志 ──────────────────────────────────────────────
+*.log
+build.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── 敏感数据（务必不要上传）────────────────────────────
+# data/ 目录下包含：
+#   browser/       浏览器持久会话(约 386MB)，保存智联/BOSS/51job/猎聘的登录 Cookie
+#   chat.db        SQLite 数据库：mail_config.auth_code(邮箱授权码)、
+#                  profile(个人简历)、applications(投递记录)
+#   screenshots/   投递过程截图，含个人与岗位信息
+#   *_result*.json 投递运行结果日志
+# 注意：应用启动会自动重建 data/ 目录与 chat.db（见 server/db.ts），
+#       因此忽略该目录不会影响新克隆项目的运行。
+data/
+
+# ── 环境变量 ──────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── 临时调试脚本（未被任何源码引用）─────────────────────
+_dbinspect.cjs
+_dbjobs.cjs
+_dbprofile.cjs
+_parse_resume.cjs
+_update_profile.cjs
+_update_profile2.cjs
+_probe_*.cjs
+_gaga_*.cjs
+
+# ── 编辑器 / 系统文件 ─────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
