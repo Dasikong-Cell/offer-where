@@ -72,7 +72,13 @@ async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogg
   await sleep(2500);
   // 非沟通型平台常弹出「选择简历 / 确认投递」弹窗，补点确认
   if (!cfg.chatBased) {
-    for (const lbl of ['确定', '投递', '提交申请', '保存并投递', '保存']) {
+    // 先关掉可能出现的「我知道了 / 去完善 / 稍后再说」提示遮罩，避免挡住确认按钮
+    for (const hint of ['我知道了', '去完善', '稍后再说', '关闭']) {
+      await bexec(platform, 'click', { text: hint, timeout: 1500 });
+    }
+    await sleep(800);
+    // 以「立即申请」为首选确认（51job 简历选择对话框），其余为兜底
+    for (const lbl of ['立即申请', '确定', '提交申请', '保存并投递', '保存']) {
       await bexec(platform, 'click', { text: lbl, timeout: 2500 }, logs, `确认弹窗「${lbl}」`);
     }
     await sleep(2000);

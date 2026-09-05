@@ -31,10 +31,13 @@ export async function bexec(
   return res;
 }
 
-/** 取页面可见文本 */
+/** 取页面可见文本（用简单 eval 取正文，首调即稳定，避免 text 动作在导航后首调偶发取空） */
 export async function pageText(platform: string): Promise<string> {
-  const res = await execAction(platform, 'text', { scope: 'body' });
-  return res.text || '';
+  const res = await execAction(platform, 'eval', {
+    script:
+      "document.body ? (document.body.innerText || document.body.textContent || '').replace(/\\s+/g,' ').trim() : ''",
+  });
+  return (res.data as string) || '';
 }
 
 /** 取当前 URL */

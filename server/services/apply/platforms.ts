@@ -152,19 +152,25 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       return Array.from(set);
     })()`,
     applyScript: `(() => {
-      // 51job 现行页面：主按钮是 a.btn / button 的「立即申请」，点击后弹确认对话框
-      const cands = [...document.querySelectorAll('a.btn, button, [class*="apply-component"], [class*="el-button"]')];
-      const b = cands.find(x => {
-        const t = (x.innerText || x.textContent || '').trim();
-        return (t === '立即申请' || t === '申请职位' || t === '投递简历' || t === '投个简历') && !x.disabled;
-      });
-      if (b) { b.click(); return true; }
+      // 51job 现行 JD 页：主按钮文本为「投递」（class=apply-btn normal / jobapply-wrapper apply_btn）。
+      // 点击后弹出「请选择需要投递的简历」对话框，确认按钮为「立即申请」。
+      const all = [...document.querySelectorAll('a,button,[class*="btn"],[class*="apply"]')];
+      const byText = (re) => all.find(x => { const t = (x.innerText || x.textContent || '').trim(); return re.test(t) && !x.disabled; });
+      // 先关掉可能出现的「我知道了」提示框
+      const hint = byText(/^我知道了$/);
+      if (hint) { try { hint.click(); } catch (e) {} }
+      // 主投递按钮：优先「投递」/「立即申请」/「申请职位」，排除「去聊聊」「聊」等沟通按钮
+      const main = byText(/^(投递|立即申请|申请职位|投个简历|申请)$/) || byText(/投递简历/);
+      if (main) { main.click(); return 'main'; }
       return false;
     })()`,
-    confirmRegex: '申请成功|已投递|投递成功|简历已送达|申请职位成功',
+    confirmRegex: '申请成功|已投递|投递成功|简历已送达|申请职位成功|投递完成',
     loginCheck: (text, url) =>
-      // 「登录/注册」是 51job 顶栏未登录态标志；命中即视为未登录
-      /(请登录|登录51job|账号登录|登录后|登录\/注册)/.test(text) && !/(申请成功|已投递)/.test(text),
+      // 严格判定：仅当页面出现明确登录墙（账号登录/扫码/短信登录/登录后投递）才视为未登录，
+      // 避免顶栏常驻的「登录/注册」链接误伤（该链接对登录用户也常驻显示）。
+      // 同时排除已出现投递成功/个人中心等已登录正指标。
+      /(请登录|账号登录|登录并投递|登录后投递|扫码登录|短信登录|登录无忧|登录后可)/.test(text)
+        && !/(已投递|申请成功|投递成功|我的简历|我的求职|个人中心|消息中心)/.test(text),
     login: {
       loginUrl: 'https://www.51job.com/',
       emailInput: ['#loginname', 'input[placeholder*="邮箱"]', 'input[name="loginname"]'],

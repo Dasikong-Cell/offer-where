@@ -367,9 +367,22 @@ export async function execCdpAction(
       }
       case 'text': {
         const scope = args.selector || args.text || args.role ? `__findEl(${JSON.stringify(args)})` : (args.scope || 'document.body');
-        const expr = `(function(){ ${FIND_EL_SRC} var el = ${scope}; if(!el) return ''; var t = el.innerText || el.textContent || ''; return t.replace(/\\s+\\n/g,'\\n').trim(); })()`;
-        const r = await send(s, 'Runtime.evaluate', { expression: expr, returnByValue: true });
-        const text = r.result ? r.result.value : '';
+        // 优先 textContent（不依赖渲染可见性，SPA 导航后也能取到），回退 innerText；
+        // 导航后可能瞬时为空，带多次重试。
+        const expr = `(function(){ ${FIND_EL_SRC} var el = ${scope}; if(!el) return ''; var t = (el.textContent && el.textContent.length ? el.textContent : (el.innerText || '')); return t.replace(/\\s+\\n/g,'\\n').trim(); })()`;
+        let text = '';
+        // 导航后首个 Runtime.evaluate 偶发拿到空 execution context（返回空文本）。
+        // 先发一次真正触达 DOM 的 evaluate 预热，激活当前上下文后再取正文。
+        try { await send(s, 'Runtime.evaluate', { expression: 'document.body ? document.body.childElementCount : 0', returnByValue: true }); } catch { /* 忽略 */ }
+        await new Promise(r => setTimeout(r, 300));
+        for (let i = 0; i < 6; i++) {
+          try {
+            const r = await send(s, 'Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+            text = (r.result && typeof r.result.value === 'string') ? r.result.value : '';
+          } catch { /* 重试 */ }
+          if (text.length > 0) break;
+          await new Promise(r => setTimeout(r, 500));
+        }
         return { ...(await okResult(s)), text };
       }
       case 'html': {
