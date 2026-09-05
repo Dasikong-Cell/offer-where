@@ -66,8 +66,10 @@ async function ensureLoggedIn(
   return false;
 }
 
+type OneClickResult = { applied: boolean; needResume: boolean };
+
 /** 在 JD 页点击投递/沟通按钮并确认 */
-async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogger): Promise<boolean> {
+async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogger): Promise<OneClickResult> {
   const r = await bexec(platform, 'eval', { script: cfg.applyScript }, logs, `点击「${cfg.chatBased ? '沟通' : '投递'}」按钮`);
   await sleep(2500);
   // 非沟通型平台常弹出「选择简历 / 确认投递」弹窗，补点确认
@@ -77,6 +79,19 @@ async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogg
       await bexec(platform, 'click', { text: hint, timeout: 1500 });
     }
     await sleep(800);
+
+    // 51job 等：若无可用在线简历，点「投递」会被重定向到简历中心，需人工先建简历。
+    // 这是账号侧必要条件，不是代码错误——提前识别，避免后续误点「确定/保存」导致误报。
+    const afterUrl = await currentUrl(platform);
+    const afterText = await pageText(platform);
+    const resumeWall =
+      /(resume\/center|resumeid|\/resume)/.test(afterUrl) ||
+      /请先创建在线简历|您还没有在线简历|完善在线简历|简历完整度不足|请先完善简历/.test(afterText);
+    if (resumeWall) {
+      logs.step('简历校验', false, '账号缺少可用在线简历，已被引导至简历中心');
+      return { applied: false, needResume: true };
+    }
+
     // 以「立即申请」为首选确认（51job 简历选择对话框），其余为兜底
     for (const lbl of ['立即申请', '确定', '提交申请', '保存并投递', '保存']) {
       await bexec(platform, 'click', { text: lbl, timeout: 2500 }, logs, `确认弹窗「${lbl}」`);
@@ -89,11 +104,11 @@ async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogg
   if (cfg.chatBased) {
     // 沟通型（BOSS/猎聘）：发起沟通即视为成功，页面无「投递成功」文案
     logs.step('投递结果', clicked, clicked ? '已发起沟通' : '未成功发起沟通');
-    return clicked;
+    return { applied: clicked, needResume: false };
   }
   // 非沟通型（智联/51job）：以页面出现「投递成功/已投递」文案为准，避免误报
   logs.step('投递结果', confirmed, confirmed ? '页面显示投递成功' : (clicked ? '已点击但页面未确认，请人工核对' : '未命中投递按钮'));
-  return confirmed;
+  return { applied: confirmed, needResume: false };
 }
 
 /** 单岗位一键投递 */
@@ -128,10 +143,13 @@ async function runOneClick(input: ApplyInput): Promise<ApplyResult> {
     await bexec(platform, 'navigate', { url: jobUrl, waitUntil: 'domcontentloaded' }, logs, '登录后重新打开岗位');
     await sleep(2500);
 
-    const ok = await oneClickApply(platform, cfg, logs);
+    const oc = await oneClickApply(platform, cfg, logs);
     const shot = await tryScreenshot(platform);
-    if (ok) {
+    if (oc.applied) {
       return { platform, status: 'applied', message: `已在${cfg.label}向「${company || position || '该岗位'}」完成投递`, logs: logs.logs, company, position, screenshot: shot };
+    }
+    if (oc.needResume) {
+      return { platform, status: 'need_resume', message: `前程无忧账号缺少可用在线简历，已被引导至简历中心。请先在 51job「简历中心 → 在线简历」创建/完善一份在线简历并设为默认，再重试。`, logs: logs.logs, company, position, screenshot: shot };
     }
     return { platform, status: 'need_manual', message: '已点击但未能确认成功，请检查打开的浏览器（可能需补填必填项或遇滑块）', logs: logs.logs, company, position, screenshot: shot };
   } catch (e: any) {
@@ -149,6 +167,7 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
   const maxApply = input.maxApply && input.maxApply > 0 ? input.maxApply : 9999;
   let applied = 0;
   let skipped = 0;
+  let needResume = false;
 
   try {
     await bexec(platform, 'navigate', { url: cfg.searchUrl(keyword), waitUntil: 'domcontentloaded' }, logs, keyword ? `搜索「${keyword}」` : '打开职位列表');
@@ -186,11 +205,13 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
           if (applied + skipped >= maxApply) break;
           await bexec(platform, 'navigate', { url: href, waitUntil: 'domcontentloaded' }, logs, '打开岗位');
           await sleep(2500);
-          const ok = await oneClickApply(platform, cfg, logs);
-          if (ok) applied++;
+          const oc = await oneClickApply(platform, cfg, logs);
+          if (oc.applied) applied++;
+          else if (oc.needResume) { skipped++; needResume = true; break; }
           else skipped++;
         }
         if (applied + skipped >= maxApply) break;
+        if (needResume) break;
       }
 
       // 翻页
@@ -199,6 +220,9 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
       await sleep(3000);
     }
 
+    if (needResume && applied === 0) {
+      return { platform, status: 'need_resume', message: `前程无忧账号缺少可用在线简历，已被引导至简历中心，无法投递。请先在 51job「简历中心 → 在线简历」创建/完善一份在线简历并设为默认，再重试。`, logs: logs.logs };
+    }
     const status = applied > 0 ? 'applied' : 'need_manual';
     return { platform, status, message: `批量投递完成：成功 ${applied}，跳过 ${skipped}`, logs: logs.logs };
   } catch (e: any) {
@@ -346,9 +370,10 @@ async function runLetter(input: ApplyInput): Promise<ApplyResult> {
     }
     if (!sent) {
       // 非沟通型平台：一键投递（简历即求职信）
-      const ok = await oneClickApply(platform, cfg, logs);
+      const oc = await oneClickApply(platform, cfg, logs);
       const shot = await tryScreenshot(platform);
-      return { platform, status: ok ? 'applied' : 'need_manual', message: ok ? '已一键投递（简历已送达）' : '未找到沟通/投递入口', logs: logs.logs, company, position, screenshot: shot };
+      if (oc.needResume) return { platform, status: 'need_resume', message: `前程无忧账号缺少可用在线简历，已被引导至简历中心。请先在 51job「简历中心 → 在线简历」创建/完善一份在线简历并设为默认，再重试。`, logs: logs.logs, company, position, screenshot: shot };
+      return { platform, status: oc.applied ? 'applied' : 'need_manual', message: oc.applied ? '已一键投递（简历已送达）' : '未找到沟通/投递入口', logs: logs.logs, company, position, screenshot: shot };
     }
     const sendSels = cfg.chatBased && cfg.hr ? cfg.hr.sendSel : ['发送'];
     for (const s of sendSels) {
