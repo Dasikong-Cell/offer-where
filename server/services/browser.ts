@@ -82,6 +82,27 @@ async function getSession(
   const userDataDir = path.join(DATA_ROOT, key);
   if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
 
+  // 清理 Chromium 上次异常退出留下的恢复提示：把退出标记改为正常，
+  // 删除 Last Session/Tabs，避免启动时弹"未正确关闭"气泡并创建额外窗口。
+  try {
+    const defaultDir = path.join(userDataDir, 'Default');
+    const prefsPath = path.join(defaultDir, 'Preferences');
+    if (fs.existsSync(prefsPath)) {
+      const prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf-8'));
+      if (prefs.profile) {
+        prefs.profile.exit_type = 'Normal';
+        prefs.profile.exited_cleanly = true;
+      }
+      fs.writeFileSync(prefsPath, JSON.stringify(prefs));
+    }
+    for (const f of ['Last Session', 'Last Tabs', 'Last Socks']) {
+      const fp = path.join(userDataDir, f);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    }
+  } catch {
+    // 忽略清理失败
+  }
+
   let context: import('playwright').BrowserContext;
   try {
     context = await playwright.chromium.launchPersistentContext(userDataDir, {
@@ -94,6 +115,7 @@ async function getSession(
         '--disable-blink-features=AutomationControlled',
         '--no-first-run',
         '--disable-infobars',
+        '--disable-session-crashed-bubble',
         // Windows 无 GPU 环境下不加这三项会导致截图挂起
         '--disable-gpu',
         '--disable-software-rasterizer',
