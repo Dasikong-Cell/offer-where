@@ -1,12 +1,14 @@
 /**
  * 裸 CDP 浏览器驱动（用于 BOSS/猎聘 等强反爬站点）
  *
- * 关键背景：
- *  BOSS直聘 / 猎聘 会检测 Playwright 通过 connectOverCDP 接管真实 Chrome 时
- *  自动开启的 CDP「调试域」（Debugger / Profiler 等），命中后立即把页面
- *  navigate 回 about:blank（表现为空白页）。
- *  实测只用 Page / Runtime / Network / DOM / Input 域、绝不开启 Debugger /
- *  Profiler 域时，真实 Chrome 不会被识别为自动化，BOSS/猎聘 可正常渲染。
+ * 根因（经逐步验证确定）：
+ *  BOSS直聘 / 猎聘 会检测 CDP 的 `Runtime.enable` 命令（即启用 Runtime 事件通知），
+ *  命中后数秒内把页面 `location.href = 'about:blank'`（表现为空白页）。
+ *  关键发现：`Runtime.evaluate` 命令本身无需先 `Runtime.enable` 即可执行，
+ *  且**不会**触发该检测。因此本驱动只开启 `Page` 域，所有 JS 交互一律通过
+ *  `Runtime.evaluate` 命令完成，页面得以稳定渲染（已实测连续 25s+ 不空白）。
+ *  `Runtime.enable` / `Debugger` / `Profiler` / `Network` / `DOM` / `Input` 域
+ *  均不开（DOM 仅在 upload 时按需瞬时开启，用完即弃）。
  *
  * 本驱动与 browser.execAction 保持同一返回结构（BrowserActionResult），
  * 作为 cdp.json 中配置平台（boss / liepin）的替代实现，对投递引擎透明。
@@ -159,13 +161,13 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   }
   const ws = await connect(target.webSocketDebuggerUrl);
   const s = attachSession(ws, platform);
-  // 仅开启必要域 —— 关键：不开 Debugger / Profiler
+  // 关键：只开 Page 域，绝不开 Runtime.enable。
+  // 实测证据：BOSS直聘/猎聘 会检测 `Runtime.enable`（启用 Runtime 事件通知），
+  // 命中后数秒内把页面 navigate 回 about:blank（表现为空白页）。
+  // 但 `Runtime.evaluate` 命令本身无需 enable 即可执行，且不会触发该检测 ——
+  // 因此所有 JS 交互（click/fill/eval/screenshot 等）照常通过 Runtime.evaluate 完成，
+  // 页面保持正常渲染。Page 域用于导航与 loadEventFired 等待。
   await send(s, 'Page.enable');
-  await send(s, 'Runtime.enable');
-  // 关键：仅开启 Page + Runtime 两个域。
-  // 实测开启 Network / DOM / Input / Debugger / Profiler 任意额外域都会被 BOSS/猎聘
-  // 识别为自动化并清空页面（之前裸 CDP 仅开 Page+Runtime 可正常渲染）。
-  // DOM 域仅在 upload（setFileInputFiles）时按需临时开启。
   sessions.set(platform, s);
   return s;
 }
@@ -405,8 +407,8 @@ export async function execCdpAction(
         const t = await httpReq('PUT', `${ep}/json/new?${args.url || 'about:blank'}`);
         const nws = await connect(t.webSocketDebuggerUrl);
         const ns = attachSession(nws, platform);
-        await send(ns, 'Page.enable'); await send(ns, 'Runtime.enable'); await send(ns, 'Network.enable'); await send(ns, 'DOM.enable'); await send(ns, 'Input.enable');
-        // 旧标签保留在真实 Chrome 中，仅将驱动当前会话切换到新标签
+        // 仅开 Page 域（同 ensureSession 原则：绝不开 Runtime.enable，否则被反爬清空）
+        await send(ns, 'Page.enable');
         sessions.set(platform, ns);
         return await okResult(ns);
       }
