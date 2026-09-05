@@ -112,7 +112,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       });
       return Array.from(set);
     })()`,
-    applyScript: `(() => { const b = document.querySelector('.op-btn-chat'); if (b && !b.disabled) { b.click(); return true; } return false; })()`,
+    applyScript: `(() => { let b = document.querySelector('.btn-startchat'); if (!b) b = [...document.querySelectorAll('a,button')].find(e => /立即沟通/.test(e.textContent || '')); if (b && !b.disabled) { b.click(); return true; } return false; })()`,
     confirmRegex: '已发送|发送成功|沟通中|交换微信|简历已送达|打招呼',
     loginCheck: (text, url) =>
       /web\/user|login\.zhipin|passport\.zhipin/.test(url) ||
