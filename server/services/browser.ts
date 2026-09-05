@@ -6,6 +6,7 @@
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { execCdpAction, closeAllCdp } from './cdpDriver.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,21 @@ function safePlatformName(platform: string): string {
   return (platform || 'default').replace(/[^a-zA-Z0-9_\-]/g, '_');
 }
 
+/** CDP 附加配置：data/browser/cdp.json，格式 { "boss": "http://127.0.0.1:9222", ... }
+ *  配置了的平台不再启动 Playwright 自带 Chromium，而是接管用户真实 Chrome
+ *  （绕过 BOSS/猎聘等对自动化浏览器指纹的强反爬）。 */
+const CDP_CONFIG_PATH = path.join(DATA_ROOT, 'cdp.json');
+function getCdpEndpoint(key: string): string | null {
+  try {
+    if (!fs.existsSync(CDP_CONFIG_PATH)) return null;
+    const cfg = JSON.parse(fs.readFileSync(CDP_CONFIG_PATH, 'utf-8'));
+    const ep = cfg && typeof cfg === 'object' ? cfg[key] : null;
+    return typeof ep === 'string' && ep.trim() ? ep.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface BrowserActionResult {
   ok: boolean;
   url?: string;
@@ -79,6 +95,7 @@ async function getSession(
 
   ensureDirs();
   const playwright = await loadPlaywright();
+
   const userDataDir = path.join(DATA_ROOT, key);
   if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
 
@@ -135,7 +152,59 @@ async function getSession(
     throw error;
   }
 
+  // 反爬指纹伪装：BOSS/猎聘等站点会通过 Client Hints(navigator.userAgentData)、
+  // permissions、languages 等判断是否为自动化浏览器（Chrome for Testing），
+  // 命中后会在页面加载数秒后把页面清空为 about:blank。
+  // 在页面脚本执行前注入，把这些特征伪装成真实 Google Chrome。
+  try {
+    await context.addInitScript(() => {
+      try {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      } catch { /* 忽略 */ }
+      try {
+        Object.defineProperty(navigator, 'userAgentData', {
+          get: () => ({
+            brands: [
+              { brand: 'Google Chrome', version: '151' },
+              { brand: 'Chromium', version: '151' },
+            ],
+            mobile: false,
+            platform: 'Windows',
+          }),
+        });
+      } catch { /* 忽略 */ }
+      try {
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+      } catch { /* 忽略 */ }
+      try {
+        const origQuery = (window.navigator as any).permissions?.query;
+        if (origQuery) {
+          (window.navigator as any).permissions.query = (p: any) =>
+            p && p.name === 'notifications'
+              ? Promise.resolve({ state: Notification.permission })
+              : origQuery(p);
+        }
+      } catch { /* 忽略 */ }
+    });
+  } catch {
+    /* 忽略注入失败 */
+  }
+
+  // Chromium 启动/会话恢复常产生额外空白标签（about:blank），它会占据前台，
+  // 导致用户看到空白页、而 Playwright 操作的页面在后台标签（服务端 title 正确但窗口标题是 about:blank）。
+  // 这里先关掉多余标签页，只保留一个，再把它切到前台。
+  try {
+    let guard = 0;
+    while (context.pages().length > 1 && guard++ < 20) {
+      const extra = context.pages()[context.pages().length - 1];
+      try { await extra.close(); } catch { break; }
+    }
+  } catch {
+    /* 忽略清理失败 */
+  }
+
   const page = context.pages()[0] || (await context.newPage());
+  try { await page.bringToFront(); } catch { /* 忽略 */ }
   const session: BrowserSession = { platform: key, context, page, createdAt: Date.now() };
   sessions.set(key, session);
   return session;
@@ -179,6 +248,15 @@ export async function execAction(
   args: Record<string, any> = {}
 ): Promise<BrowserActionResult> {
   try {
+    // ── 裸 CDP 驱动（BOSS/猎聘 等强反爬站点）──
+    // Playwright 的 connectOverCDP 会自动开启 Debugger 等调试域，被 BOSS/猎聘
+    // 识别为自动化后立即把页面清空为 about:blank。裸 CDP 仅启用 Page/Runtime/
+    // Network/DOM/Input 域，真实 Chrome 不会被识别，页面正常渲染。
+    const cdpUrl = getCdpEndpoint(platform);
+    if (cdpUrl) {
+      return execCdpAction(platform, action, args, cdpUrl);
+    }
+
     const session = await getSession(platform, {
       headless: args.headless,
       userAgent: args.userAgent,
@@ -193,6 +271,37 @@ export async function execAction(
           waitUntil: args.waitUntil || 'domcontentloaded',
           timeout: args.timeout || 30000,
         });
+        // 关掉 Playwright 管辖范围内的非目标标签
+        try {
+          for (const p of context.pages()) {
+            if (p !== page) {
+              try { await p.close(); } catch { /* 忽略 */ }
+            }
+          }
+        } catch { /* 忽略 */ }
+
+        // 关键：Chromium 启动时的初始 about:blank 标签不受 context.pages() 管理，
+        // Playwright API 关不掉它，它却占着窗口前台（用户看到空白页，而目标页在后台标签）。
+        // 这里用 CDP 直接关掉所有 about:blank 页面型 target。
+        // CDP 附加模式（用户真实 Chrome）下跳过：不能误关用户自己的空白标签页。
+        try {
+          const curUrl = page.url();
+          if (!session.cdpBrowser && curUrl && curUrl !== 'about:blank') {
+            const cdp = await context.newCDPSession(page);
+            try {
+              const { targetInfos } = await cdp.send('Target.getTargets');
+              for (const t of targetInfos) {
+                if (t.type === 'page' && t.url === 'about:blank') {
+                  try { await cdp.send('Target.closeTarget', { targetId: t.targetId }); } catch { /* 忽略 */ }
+                }
+              }
+            } finally {
+              try { await cdp.detach(); } catch { /* 忽略 */ }
+            }
+          }
+        } catch { /* 忽略 */ }
+
+        try { await page.bringToFront(); } catch { /* 忽略 */ }
         return okResult(page);
       }
 
@@ -341,6 +450,13 @@ export async function execAction(
     if (code === 'PLAYWRIGHT_MISSING' || code === 'CHROMIUM_MISSING') {
       return { ok: false, error: error.message, hint: 'npm install playwright && npx playwright install chromium' };
     }
+    if (code === 'CDP_ATTACH_FAILED') {
+      return {
+        ok: false,
+        error: error.message,
+        hint: '先以调试模式启动真实 Chrome：chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\chrome-cdp-profile',
+      };
+    }
     return { ok: false, error: error?.message || String(error) };
   }
 }
@@ -379,4 +495,6 @@ export async function closeAll(): Promise<void> {
     }
   }
   sessions.clear();
+  // 同时关闭裸 CDP 驱动持有的真实 Chrome 标签页会话（不关闭用户 Chrome 本身）
+  try { await closeAllCdp(); } catch { /* 忽略 */ }
 }
