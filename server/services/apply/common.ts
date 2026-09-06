@@ -4,11 +4,26 @@
  * - 邮箱验证码轮询（复用 mail.fetchLatestCode）
  * - 日志/等待工具
  */
+import fs from 'fs';
+import path from 'path';
 import { execAction } from '../browser.js';
 import { fetchLatestCode } from '../mail.js';
 import type { ApplyLog, ApplyProfile } from './types.js';
 
 export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/**
+ * 解析有效的简历附件路径。
+ * 优先使用档案中配置的 resume_path；若该文件不存在，则回退到项目内置的
+ * data/resume_source.pdf（即用户发来的默认简历）。
+ * 这样即使档案里的路径失效（例如早期误指向已删除的桌面文件），投递仍能用默认简历上传附件。
+ */
+export function resolveResumePath(configured?: string | null): string | undefined {
+  if (configured && fs.existsSync(configured)) return configured;
+  const fallback = path.resolve(__dirname, '../../../data/resume_source.pdf');
+  if (fs.existsSync(fallback)) return fallback;
+  return undefined;
+}
 
 export class ApplyLogger {
   logs: ApplyLog[] = [];

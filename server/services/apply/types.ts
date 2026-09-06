@@ -74,4 +74,6 @@ export interface ApplyResult {
   screenshot?: string;
   /** search 动作收集到的岗位 */
   foundJobs?: { title: string; url: string; company?: string }[];
+  /** 本轮实际投递成功数量（批量投递用） */
+  appliedCount?: number;
 }

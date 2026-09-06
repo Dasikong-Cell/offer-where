@@ -13,6 +13,7 @@
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
 import { getPlatform, type PlatformCfg, type PlatformKey } from './platforms.js';
 import { writeLetter } from './letterWriter.js';
+import { runJob51, runJob51List } from './job51.js';
 import type { ApplyInput, ApplyResult, ApplyPlatform } from './types.js';
 
 async function currentUrl(platform: string): Promise<string> {
@@ -80,23 +81,63 @@ async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogg
     }
     await sleep(800);
 
-    // 51job 等：若无可用在线简历，点「投递」会被重定向到简历中心，需人工先建简历。
-    // 这是账号侧必要条件，不是代码错误——提前识别，避免后续误点「确定/保存」导致误报。
-    const afterUrl = await currentUrl(platform);
-    const afterText = await pageText(platform);
-    const resumeWall =
-      /(resume\/center|resumeid|\/resume)/.test(afterUrl) ||
-      /请先创建在线简历|您还没有在线简历|完善在线简历|简历完整度不足|请先完善简历/.test(afterText);
-    if (resumeWall) {
-      logs.step('简历校验', false, '账号缺少可用在线简历，已被引导至简历中心');
-      return { applied: false, needResume: true };
-    }
+    if (platform === 'job51') {
+      // 校招/校园岗位需要单独的校招简历，账号仅有普通简历，点击「立即投递」通常无反应或跳简历中心；
+      // 提前识别并跳过。注意：页面导航栏常驻「校园招聘」链接，必须用岗位标题(document.title)判断是否校招，
+      // 不能用正文，否则会误杀普通岗位。
+      const titleRes = await bexec(platform, 'eval', { script: 'document.title' });
+      if (/校招|校园招聘/i.test(String(titleRes.data || ''))) {
+        logs.step('岗位类型', false, '校招/校园岗位，账号无对应简历，跳过');
+        return { applied: false, needResume: false };
+      }
+      // 51job 投递弹窗存在两种形态，统一用「先确认→选简历→再确认」顺序覆盖两者：
+      //  A) 请选择需要投递的简历 →「立即申请」→ 选择附件简历 →「发送」
+      //  B) 选择简历 → 选「附件简历/我的简历」→「确定/投递」
+      // 先点「立即申请」开附件对话框（A 用；B 无此按钮则自动忽略，click 找不到返回 false 不中断），
+      // 再选简历/附件，最后依次点「发送/确定/投递/提交申请」（缺的自动忽略）。
+      await sleep(1500);
+      await bexec(platform, 'click', { text: '立即申请', timeout: 6000 }, logs, '确认在线简历');
+      await sleep(1000);
+      for (const sel of ['resume_source', '附件简历', '我的简历', '上传的简历']) {
+        await bexec(platform, 'click', { text: sel, timeout: 4000 }, logs, `选择简历「${sel}」`);
+      }
+      await sleep(800);
+      for (const c of ['发送', '确定', '投递', '提交申请']) {
+        await bexec(platform, 'click', { text: c, timeout: 4000 }, logs, `确认「${c}」`);
+      }
+      await sleep(2000);
 
-    // 以「立即申请」为首选确认（51job 简历选择对话框），其余为兜底
-    for (const lbl of ['立即申请', '确定', '提交申请', '保存并投递', '保存']) {
-      await bexec(platform, 'click', { text: lbl, timeout: 2500 }, logs, `确认弹窗「${lbl}」`);
+      // 流程走完后，再判定是否真的被引导到简历中心（账号缺在线简历）
+      const afterUrl = await currentUrl(platform);
+      const afterText = await pageText(platform);
+      const confirmed = new RegExp(cfg.confirmRegex).test(afterText);
+      if (!confirmed && /(resume\/center|resumeid|\/resume)/.test(afterUrl)) {
+        logs.step('简历校验', false, '账号缺少可用在线简历，已被引导至简历中心');
+        return { applied: false, needResume: true };
+      }
+    } else {
+      // 先关掉可能出现的「我知道了 / 去完善 / 稍后再说」提示遮罩，避免挡住确认按钮
+      for (const hint of ['我知道了', '去完善', '稍后再说', '关闭']) {
+        await bexec(platform, 'click', { text: hint, timeout: 1500 });
+      }
+      await sleep(800);
+      // 以「立即申请」为首选确认（智联/其它平台的简历选择对话框），其余为兜底
+      for (const lbl of ['立即申请', '确定', '提交申请', '保存并投递', '保存']) {
+        await bexec(platform, 'click', { text: lbl, timeout: 2500 }, logs, `确认弹窗「${lbl}」`);
+      }
+      await sleep(2000);
+
+      // 非 job51 平台：点「投递」若被重定向到简历中心，需人工先建简历
+      const afterUrl = await currentUrl(platform);
+      const afterText = await pageText(platform);
+      const resumeWall =
+        /(resume\/center|resumeid|\/resume)/.test(afterUrl) ||
+        /请先创建在线简历|您还没有在线简历|完善在线简历|简历完整度不足|请先完善简历/.test(afterText);
+      if (resumeWall) {
+        logs.step('简历校验', false, '账号缺少可用在线简历，已被引导至简历中心');
+        return { applied: false, needResume: true };
+      }
     }
-    await sleep(2000);
   }
   const text = await pageText(platform);
   const clicked = r.data === true;
@@ -170,6 +211,14 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
   let needResume = false;
 
   try {
+    // 51job 首选「列表页直投」：直接 goto JD 详情页会触发阿里云滑块风控，
+    // 而搜索列表每行自带「投递」按钮，行内弹窗选简历→发送即可，不跳 JD 页。
+    if (platform === 'job51') {
+      const r51 = await runJob51List(input, keyword, maxApply);
+      (r51.logs || []).forEach(l => logs.logs.push(l));
+      return r51;
+    }
+
     await bexec(platform, 'navigate', { url: cfg.searchUrl(keyword), waitUntil: 'domcontentloaded' }, logs, keyword ? `搜索「${keyword}」` : '打开职位列表');
     await sleep(3500);
 
@@ -205,13 +254,42 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
           if (applied + skipped >= maxApply) break;
           await bexec(platform, 'navigate', { url: href, waitUntil: 'domcontentloaded' }, logs, '打开岗位');
           await sleep(2500);
-          const oc = await oneClickApply(platform, cfg, logs);
+          let oc: OneClickResult;
+          if (platform === 'job51') {
+            // job51 单岗位投递改用已验证专用的 runJob51（覆盖「选择简历 → 附件 → 提交」全流程），
+            // 比通用 oneClickApply 更稳。
+            // 校招/校园岗位需单独校招简历，账号无则跳过；注意：页面导航栏常驻「校园招聘」链接，
+            // 不能拿正文判断，必须用「岗位标题(document.title)」是否含「校招」来识别，否则会误杀普通岗位。
+            const titleRes = await bexec(platform, 'eval', { script: 'document.title' });
+            const isCampus = /校招|校园招聘/i.test(String(titleRes.data || ''));
+            if (isCampus) {
+              logs.step('岗位类型', false, '校招/校园岗位，账号无对应简历，跳过');
+              oc = { applied: false, needResume: false };
+            } else {
+              const rj = await runJob51({ ...input, action: 'hello', jobUrl: href });
+              (rj.logs || []).forEach((l) => logs.logs.push(l));
+              if (rj.status === 'applied') oc = { applied: true, needResume: false };
+              else if (rj.status === 'need_login') oc = { applied: false, needResume: true };
+              else if (rj.status === 'need_captcha') {
+                // 51job 反爬滑块：立即暂停整批，交给用户在浏览器手动过滑块后重跑，
+                // 避免反复试探反而把账号风险评分拉满。
+                return {
+                  platform, status: 'need_captcha',
+                  message: rj.message || '51job 弹出「访问验证」滑块，请在浏览器手动完成后重新运行本批次。',
+                  logs: logs.logs, screenshot: rj.screenshot,
+                };
+              } else oc = { applied: false, needResume: false };
+            }
+          } else {
+            oc = await oneClickApply(platform, cfg, logs);
+          }
           if (oc.applied) applied++;
-          else if (oc.needResume) { skipped++; needResume = true; break; }
+          else if (oc.needResume) { skipped++; needResume = true; } // 单个岗位缺简历不中断整批，继续下一个
           else skipped++;
+          // 岗位间留白，降低触发 51job 风控滑块的频率
+          await sleep(3000);
         }
         if (applied + skipped >= maxApply) break;
-        if (needResume) break;
       }
 
       // 翻页

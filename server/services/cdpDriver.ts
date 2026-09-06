@@ -64,7 +64,10 @@ function __findEl(opts){
   if (opts.text) {
     var t = opts.text;
     var interactive = 'button, a[href], [role="button"], input[type="button"], input[type="submit"], [role="link"]';
+    function __vis(el){ if(!el) return false; if(el.offsetParent===null && el.getClientRects().length===0) return false; try{ return getComputedStyle(el).display!=='none'; }catch(e){ return true; } }
     var nodes = Array.prototype.slice.call(document.querySelectorAll(interactive)).filter(function(n){ return norm(n.innerText).indexOf(t)>=0; });
+    var visNodes = nodes.filter(__vis);
+    if (visNodes.length) return visNodes[opts.index||0];
     if (nodes.length) return nodes[opts.index||0];
     var exact = Array.prototype.slice.call(document.querySelectorAll('*')).filter(function(n){ return n.children && n.children.length===0 && norm(n.innerText)===t; });
     if (exact.length) return exact[opts.index||0];

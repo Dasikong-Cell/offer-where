@@ -146,8 +146,11 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       const set = new Set();
       document.querySelectorAll('a[href]').forEach(a => {
         const h = a.href || '';
-        // 真岗位详情形如 jobs.51job.com/<path>/<id>.html；排除首页/导航链接
-        if (/jobs\\.51job\\.com\\/[^/]+\\/[^/]+\\.html/.test(h)) set.add(h.split('?')[0]);
+        // 真岗位详情形如 jobs.51job.com/<city>/<id>.html；
+        // 排除 /all/ 公司聚合页、/co... 公司主页、/campus/ 校招页等导航/非标准 JD 链接。
+        if (/jobs\\.51job\\.com\\//.test(h) && !/jobs\\.51job\\.com\\/all\\//.test(h) && !/jobs\\.51job\\.com\\/campus\\//.test(h) && !/jobs\\.51job\\.com\\/[^/]+\\/co/.test(h) && /jobs\\.51job\\.com\\/[^/]+\\/[^/]+\\.html/.test(h)) {
+          set.add(h.split('?')[0]);
+        }
       });
       return Array.from(set);
     })()`,
@@ -159,18 +162,19 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       // 先关掉可能出现的「我知道了」提示框
       const hint = byText(/^我知道了$/);
       if (hint) { try { hint.click(); } catch (e) {} }
-      // 主投递按钮：优先「投递」/「立即申请」/「申请职位」，排除「去聊聊」「聊」等沟通按钮
-      const main = byText(/^(投递|立即申请|申请职位|投个简历|申请)$/) || byText(/投递简历/);
+      // 主投递按钮：优先「投递」/「立即投递」/「立即申请」/「申请职位」，排除「去聊聊」「聊」等沟通按钮
+      const main = byText(/^(投递|立即投递|立即申请|申请职位|投个简历|申请)$/) || byText(/投递简历/);
       if (main) { main.click(); return 'main'; }
       return false;
     })()`,
     confirmRegex: '申请成功|已投递|投递成功|简历已送达|申请职位成功|投递完成',
-    loginCheck: (text, url) =>
-      // 严格判定：仅当页面出现明确登录墙（账号登录/扫码/短信登录/登录后投递）才视为未登录，
-      // 避免顶栏常驻的「登录/注册」链接误伤（该链接对登录用户也常驻显示）。
-      // 同时排除已出现投递成功/个人中心等已登录正指标。
-      /(请登录|账号登录|登录并投递|登录后投递|扫码登录|短信登录|登录无忧|登录后可)/.test(text)
-        && !/(已投递|申请成功|投递成功|我的简历|我的求职|个人中心|消息中心)/.test(text),
+    loginCheck: (text, url) => {
+      // 已登录正指标：出现「退出登录 / 我的简历 / 我的求职 / 个人中心 / 消息中心」之一即视为已登录，
+      // 避免 JD 页常驻的「登录后可查看…」提示把已登录用户误判为未登录。
+      if (/(退出登录|我的简历|我的求职|个人中心|消息中心)/.test(text)) return false;
+      // 否则再判断是否命中明确登录墙（账号登录/扫码/短信登录/登录后投递等）。
+      return /(请登录|账号登录|登录并投递|登录后投递|扫码登录|短信登录|登录无忧|登录后可)/.test(text);
+    },
     login: {
       loginUrl: 'https://www.51job.com/',
       emailInput: ['#loginname', 'input[placeholder*="邮箱"]', 'input[name="loginname"]'],
