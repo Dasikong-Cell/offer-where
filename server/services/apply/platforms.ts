@@ -55,8 +55,8 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
     homeUrl: 'https://www.zhaopin.com/',
     searchUrl: (kw) =>
       kw
-        ? `https://www.zhaopin.com/jobs?jl=489&kw=${(kw)}`
-        : 'https://www.zhaopin.com/jobs?jl=489',
+        ? `https://www.zhaopin.com/jobs?kw=${encodeURIComponent(kw)}`
+        : 'https://www.zhaopin.com/jobs',
     // 智联搜索列表页标题非锚点、SPA 懒加载，静态抓不到 JD 链接；先收公司详情页链接
     collectListScript: `(() => {
       const set = new Set();
