@@ -82,7 +82,7 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
     confirmRegex: '投递成功|已投递|简历已送达|申请成功|投递完成|继续沟通|已申请|已发送|简历投递成功',
     loginCheck: (text, url) =>
       /passport\.zhaopin/.test(url) ||
-      /(请登录|未登录|账号登录|登录招聘网|登录后查看更多)/.test(text),
+      /(请登录|未登录|账号登录|登录招聘网|登录后查看更多|国家网络身份认证|登录\/注册|获取验证码|完成认证|实名认证|手机号登录)/.test(text),
     login: {
       loginUrl: 'https://www.zhaopin.com/',
       emailInput: ['#email', 'input[placeholder*="邮箱"]', 'input[name="email"]'],
