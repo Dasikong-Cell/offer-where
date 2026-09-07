@@ -25,6 +25,27 @@ export function resolveResumePath(configured?: string | null): string | undefine
   return undefined;
 }
 
+/**
+ * 把数据库里的档案（任意字段）规整成投递脚本用的 ApplyProfile。
+ * 学历/学校/专业/城市/技能等要带上——企业官网「邮箱投递」常要求
+ * 按「学历+专业+学校+姓名」这类格式拼邮件标题，缺了就只能退回占位词。
+ */
+export function toApplyProfile(p: Record<string, any> | undefined | null): ApplyProfile {
+  const s = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  return {
+    name: s(p?.name) ?? null,
+    phone: s(p?.phone) ?? null,
+    email: s(p?.email) ?? null,
+    resume_path: s(p?.resume_path) ?? s(p?.resumePath) ?? null,
+    education: s(p?.education) ?? null,
+    school: s(p?.school) ?? null,
+    major: s(p?.major) ?? null,
+    city: s(p?.city) ?? null,
+    skills: s(p?.skills) ?? null,
+    expectedPositions: s(p?.expectedPositions) ?? null,
+  };
+}
+
 export class ApplyLogger {
   logs: ApplyLog[] = [];
   step(step: string, ok: boolean, detail?: string) {

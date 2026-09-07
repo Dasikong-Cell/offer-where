@@ -20,7 +20,7 @@ export interface PlatformCfg {
   /** 当前列表页收集「下一级入口」链接（eval 脚本，返回 string[]）。
    *  - 智联：搜索列表页标题非锚点，需先收公司页链接，再进公司页收岗位 → 返回 companydetail 链接
    *  - 其余平台：列表页直接是岗位 → 与 collectLinksScript 相同（直接返回 JD 链接） */
-  collectListScript: string;
+  collectListScript?: string;
   /** JD 页/公司页：收集所有 JD 链接（eval 脚本，返回 string[]） */
   collectLinksScript: string;
   /** JD 页：找到并点击「投递/沟通/聊一聊」按钮（eval 脚本，返回 boolean） */

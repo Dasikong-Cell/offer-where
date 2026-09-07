@@ -47,6 +47,8 @@ export function JobMatchPage() {
   const [applying, setApplying] = useState<string | null>(null); // 正在投递的 jobId
   const [result, setResult] = useState<any>(null);
   const [showResult, setShowResult] = useState(false);
+  // offerbiu 邮箱投递「预览确认」弹窗（发信不可逆，发送前先让用户确认收件人/标题/正文）
+  const [emailPreview, setEmailPreview] = useState<{ jobId: string; platform: string; action: string; data: any } | null>(null);
 
   // 自动连投向导状态
   const [showBatch, setShowBatch] = useState(false);
@@ -176,12 +178,30 @@ export function JobMatchPage() {
     } catch (e: any) { MessagePlugin.error(e.message || '添加失败'); }
   };
 
+  // 处理结果提示（投递成功 / 需验证码 / 需人工 / 失败）
+  const handleApplyResult = (platform: string, d: any) => {
+    const label = PLATFORM_LABEL[platform] || platform;
+    if (d.status === 'applied') {
+      MessagePlugin.success(`已在${label}投递成功`);
+      loadJobs();
+    } else if (d.status === 'need_captcha') {
+      MessagePlugin.warning('请在打开的浏览器中完成滑块验证后，再次点击该平台投递按钮');
+    } else if (d.status === 'need_manual') {
+      MessagePlugin.warning(d.message || '需人工在浏览器中完成');
+    } else {
+      MessagePlugin.error(d.message || '投递失败');
+    }
+  };
+
   // 专用投递（BOSS / 智联 / 51job / 猎聘 / 牛客 / 官网；action 可选 hello/letter/again）
-  const applyOnPlatform = async (job: Job, platform: string, action: string = 'hello') => {
+  // channel='email' 时走「HR 邮箱投递」通道，先 dryRun 预览、用户确认后再正式发信
+  const applyOnPlatform = async (job: Job, platform: string, action: string = 'hello', channel: 'auto' | 'email' = 'auto') => {
     if (!profile?.email) { MessagePlugin.warning('请先在「我的档案」填写邮箱与授权码'); return; }
-    // hello 沿用旧 key，保证原有按钮 loading 状态不串；其余动作带 action 后缀
-    setApplying(action === 'hello' ? `${job.id}:${platform}` : `${job.id}:${platform}:${action}`);
+    // 加载态 key：邮箱通道单独标识，避免与其它按钮串
+    const key = channel === 'email' ? `${job.id}:${platform}:email` : (action === 'hello' ? `${job.id}:${platform}` : `${job.id}:${platform}:${action}`);
+    setApplying(key);
     try {
+      // 第一遍：email 通道先 dryRun 预览（不真正发信）
       const d = await api('/apply', {
         method: 'POST',
         body: JSON.stringify({
@@ -190,21 +210,48 @@ export function JobMatchPage() {
           jobId: job.id,
           jobUrl: job.apply_url || undefined,
           jdText: job.jd || undefined,
+          channel,
+          dryRun: channel === 'email',
+        }),
+      });
+      // 邮箱通道且有预览数据 → 弹确认框，等用户确认再正式发送
+      if (channel === 'email' && d.preview) {
+        setEmailPreview({ jobId: job.id, platform, action, data: d });
+        return;
+      }
+      setResult(d);
+      setShowResult(true);
+      handleApplyResult(platform, d);
+    } catch (e: any) {
+      MessagePlugin.error(e.message || '投递请求失败');
+    } finally {
+      setApplying(null);
+    }
+  };
+
+  // 邮箱投递确认后，正式发信（不带 dryRun）
+  const confirmEmailApply = async () => {
+    if (!emailPreview) return;
+    const { jobId, platform, action } = emailPreview;
+    const job = jobs.find(j => j.id === jobId);
+    setEmailPreview(null);
+    setApplying(`${jobId}:${platform}:email`);
+    try {
+      const d = await api('/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          platform,
+          action,
+          jobId,
+          jobUrl: job?.apply_url || undefined,
+          jdText: job?.jd || undefined,
+          channel: 'email',
+          dryRun: false,
         }),
       });
       setResult(d);
       setShowResult(true);
-      const label = PLATFORM_LABEL[platform] || platform;
-      if (d.status === 'applied') {
-        MessagePlugin.success(`已在${label}投递成功`);
-        await loadJobs();
-      } else if (d.status === 'need_captcha') {
-        MessagePlugin.warning('请在打开的浏览器中完成滑块验证后，再次点击该平台投递按钮');
-      } else if (d.status === 'need_manual') {
-        MessagePlugin.warning(d.message || '需人工在浏览器中完成');
-      } else {
-        MessagePlugin.error(d.message || '投递失败');
-      }
+      handleApplyResult(platform, d);
     } catch (e: any) {
       MessagePlugin.error(e.message || '投递请求失败');
     } finally {
@@ -474,6 +521,9 @@ export function JobMatchPage() {
                     {job.apply_url && (
                       <Button size="small" theme="primary" variant="text" loading={applying === `${job.id}:offerbiu`} onClick={() => applyOnPlatform(job, 'offerbiu')}>官网投递</Button>
                     )}
+                    {job.apply_url && (
+                      <Button size="small" theme="warning" variant="text" loading={applying === `${job.id}:offerbiu:email`} onClick={() => applyOnPlatform(job, 'offerbiu', 'hello', 'email')}>邮箱投递</Button>
+                    )}
                     {/* 职得鸭全套：求职信 / 复聊（沟通型平台 boss·liepin 效果最佳） */}
                     <Button size="small" theme="default" variant="outline" loading={applying === `${job.id}:${jobPlatformOf(job)}:letter`} onClick={() => applyOnPlatform(job, jobPlatformOf(job), 'letter')}>求职信</Button>
                     {(['boss', 'liepin'].includes(jobPlatformOf(job)) || job.apply_url) && (
@@ -591,6 +641,32 @@ export function JobMatchPage() {
         <Input label="薪资" value={addForm.salary} onChange={(v) => setAddForm({ ...addForm, salary: v as string })} style={{ marginBottom: 10 }} />
         <Input label="投递链接" value={addForm.applyUrl} onChange={(v) => setAddForm({ ...addForm, applyUrl: v as string })} style={{ marginBottom: 10 }} />
         <Input label="JD" value={addForm.jd} onChange={(v) => setAddForm({ ...addForm, jd: v as string })} />
+      </Dialog>
+
+      {/* offerbiu 邮箱投递「预览确认」弹窗（发信不可逆，发送前先确认） */}
+      <Dialog
+        header="确认发送投递邮件"
+        visible={!!emailPreview}
+        onClose={() => setEmailPreview(null)}
+        onConfirm={confirmEmailApply}
+        confirmBtn="确认发送"
+        cancelBtn="取消"
+      >
+        {emailPreview && (
+          <div>
+            <p style={{ fontSize: 12, color: 'var(--td-text-color-secondary)', margin: '0 0 10px' }}>
+              以下邮件将立即发往对方 HR 邮箱（发送后不可撤回），请核对无误后再确认。
+            </p>
+            <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+              <div><strong>收件人：</strong><span style={{ color: 'var(--td-brand-color)' }}>{emailPreview.data.preview?.to}</span></div>
+              <div><strong>标题：</strong>{emailPreview.data.preview?.subject}</div>
+              <div><strong>附件：</strong>{emailPreview.data.preview?.attachment ? '简历 PDF（已附上）' : '无'}</div>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 12, maxHeight: 240, overflowY: 'auto', background: 'var(--td-bg-color-component)', padding: 10, borderRadius: 6, whiteSpace: 'pre-wrap' }}>
+              {emailPreview.data.preview?.body}
+            </div>
+          </div>
+        )}
       </Dialog>
 
       {/* 投递结果（含批量汇总） */}

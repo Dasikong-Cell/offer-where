@@ -13,7 +13,7 @@
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
 import { getPlatform, type PlatformCfg, type PlatformKey } from './platforms.js';
 import { writeLetter } from './letterWriter.js';
-import { runJob51, runJob51List } from './job51.js';
+import { runJob51List } from './job51.js';
 import type { ApplyInput, ApplyResult, ApplyPlatform } from './types.js';
 
 async function currentUrl(platform: string): Promise<string> {
@@ -254,35 +254,9 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
           if (applied + skipped >= maxApply) break;
           await bexec(platform, 'navigate', { url: href, waitUntil: 'domcontentloaded' }, logs, '打开岗位');
           await sleep(2500);
-          let oc: OneClickResult;
-          if (platform === 'job51') {
-            // job51 单岗位投递改用已验证专用的 runJob51（覆盖「选择简历 → 附件 → 提交」全流程），
-            // 比通用 oneClickApply 更稳。
-            // 校招/校园岗位需单独校招简历，账号无则跳过；注意：页面导航栏常驻「校园招聘」链接，
-            // 不能拿正文判断，必须用「岗位标题(document.title)」是否含「校招」来识别，否则会误杀普通岗位。
-            const titleRes = await bexec(platform, 'eval', { script: 'document.title' });
-            const isCampus = /校招|校园招聘/i.test(String(titleRes.data || ''));
-            if (isCampus) {
-              logs.step('岗位类型', false, '校招/校园岗位，账号无对应简历，跳过');
-              oc = { applied: false, needResume: false };
-            } else {
-              const rj = await runJob51({ ...input, action: 'hello', jobUrl: href });
-              (rj.logs || []).forEach((l) => logs.logs.push(l));
-              if (rj.status === 'applied') oc = { applied: true, needResume: false };
-              else if (rj.status === 'need_login') oc = { applied: false, needResume: true };
-              else if (rj.status === 'need_captcha') {
-                // 51job 反爬滑块：立即暂停整批，交给用户在浏览器手动过滑块后重跑，
-                // 避免反复试探反而把账号风险评分拉满。
-                return {
-                  platform, status: 'need_captcha',
-                  message: rj.message || '51job 弹出「访问验证」滑块，请在浏览器手动完成后重新运行本批次。',
-                  logs: logs.logs, screenshot: rj.screenshot,
-                };
-              } else oc = { applied: false, needResume: false };
-            }
-          } else {
-            oc = await oneClickApply(platform, cfg, logs);
-          }
+          // 注：job51 已在函数顶部（if (platform === 'job51') return runJob51List(...)）整体走列表页直投，
+          // 不会进入本循环；此处一律走通用 oneClickApply。
+          const oc: OneClickResult = await oneClickApply(platform, cfg, logs);
           if (oc.applied) applied++;
           else if (oc.needResume) { skipped++; needResume = true; } // 单个岗位缺简历不中断整批，继续下一个
           else skipped++;

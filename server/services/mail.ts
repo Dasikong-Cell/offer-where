@@ -1,9 +1,11 @@
 /**
- * 邮件验证码服务
- * 通过 IMAP 连接邮箱（默认 QQ 邮箱）拉取最新邮件，提取登录/注册验证码。
+ * 邮件服务
+ * - IMAP：连接邮箱（默认 QQ 邮箱）拉取最新邮件，提取登录/注册验证码。
+ * - SMTP：用同一份「邮箱 + 授权码」发送简历投递邮件（企业官网/微信推文只给了 HR 邮箱时用）。
  */
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import nodemailer from 'nodemailer';
 import { getMailConfig } from '../db.js';
 
 export interface MailCodeResult {
@@ -267,6 +269,74 @@ export async function testConnection(config?: Partial<{
       await client.getMailboxLock('INBOX').then(l => l.release());
     });
     return { ok: true, email: cfg.user, host: `${cfg.host}:${cfg.port}` };
+  } catch (error: any) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+// ============= SMTP 发信（简历投递） =============
+
+/** 按发件邮箱域名推导 SMTP 服务器；未知域名回退 QQ */
+function smtpHostOf(email: string): { host: string; port: number } {
+  const domain = (email.split('@')[1] || '').toLowerCase();
+  const table: Record<string, { host: string; port: number }> = {
+    'qq.com': { host: 'smtp.qq.com', port: 465 },
+    'foxmail.com': { host: 'smtp.qq.com', port: 465 },
+    '163.com': { host: 'smtp.163.com', port: 465 },
+    '126.com': { host: 'smtp.126.com', port: 465 },
+    'gmail.com': { host: 'smtp.gmail.com', port: 465 },
+    'outlook.com': { host: 'smtp.office365.com', port: 587 },
+    'hotmail.com': { host: 'smtp.office365.com', port: 587 },
+  };
+  return table[domain] || { host: `smtp.${domain}`, port: 465 };
+}
+
+export interface SendMailOptions {
+  to: string | string[];
+  subject: string;
+  /** 纯文本正文 */
+  text?: string;
+  /** HTML 正文（与 text 二选一，都给则以 html 为准） */
+  html?: string;
+  /** 附件绝对路径（如简历 PDF） */
+  attachments?: string[];
+  /** 发件人显示名 */
+  fromName?: string;
+}
+
+/**
+ * 发送邮件。复用 mail_config 里的邮箱与 IMAP 授权码（QQ 邮箱开启 IMAP/SMTP 后两者通用）。
+ */
+export async function sendMail(opts: SendMailOptions): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  const cfg = getMailConfig();
+  if (!cfg?.email || !cfg?.auth_code) {
+    return { ok: false, error: '未配置邮箱或授权码，无法发送。请在「邮箱验证码配置」中填写邮箱与授权码。' };
+  }
+  if (!opts.to || (Array.isArray(opts.to) && !opts.to.length)) {
+    return { ok: false, error: '缺少收件人邮箱' };
+  }
+  const { host, port } = smtpHostOf(cfg.email);
+  try {
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465, // 465 走 SSL；587 走 STARTTLS
+      auth: { user: cfg.email, pass: cfg.auth_code },
+      // 企业邮箱常见自签证书，这里放宽校验以免发送失败
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 30000,
+    });
+    const info = await transporter.sendMail({
+      from: opts.fromName ? `"${opts.fromName}" <${cfg.email}>` : cfg.email,
+      to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
+      subject: opts.subject,
+      text: opts.text,
+      html: opts.html,
+      attachments: (opts.attachments || []).map(p => ({ path: p })),
+    });
+    return { ok: true, messageId: info.messageId };
   } catch (error: any) {
     return { ok: false, error: error?.message || String(error) };
   }

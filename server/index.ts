@@ -12,6 +12,7 @@ import { execAction, listSessions, closeAll } from "./services/browser.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJob } from "./services/match.js";
 import { runApply, isSupported } from "./services/apply/index.js";
+import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
 import { collectOfferbiu } from "./services/offerbiuCollect.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
@@ -582,7 +583,7 @@ app.post("/api/apply/batch", async (req, res) => {
 
 app.post("/api/apply", async (req, res) => {
   try {
-    const { platform, jobId, jobUrl, headless, sinceMinutes, action, keyword, maxPages, maxApply, hrGroupId, chatHistory, jdText } = req.body || {};
+    const { platform, jobId, jobUrl, headless, sinceMinutes, action, keyword, maxPages, maxApply, hrGroupId, chatHistory, jdText, channel } = req.body || {};
     if (!isSupported(platform)) {
       return res.status(400).json({ error: `不支持的平台：${platform}（支持：boss / zhilian / job51 / nowcoder / offerbiu / liepin）` });
     }
@@ -598,12 +599,8 @@ app.post("/api/apply", async (req, res) => {
       platform,
       jobUrl: targetUrl,
       job: job ? { id: job.id, company: job.company, position: job.position, apply_url: job.apply_url } : undefined,
-      profile: {
-        name: profile.name as string,
-        phone: profile.phone as string,
-        email: profile.email as string,
-        resume_path: (profile.resume_path as string) || (profile.resumePath as string),
-      },
+      // 带上学历/学校/专业/城市/技能：官网邮箱投递常要求按「学历+专业+学校+姓名」拼标题
+      profile: toApplyProfile(profile),
       autofill: (profile.autofill as Record<string, string>) || undefined,
       headless: headless === true, // 默认非无头(false)，便于人工过滑块；传 true 才无头
       sinceMinutes: sinceMinutes ? Number(sinceMinutes) : 10,
@@ -614,6 +611,8 @@ app.post("/api/apply", async (req, res) => {
       hrGroupId: hrGroupId ? String(hrGroupId) : undefined,
       chatHistory: chatHistory ? String(chatHistory) : undefined,
       jdText: jdText ? String(jdText) : undefined,
+      channel: channel === 'email' ? 'email' : 'auto',
+      dryRun: req.body?.dryRun === true,
     });
 
     // 投递成功 -> 写投递记录 + 更新岗位状态

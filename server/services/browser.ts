@@ -36,6 +36,8 @@ interface BrowserSession {
   context: import('playwright').BrowserContext;
   page: import('playwright').Page;
   createdAt: number;
+  /** 裸 CDP 驱动（boss/liepin 等强反爬平台使用，对应 cdpDriver 的会话） */
+  cdpBrowser?: any;
 }
 
 const sessions = new Map<string, BrowserSession>();

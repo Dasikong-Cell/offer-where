@@ -20,6 +20,7 @@
 import { randomUUID } from 'crypto';
 import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
+import { toApplyProfile } from './common.js';
 import { matchResumeToJob } from '../match.js';
 import { parseResumeFile } from '../resume.js';
 import type { ApplyPlatform, ApplyResult } from './types.js';
@@ -216,12 +217,7 @@ export async function runBatchApply(
     try {
       res = await runApply({
         platform,
-        profile: {
-          name: profile.name as string,
-          phone: profile.phone as string,
-          email: profile.email as string,
-          resume_path: resumePath,
-        },
+        profile: { ...toApplyProfile(profile), resume_path: resumePath },
         job: { id: job.id, company: job.company, position: job.position, apply_url: job.apply_url },
         jobUrl: job.apply_url || undefined,
         autofill: (profile.autofill as Record<string, string>) || undefined,

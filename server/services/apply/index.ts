@@ -5,7 +5,7 @@ import { runBoss } from './boss.js';
 import { runZhilian } from './zhilian.js';
 import { runJob51 } from './job51.js';
 import { runNowcoder } from './nowcoder.js';
-import { runOfferbiu } from './offerbiu.js';
+import { runOfferbiu, runOfferbiuEmail } from './offerbiu.js';
 import { runLiepin } from './liepin.js';
 import { runEngine } from './engine.js';
 import type { ApplyInput, ApplyPlatform, ApplyResult } from './types.js';
@@ -39,12 +39,16 @@ export async function runApply(input: ApplyInput): Promise<ApplyResult> {
   if (action !== 'hello' && ENGINE_PLATFORMS.has(input.platform)) {
     return runEngine(input);
   }
-  // offerbiu 官网投递：按 apply_url 域名路由（命中平台→引擎一键投；否则通用官网投递）
+  // offerbiu 官网投递：按 apply_url 域名路由（命中平台→引擎一键投；微信推文→邮箱投；否则通用官网投递）
   if (input.platform === 'offerbiu') {
     const url = input.jobUrl || input.job?.apply_url || '';
     const routed = platformFromUrl(url);
     if (routed) {
       return runEngine({ ...input, platform: routed });
+    }
+    // 微信招聘推文：没有可点的网申入口，只给 HR 邮箱 + 标题格式 → 走邮箱投递
+    if (input.channel === 'email' || /mp\.weixin\.qq\.com/.test(url)) {
+      return runOfferbiuEmail(input);
     }
     return runOfferbiu(input);
   }
@@ -59,8 +63,6 @@ export async function runApply(input: ApplyInput): Promise<ApplyResult> {
       return runLiepin(input);
     case 'nowcoder':
       return runNowcoder(input);
-    case 'offerbiu':
-      return runOfferbiu(input);
     default:
       return {
         platform: input.platform as ApplyPlatform,

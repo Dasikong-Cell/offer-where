@@ -13,6 +13,7 @@ export type ApplyStatus =
   | 'need_login'     // 未登录，需先登录
   | 'need_captcha'   // 出现滑块/图形验证码，需在打开的浏览器里人工过一下后重试
   | 'need_manual'    // 遇到非标准流程，需人工在浏览器完成
+  | 'need_resume'    // 缺少在线简历，需先上传简历再投
   | 'error';         // 脚本执行出错
 
 export interface ApplyProfile {
@@ -20,6 +21,18 @@ export interface ApplyProfile {
   phone?: string | null;
   email?: string | null;
   resume_path?: string | null;
+  /** 学历（本科/硕士/博士）—— 官网「邮箱投递」拼标题用 */
+  education?: string | null;
+  /** 学校 */
+  school?: string | null;
+  /** 专业 */
+  major?: string | null;
+  /** 现居/意向城市 */
+  city?: string | null;
+  /** 技能关键词 */
+  skills?: string | null;
+  /** 意向岗位 */
+  expectedPositions?: string | null;
 }
 
 export interface ApplyJobRef {
@@ -56,6 +69,10 @@ export interface ApplyInput {
   chatHistory?: string;
   /** JD 文本（letter/again 不重新抓取时直接传入） */
   jdText?: string;
+  /** offerbiu 投递通道：auto=按链接自动判断；email=强制走「HR 邮箱投递」 */
+  channel?: 'auto' | 'email';
+  /** 预览模式：只解析收件人/标题/正文并写入日志，不真正发信 */
+  dryRun?: boolean;
 }
 
 export interface ApplyLog {
@@ -76,4 +93,6 @@ export interface ApplyResult {
   foundJobs?: { title: string; url: string; company?: string }[];
   /** 本轮实际投递成功数量（批量投递用） */
   appliedCount?: number;
+  /** offerbiu 邮箱投递预览（dryRun 时返回，供前端确认后正式发送） */
+  preview?: { to: string; subject: string; body: string; attachment?: string };
 }
