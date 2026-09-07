@@ -37,13 +37,21 @@ async function ensureLoggedIn(
   input: ApplyInput,
   logs: ApplyLogger,
 ): Promise<boolean> {
-  const text = await pageText(platform);
-  const url = await currentUrl(platform);
+  let text = await pageText(platform);
+  let url = await currentUrl(platform);
+  if (cfg.loginCheck(text, url)) {
+    // SPA 页面可能尚未渲染完，正文为空/残缺会把「已登录」误判成「未登录」，
+    // 进而白白走一趟验证码登录流程（实测 51job 因此全程报「未找到发送验证码按钮」）。
+    // 这里等 3 秒重取一次再判，避免误判。
+    await sleep(3000);
+    text = await pageText(platform);
+    url = await currentUrl(platform);
+  }
   if (!cfg.loginCheck(text, url)) {
     logs.step('登录态', true, '已登录');
     return true;
   }
-  logs.step('登录态', false, '未登录，尝试邮箱验证码登录');
+  logs.step('登录态', false, `未登录，尝试邮箱验证码登录（判定依据文本片段：${(text || '').slice(0, 120)}）`);
   if (!cfg.login) {
     return false;
   }

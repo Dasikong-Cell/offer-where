@@ -169,9 +169,12 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
     })()`,
     confirmRegex: '申请成功|已投递|投递成功|简历已送达|申请职位成功|投递完成',
     loginCheck: (text, url) => {
-      // 已登录正指标：出现「退出登录 / 我的简历 / 我的求职 / 个人中心 / 消息中心」之一即视为已登录，
-      // 避免 JD 页常驻的「登录后可查看…」提示把已登录用户误判为未登录。
-      if (/(退出登录|我的简历|我的求职|个人中心|消息中心)/.test(text)) return false;
+      // 已登录强指标：这些元素只有登录后的 51job 页面才有（JD 页顶部「在线简历 <用户名>」、
+      // 「我的投递」「职位推荐」等）。命中即直接判已登录。
+      // 背景：实测引擎在 JD 页会误判为未登录并跑去走邮箱验证码登录，
+      // 报「未找到『发送验证码』按钮」——因为页面尚未渲染完/带登录浮层文案，
+      // 靠「我的求职」等导航文案判断并不稳（JD 页可能不含这些词）。
+      if (/(在线简历|我的投递|职位推荐|退出登录|我的简历|我的求职|个人中心|消息中心|竞争力分析)/.test(text)) return false;
       // 否则再判断是否命中明确登录墙（账号登录/扫码/短信登录/登录后投递等）。
       return /(请登录|账号登录|登录并投递|登录后投递|扫码登录|短信登录|登录无忧|登录后可)/.test(text);
     },
@@ -194,9 +197,11 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       kw
         ? `https://www.liepin.com/zhaopin/?key=${(kw)}&curPage=0`
         : 'https://www.liepin.com/zhaopin',
+    // 猎聘现行岗位链接是 /lptjob/<id>（旧版 /job/<id> 已不再产出），两者都要匹配，
+    // 否则列表页一个岗位链接都收不到（实测：只匹配 /job/ 时 count=0）。
     collectLinksScript: `(() => {
       const set = new Set();
-      document.querySelectorAll('a[href*="liepin.com/job/"]').forEach(a => { const h = a.href; if (h) set.add(h.split('?')[0]); });
+      document.querySelectorAll('a[href*="liepin.com/job/"], a[href*="liepin.com/lptjob/"]').forEach(a => { const h = a.href; if (h) set.add(h.split('?')[0]); });
       return Array.from(set);
     })()`,
     applyScript: `(() => { const b = document.querySelector('.btn-main'); if (b) { const t = (b.textContent || '').trim(); if (t.includes('聊一聊')) { b.click(); return true; } } return false; })()`,
