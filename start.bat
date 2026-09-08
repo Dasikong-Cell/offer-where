@@ -17,8 +17,8 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 
-REM 启动后端服务（独立窗口）
-start "JobApply-Server" cmd /k "title 后端服务 && npm run server"
+REM 启动后端服务（独立窗口）——必须 PORT=4400，否则所有投递脚本连不上
+start "JobApply-Server" cmd /k "title 后端服务 && set PORT=4400 && npm run server"
 timeout /t 4 >nul
 
 REM 启动前端开发服务器（独立窗口）
