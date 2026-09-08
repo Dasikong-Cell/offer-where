@@ -40,6 +40,56 @@ async function detectCaptcha(platform: string): Promise<boolean> {
 }
 
 /**
+ * 51job 简历选择弹窗的通用处理（列表直投 runJob51List 与单岗位 runJob51 共用）
+ * 弹窗结构：.el-dialog.attachment_resume_dialog（或普通 .el-dialog），内含 .attachment_item 简历项，
+ * 每项带 .radio 单选；底部确认键文案为 发送/确定/立即申请/提交。
+ * 注意：必须用 eval 点选 radio，不能靠文本点「附件简历」（文本点不中 radio，导致弹窗未确认）。
+ */
+const PICK_RESUME = `(() => {
+  const vis = e => e && e.offsetParent !== null;
+  const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
+         || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
+  if (!d) return { ok: false, why: 'no-dialog' };
+  const items = [...d.querySelectorAll('.attachment_item')];
+  if (!items.length) return { ok: true, picked: null };
+  const it = items.find(x => /杨欣宇/.test(x.innerText || '')) || items[0];
+  (it.querySelector('.radio') || it.querySelector('input[type=radio]') || it).click();
+  return { ok: true, picked: (it.innerText || '').replace(/\\s+/g, ' ').trim() };
+})()`;
+
+const SEND = `(() => {
+  const vis = e => e && e.offsetParent !== null;
+  const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
+         || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
+  if (!d) return { ok: false, why: 'no-dialog' };
+  const b = [...d.querySelectorAll('button')]
+    .find(x => /发送|确定|立即申请|提交|投递/.test((x.innerText || '').trim()));
+  if (!b) return { ok: false, why: 'no-send-btn' };
+  b.click();
+  return { ok: true };
+})()`;
+
+// 弹窗没关掉会挡住下一次点击，用 Esc 兜底关闭（Element UI 默认 closeOnPressEscape）
+const CLOSE_DLG = `(() => {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+  return true;
+})()`;
+
+/** 轮询等待简历弹窗出现（最多 waitMs） */
+const WAIT_DLG = (waitMs: number) => `(() => {
+  const deadline = Date.now() + ${waitMs};
+  const tick = () => {
+    const vis = e => e && e.offsetParent !== null;
+    const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
+           || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
+    if (d && /(附件简历|我的简历|选择需要同步发送|选择简历|杨欣宇|\\.pdf)/.test(d.innerText || '')) return true;
+    if (Date.now() > deadline) return 'timeout';
+    return new Promise(r => setTimeout(r, 300)).then(tick);
+  };
+  return tick();
+})()`;
+
+/**
  * 列表页直投（51job 首选路径）
  *
  * 直接 goto JD 详情页会触发 51job 的阿里云滑块风控，而搜索列表页每行自带「投递」按钮：
@@ -75,36 +125,7 @@ export async function runJob51List(input: ApplyInput, keyword: string, maxApply:
   return { ok: /已申请|已投递/.test(label), label, title: txt.slice(0, 40) };
 })()`;
 
-  // 勾选附件简历：优先「杨欣宇简历.pdf」，否则取第一项
-  const PICK_RESUME = `(() => {
-  const vis = e => e && e.offsetParent !== null;
-  const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
-         || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
-  if (!d) return { ok: false, why: 'no-dialog' };
-  const items = [...d.querySelectorAll('.attachment_item')];
-  if (!items.length) return { ok: true, picked: null };
-  const it = items.find(x => /杨欣宇/.test(x.innerText || '')) || items[0];
-  (it.querySelector('.radio') || it).click();
-  return { ok: true, picked: (it.innerText || '').replace(/\\s+/g, ' ').trim() };
-})()`;
-
-  const SEND = `(() => {
-  const vis = e => e && e.offsetParent !== null;
-  const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
-         || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
-  if (!d) return { ok: false, why: 'no-dialog' };
-  const b = [...d.querySelectorAll('button')]
-    .find(x => /发送|确定|立即申请|提交/.test((x.innerText || '').trim()));
-  if (!b) return { ok: false, why: 'no-send-btn' };
-  b.click();
-  return { ok: true };
-})()`;
-
-  // 弹窗没关掉会挡住下一次点击，用 Esc 兜底关闭（Element UI 默认 closeOnPressEscape）
-  const CLOSE_DLG = `(() => {
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-  return true;
-})()`;
+  // 勾选附件简历 / 发送 / 关闭弹窗 均复用模块级 PICK_RESUME / SEND / CLOSE_DLG
 
   try {
     const searchUrl = cfg ? cfg.searchUrl(keyword) : `https://we.51job.com/pc/search?keyword=${encodeURIComponent(keyword)}&partner=`;
@@ -285,37 +306,57 @@ export async function runJob51(input: ApplyInput): Promise<ApplyResult> {
       }
       await sleep(2500);
 
-      // 选择简历弹窗：优先选「附件简历 / 我的简历」再确认
-      for (const sel of ['附件简历', '我的简历', '上传的简历']) {
-        await bexec(platform, 'click', { text: sel, timeout: 2000 }, logs, `选择简历「${sel}」`);
+      // 岗位已下线/审核中：51job 会直接跳到「当前职位审核中或已下线」页，不弹投递框
+      const preText = await pageText(platform);
+      if (/(当前职位审核中或已下线|职位已下线|该职位已失效|职位已关闭|该职位不存在|该职位可能已)/.test(preText)) {
+        const shot = await tryScreenshot(platform).catch(() => undefined);
+        return { platform, status: 'unavailable', message: '该岗位已下线/审核中，无法投递', logs: logs.logs, company, position, screenshot: shot };
       }
-      // 确认按钮变体：51job 对话框确认键多为「立即申请 / 确定 / 投递 / 提交申请」
-      for (const sel of ['立即申请', '确定', '投递', '提交申请', '发送', '申请']) {
-        await bexec(platform, 'click', { text: sel, timeout: 2500 }, logs, `点击「${sel}」`);
-      }
-      await sleep(2000);
 
-      // 极少数 JD 强制要求上传附件
-      if (resumePath) {
+      // —— 简历选择弹窗（51job 要求选附件简历时弹出）——
+      // 用模块级 PICK_RESUME/SEND（eval 点 radio，比文本点可靠），最多重试 3 次。
+      // 无弹窗（默认用在线简历直接投递）的岗位，点完即成功，下面校验会命中。
+      let confirmed = false;
+      for (let attempt = 0; attempt < 3 && !confirmed; attempt++) {
+        await bexec(platform, 'eval', { script: WAIT_DLG(4000) }, logs, '等待简历弹窗');
+        const pick = await bexec(platform, 'eval', { script: PICK_RESUME }, logs, '勾选附件简历');
+        const pd = (pick.data || {}) as any;
+        if (pd.picked) logs.step('附件简历', true, pd.picked);
+        else if (pd.why === 'no-dialog') logs.step('简历弹窗', false, '未出现（可能已用默认在线简历直接投递）');
+        await sleep(800);
+        await bexec(platform, 'eval', { script: SEND }, logs, '点击「发送/确定」');
+        await sleep(2500);
+        const t2 = await pageText(platform);
+        if (/(投递成功|申请成功|已投递|简历已送达|提交成功|投递完成|申请已提交|投递申请已提交|申请已发出|已向该公司投递|申请职位成功)/.test(t2)) {
+          confirmed = true;
+          text = t2;
+        } else {
+          await bexec(platform, 'eval', { script: CLOSE_DLG }, logs, '关闭残留弹窗');
+          await sleep(800);
+        }
+      }
+
+      // 极少数 JD 强制要求上传附件（选完简历后仍提示传 PDF）
+      if (!confirmed && resumePath) {
         for (const sel of ['input[type=file]', '.resume-upload input', 'input[accept*="pdf"]']) {
           const ur = await bexec(platform, 'upload', { selector: sel, filePath: resumePath, timeout: 3500 }, logs, '上传简历附件');
           if (ur.ok) {
-            for (const lbl of ['立即申请', '确定', '保存', '提交', '投递']) {
-              await bexec(platform, 'click', { text: lbl, timeout: 2500 }, logs, `点击「${lbl}」`);
-            }
+            await bexec(platform, 'eval', { script: SEND }, logs, '点击「发送/确定」');
+            await sleep(2500);
+            const t3 = await pageText(platform);
+            if (/(投递成功|申请成功|已投递|简历已送达|提交成功|投递完成|申请已提交|投递申请已提交|申请已发出|已向该公司投递|申请职位成功)/.test(t3)) { confirmed = true; text = t3; }
             break;
           }
         }
       }
-      await sleep(3000);
+      await sleep(1500);
 
       text = await pageText(platform);
       const afterUrl = await pageUrl(platform);
       logs.step('投递后URL', true, afterUrl);
       logs.step('投递后页面文本', true, text.slice(0, 200));
       const shot = await tryScreenshot(platform);
-      const ok = /(投递成功|申请成功|已投递|简历已送达|提交成功|投递完成|申请已提交|投递申请已提交|申请已发出|已向该公司投递|申请职位成功)/.test(text);
-      if (ok) {
+      if (confirmed) {
         return { platform, status: 'applied', message: `已在 51job 向「${company || position || '该岗位'}」完成投递`, logs: logs.logs, company, position, screenshot: shot };
       }
       return { platform, status: 'need_manual', message: '已点击申请但未能确认投递成功，请检查打开的浏览器（可能需补填必填项/选择简历）', logs: logs.logs, company, position, screenshot: shot };
