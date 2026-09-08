@@ -106,6 +106,29 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
   CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+  -- HR 会话跟踪（自动回复用）
+  -- conv_key 用于去重：同一平台+同一 HR+同一公司视为一条会话，避免重复回复
+  CREATE TABLE IF NOT EXISTS hr_conversations (
+    id TEXT PRIMARY KEY,
+    conv_key TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    hr_name TEXT,
+    company TEXT,
+    position TEXT,
+    job_url TEXT,
+    stage TEXT NOT NULL DEFAULT 'new',
+    last_hr_message TEXT,
+    last_reply TEXT,
+    last_hr_message_at TEXT,
+    last_replied_at TEXT,
+    round INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hrconv_platform ON hr_conversations(platform);
+  CREATE INDEX IF NOT EXISTS idx_hrconv_stage ON hr_conversations(stage);
 `);
 
 // 数据库迁移：添加 sdk_session_id 列（如果不存在）
@@ -524,6 +547,135 @@ export function clearJobs(): void {
 export function clearAllData(): void {
   db.exec('DELETE FROM messages');
   db.exec('DELETE FROM sessions');
+}
+
+/* ─────────────── HR 会话跟踪（自动回复用） ─────────────── */
+
+export interface HrConversationRow {
+  id: string;
+  conv_key: string;
+  platform: string;
+  hr_name: string | null;
+  company: string | null;
+  position: string | null;
+  job_url: string | null;
+  stage: string;
+  last_hr_message: string | null;
+  last_reply: string | null;
+  last_hr_message_at: string | null;
+  last_replied_at: string | null;
+  round: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const norm = (s?: string | null) => (s || '').replace(/\s+/g, '').toLowerCase();
+
+/** 会话去重键：平台 + HR + 公司 + 岗位，四者相同视为同一段对话 */
+export function convKey(
+  platform: string,
+  hrName?: string | null,
+  company?: string | null,
+  position?: string | null,
+): string {
+  return [norm(platform), norm(hrName), norm(company), norm(position)].join('|');
+}
+
+export function getConversation(key: string): HrConversationRow | null {
+  return (db.prepare('SELECT * FROM hr_conversations WHERE conv_key = ?').get(key) as HrConversationRow) || null;
+}
+
+export function upsertConversation(c: {
+  conv_key: string;
+  platform: string;
+  hr_name?: string | null;
+  company?: string | null;
+  position?: string | null;
+  job_url?: string | null;
+  stage?: string | null;
+  last_hr_message?: string | null;
+  last_reply?: string | null;
+  last_hr_message_at?: string | null;
+  last_replied_at?: string | null;
+  round?: number | null;
+}): HrConversationRow {
+  // 已存在：只覆盖「显式传入」的字段。
+  // 不用 ON CONFLICT DO UPDATE + COALESCE —— round 是 NOT NULL 列，
+  // 传入 null 会直接违反约束，而传入 0 又会把已有轮次清掉。
+  if (getConversation(c.conv_key)) {
+    const patch: Record<string, unknown> = {};
+    if (c.hr_name != null) patch.hr_name = c.hr_name;
+    if (c.company != null) patch.company = c.company;
+    if (c.position != null) patch.position = c.position;
+    if (c.job_url != null) patch.job_url = c.job_url;
+    if (c.stage != null) patch.stage = c.stage;
+    if (c.last_hr_message != null) patch.last_hr_message = c.last_hr_message;
+    if (c.last_reply != null) patch.last_reply = c.last_reply;
+    if (c.last_hr_message_at != null) patch.last_hr_message_at = c.last_hr_message_at;
+    if (c.last_replied_at != null) patch.last_replied_at = c.last_replied_at;
+    if (c.round != null) patch.round = c.round;
+    updateConversation(c.conv_key, patch as any);
+    return getConversation(c.conv_key)!;
+  }
+
+  // 新会话：round 至少为 1（NOT NULL 列不可插 null）
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO hr_conversations
+      (id, conv_key, platform, hr_name, company, position, job_url, stage,
+       last_hr_message, last_reply, last_hr_message_at, last_replied_at, round, created_at, updated_at)
+    VALUES
+      (@id, @conv_key, @platform, @hr_name, @company, @position, @job_url, @stage,
+       @last_hr_message, @last_reply, @last_hr_message_at, @last_replied_at, @round, @now, @now)
+  `).run({
+    id: randomUUID(),
+    conv_key: c.conv_key,
+    platform: c.platform,
+    hr_name: c.hr_name ?? null,
+    company: c.company ?? null,
+    position: c.position ?? null,
+    job_url: c.job_url ?? null,
+    stage: c.stage ?? 'new',
+    last_hr_message: c.last_hr_message ?? null,
+    last_reply: c.last_reply ?? null,
+    last_hr_message_at: c.last_hr_message_at ?? null,
+    last_replied_at: c.last_replied_at ?? null,
+    round: c.round ?? 1,
+    now,
+  });
+  return getConversation(c.conv_key)!;
+}
+
+export function updateConversation(
+  key: string,
+  patch: Partial<Pick<HrConversationRow,
+    'stage' | 'last_hr_message' | 'last_reply' | 'last_hr_message_at' | 'last_replied_at' | 'round'
+    | 'hr_name' | 'company' | 'position' | 'job_url'>>,
+): boolean {
+  const allowed = ['stage', 'last_hr_message', 'last_reply', 'last_hr_message_at', 'last_replied_at', 'round',
+    'hr_name', 'company', 'position', 'job_url'];
+  const fields: string[] = [];
+  const values: any[] = [];
+  for (const k of allowed) {
+    const v = (patch as any)[k];
+    if (v !== undefined) { fields.push(`${k} = ?`); values.push(v); }
+  }
+  if (fields.length === 0) return false;
+  fields.push('updated_at = ?');
+  values.push(new Date().toISOString());
+  values.push(key);
+  return db.prepare(`UPDATE hr_conversations SET ${fields.join(', ')} WHERE conv_key = ?`).run(...values).changes > 0;
+}
+
+export function listConversations(opts: { platform?: string; stage?: string } = {}): HrConversationRow[] {
+  const where: string[] = [];
+  const args: any[] = [];
+  if (opts.platform) { where.push('platform = ?'); args.push(opts.platform); }
+  if (opts.stage) { where.push('stage = ?'); args.push(opts.stage); }
+  const sql = `SELECT * FROM hr_conversations${
+    where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  } ORDER BY updated_at DESC`;
+  return db.prepare(sql).all(...args) as HrConversationRow[];
 }
 
 export default db;

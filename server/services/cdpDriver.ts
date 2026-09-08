@@ -419,6 +419,13 @@ export async function execCdpAction(
         await waitForLoad(s, args.timeout || 30000);
         return await okResult(s);
       }
+      /** 把当前标签页切到窗口前台。
+       *  用途：需要用户人工介入（扫码 / 短信验证）时，把登录页弹到最前面，
+       *  用户无需在多个 Chrome 窗口里猜哪个才是投递用的调试浏览器。 */
+      case 'bringToFront': {
+        await send(s, 'Page.bringToFront', {});
+        return await okResult(s);
+      }
       case 'newTab': {
         const t = await httpReq('PUT', `${ep}/json/new?${args.url || 'about:blank'}`);
         const nws = await connect(t.webSocketDebuggerUrl);
