@@ -155,16 +155,29 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       return Array.from(set);
     })()`,
     applyScript: `(() => {
-      // 51job 现行 JD 页：主按钮文本为「投递」（class=apply-btn normal / jobapply-wrapper apply_btn）。
-      // 点击后弹出「请选择需要投递的简历」对话框，确认按钮为「立即申请」。
-      const all = [...document.querySelectorAll('a,button,[class*="btn"],[class*="apply"]')];
-      const byText = (re) => all.find(x => { const t = (x.innerText || x.textContent || '').trim(); return re.test(t) && !x.disabled; });
-      // 先关掉可能出现的「我知道了」提示框
-      const hint = byText(/^我知道了$/);
-      if (hint) { try { hint.click(); } catch (e) {} }
-      // 主投递按钮：优先「投递」/「立即投递」/「立即申请」/「申请职位」，排除「去聊聊」「聊」等沟通按钮
-      const main = byText(/^(投递|立即投递|立即申请|申请职位|投个简历|申请)$/) || byText(/投递简历/);
+      const vis = e => {
+        if (!e) return false;
+        if (e.offsetParent === null && e.getClientRects().length === 0) return false;
+        try { return getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden'; } catch (_) { return true; }
+      };
+      const all = [...document.querySelectorAll('a,button,[class*="btn"],[class*="apply"],[class*="jobapply"],input[type="button"],input[type="submit"]')].filter(vis);
+      const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+      const byText = (re) => all.find(x => { const t = norm(x.innerText || x.textContent || x.value); return re.test(t) && !x.disabled; });
+      // 先关掉可能出现的「我知道了」「不再提示」等浮层
+      for (const hintText of [/^我知道了$/, /^不再提示$/, /^关闭$/, /^知道了$/]) {
+        const hint = byText(hintText);
+        if (hint) { try { hint.click(); } catch (e) {} }
+      }
+      // 主投递按钮文案（51job 各版本 JD 页变体很多）
+      const main = byText(/^(投递|立即投递|立即申请|申请职位|投个简历|申请|申请该职位|投递该职位|一键投递|投简历|确认投递|提交申请|我要投递)$/) ||
+                   byText(/投递简历|申请这个职位|立即申请该职位|立即投递该职位/);
       if (main) { main.click(); return 'main'; }
+      // 按 ID/class 兜底（旧版 #app_ck、新版 .apply-btn、.jobapply-wrapper）
+      const selectors = ['#app_ck', '.apply-btn', '.jobapply-wrapper', '.btn-apply', '.btn_apply', '[class*="apply-btn"]', '[class*="jobapply"]', '.p_but', '.btnbox .btn'];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && vis(el) && !el.disabled) { el.click(); return 'sel:' + sel; }
+      }
       return false;
     })()`,
     confirmRegex: '申请成功|已投递|投递成功|简历已送达|申请职位成功|投递完成',

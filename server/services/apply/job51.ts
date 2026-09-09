@@ -289,14 +289,17 @@ export async function runJob51(input: ApplyInput): Promise<ApplyResult> {
       // 兜底：通用文本点击。applyScript 的锚定正则已覆盖大部分变体，这里只补最短的两个词，
       // 且超时压到 2.5s —— 批量投递时逐标签全量轮询会把单个岗位拖到 1 分钟以上。
       if (!applied) {
-        for (const label of ['投递', '申请']) {
-          const rr = await bexec(platform, 'click', { text: label, timeout: 2500 }, logs, `点击「${label}」`);
+        for (const label of ['投递', '立即投递', '申请', '立即申请', '申请职位', '投递简历', '申请该职位', '一键投递']) {
+          const rr = await bexec(platform, 'click', { text: label, timeout: 4000 }, logs, `点击「${label}」`);
           if (rr.ok) { applied = true; break; }
         }
       }
       if (!applied) {
         const shot = await tryScreenshot(platform);
         const isWechatH5 = /\/wechat\/|xym\.51job|m\.51job/.test(jobUrl);
+        const curUrl = await pageUrl(platform).catch(() => jobUrl);
+        const html = await bexec(platform, 'html', { maxLength: 6000 }, logs, '抓取页面HTML片段').catch(() => ({ html: '' }));
+        logs.step('诊断', false, `url=${curUrl}; html片段=${(html.html || '').slice(0, 600)}`);
         return {
           platform, status: 'need_manual', logs: logs.logs, company, position, screenshot: shot,
           message: isWechatH5
