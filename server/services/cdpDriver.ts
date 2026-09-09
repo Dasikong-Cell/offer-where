@@ -48,6 +48,34 @@ interface PageSession {
 
 const sessions = new Map<string, PageSession>();
 
+/** 已做过「清理空白标签」的端点集合（每个 CDP 端点只清一次，避免每次建会话都扫一遍） */
+const cleanedEndpoints = new Set<string>();
+
+/**
+ * 清理 Chrome 启动残留的空白标签（about:blank / chrome://newtab/）。
+ * 这些标签与平台投递标签挤在同一个真实 Chrome 窗口里，既占位置又容易让用户找错页面。
+ * 在首次接触某端点时调用一次。
+ */
+async function closeStrayBlankTabs(endpoint: string): Promise<void> {
+  if (cleanedEndpoints.has(endpoint)) return;
+  cleanedEndpoints.add(endpoint);
+  try {
+    const ver: any = await httpReq('GET', `${endpoint}/json/version`);
+    if (!ver?.webSocketDebuggerUrl) return;
+    const ws = await connect(ver.webSocketDebuggerUrl);
+    const bs = attachSession(ws, '__browser__');
+    const { targetInfos } = await send(bs, 'Target.getTargets');
+    for (const t of targetInfos || []) {
+      if (t.type === 'page' && (t.url === 'about:blank' || t.url === 'chrome://newtab/' || t.url === '')) {
+        try { await send(bs, 'Target.closeTarget', { targetId: t.targetId }); } catch { /* 忽略 */ }
+      }
+    }
+    try { ws.close(); } catch { /* 忽略 */ }
+  } catch {
+    // 清理失败不影响投递
+  }
+}
+
 /** 在页面上下文中查找元素的函数源码（按 selector / role+name / text 三种方式） */
 const FIND_EL_SRC = `
 function __findEl(opts){
@@ -148,13 +176,22 @@ function waitForLoad(s: PageSession, timeout: number): Promise<void> {
 }
 
 async function ensureSession(platform: string, endpoint: string): Promise<PageSession> {
+  // 首次接触该端点时，清理 Chrome 启动残留的空白标签，避免与平台标签挤在一个窗口
+  await closeStrayBlankTabs(endpoint);
+
   const existing = sessions.get(platform);
   if (existing && !existing.dead && existing.ws.readyState === WebSocket.OPEN) {
-    try { await send(existing, 'Runtime.evaluate', { expression: '1', returnByValue: true }); return existing; }
+    try {
+      await send(existing, 'Runtime.evaluate', { expression: '1', returnByValue: true });
+      // 复用已有标签时，把当前平台的标签置顶，确保用户看到的是正在跑的这个平台
+      try { await send(existing, 'Page.bringToFront'); } catch { /* 忽略 */ }
+      return existing;
+    }
     catch { sessions.delete(platform); }
   }
   if (existing && existing.dead) { try { existing.ws.close(); } catch { /* ignore */ } sessions.delete(platform); }
   // 在真实 Chrome 中新建一个标签页（默认 profile），连接其调试 ws
+  // 每个平台拿到自己独立的标签，互不共用，避免「拥挤在一个页面上」
   // 注意：绝不使用 Playwright connectOverCDP（会开启 Debugger 域触发反爬）
   let target: any;
   try {
@@ -171,6 +208,8 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   // 因此所有 JS 交互（click/fill/eval/screenshot 等）照常通过 Runtime.evaluate 完成，
   // 页面保持正常渲染。Page 域用于导航与 loadEventFired 等待。
   await send(s, 'Page.enable');
+  // 新标签创建后立刻置顶，让当前平台的标签成为窗口前台页
+  try { await send(s, 'Page.bringToFront'); } catch { /* 忽略 */ }
   sessions.set(platform, s);
   return s;
 }
@@ -271,6 +310,8 @@ export async function execCdpAction(
           if (check.url && check.url !== 'about:blank' && (check.title || '').trim() !== '') break;
           await new Promise(r => setTimeout(r, 800));
         }
+        // 导航完成后把当前平台标签置顶，确保它显示在前台而非藏在别的标签后面
+        try { await send(s, 'Page.bringToFront'); } catch { /* 忽略 */ }
         return last;
       }
       case 'click': {
@@ -432,6 +473,7 @@ export async function execCdpAction(
         const ns = attachSession(nws, platform);
         // 仅开 Page 域（同 ensureSession 原则：绝不开 Runtime.enable，否则被反爬清空）
         await send(ns, 'Page.enable');
+        try { await send(ns, 'Page.bringToFront'); } catch { /* 忽略 */ }
         sessions.set(platform, ns);
         return await okResult(ns);
       }
