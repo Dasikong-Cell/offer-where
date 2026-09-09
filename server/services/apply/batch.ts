@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
 import { toApplyProfile } from './common.js';
-import { matchResumeToJob } from '../match.js';
+import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
 import type { ApplyPlatform, ApplyResult } from './types.js';
 
@@ -136,12 +136,30 @@ export async function runBatchApply(
   let jobs = db.listJobs({ source: input.source });
   if (input.criteria?.excludeApplied) jobs = jobs.filter(j => j.status !== 'applied');
 
-  // 3) 按需解析简历以现场计算匹配分
+  // 3) 按需解析简历，并以 AI（无 AI 时回退规则）补全缺失的匹配分
   const needScore = input.criteria?.minScore != null;
   let struct: Awaited<ReturnType<typeof parseResumeFile>> | null = null;
+  const scoreMap = new Map<number, number>();
   if (needScore) {
     try { struct = await parseResumeFile(resumePath); }
     catch (e: any) { console.warn('[Batch] 简历解析失败，按已存匹配分过滤：', e?.message); }
+  }
+  if (struct) {
+    for (const j of jobs) {
+      if (j.match_score == null) {
+        // AI 语义匹配；失败时 matchResumeToJobAi 内部回退规则匹配
+        const r = await matchResumeToJobAi({
+          resumeBlob: struct.searchBlob,
+          resumeSkills: struct.skills,
+          jd: j.jd || '',
+          requirements: j.requirements || '',
+        });
+        scoreMap.set(j.id, r.score);
+        db.updateJob(j.id, { match_score: r.score });
+      } else {
+        scoreMap.set(j.id, j.match_score as number);
+      }
+    }
   }
 
   // 4) 过滤
@@ -157,12 +175,7 @@ export async function runBatchApply(
       if (input.criteria.maxSalary != null && s.min != null && s.min > input.criteria.maxSalary) return false;
     }
     if (needScore && struct) {
-      let score = j.match_score;
-      if (score == null) {
-        const r = matchResumeToJob(struct.searchBlob, struct.skills, j.jd || '', j.requirements || '');
-        score = r.score;
-        db.updateJob(j.id, { match_score: score });
-      }
+      const score = scoreMap.get(j.id);
       if (score != null && score < (input.criteria!.minScore as number)) return false;
     }
     return true;

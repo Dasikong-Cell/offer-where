@@ -108,6 +108,7 @@
     <div class="status">
       <span class="pill" id="pillApi">后端 检测中</span>
       <span class="pill" id="pillCdp">CDP 检测中</span>
+      <span class="pill" id="pillAi">AI 检测中</span>
     </div>
   </header>
 
@@ -323,10 +324,16 @@ async function pollStatus() {
     const el = $('#pillApi');
     el.textContent = '后端 在线';
     el.className = 'pill on';
+    const aiEl = $('#pillAi');
+    if (j && j.ai) { aiEl.textContent = 'AI 已启用'; aiEl.className = 'pill on'; }
+    else { aiEl.textContent = 'AI 未启用(规则模式)'; aiEl.className = 'pill'; }
   } catch (_) {
     const el = $('#pillApi');
     el.textContent = '后端 离线';
     el.className = 'pill off';
+    const aiEl = $('#pillAi');
+    aiEl.textContent = 'AI 未知';
+    aiEl.className = 'pill';
   }
   try {
     const r = await fetch(API_BASE + '/api/browser/sessions');

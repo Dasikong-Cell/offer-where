@@ -10,7 +10,8 @@ import * as db from "./db.js";
 import { fetchLatestCode, listRecentMails, testConnection } from "./services/mail.js";
 import { execAction, listSessions, closeAll } from "./services/browser.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
-import { matchResumeToJob } from "./services/match.js";
+import { matchResumeToJobAi } from "./services/apply/matchAi.js";
+import { isAiEnabled } from "./services/apply/aiClient.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
@@ -72,7 +73,7 @@ const defaultModel = "claude-sonnet-4";
 
 // 健康检查
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
 });
 
 // 登录方式类型
@@ -516,11 +517,11 @@ app.post("/api/jobs/match", async (req, res) => {
     if (!target) return res.status(400).json({ error: "未配置简历路径，无法匹配。请先在「我的档案」填写简历文件路径，或请求中带 filePath" });
     const struct = await parseResumeFile(target);
     const jobs = db.listJobs({ source: source as string, status: status as string });
-    const ranked = jobs.map(job => {
-      const r = matchResumeToJob(struct.searchBlob, struct.skills, job.jd || '', job.requirements || '');
+    const ranked = await Promise.all(jobs.map(async (job) => {
+      const r = await matchResumeToJobAi({ resumeBlob: struct.searchBlob, resumeSkills: struct.skills, jd: job.jd || '', requirements: job.requirements || '' });
       db.updateJob(job.id, { match_score: r.score, match_detail: JSON.stringify({ matched: r.matched, missing: r.missing, suggestions: r.suggestions }) });
       return { ...job, match_score: r.score, match_detail: { matched: r.matched, missing: r.missing, suggestions: r.suggestions } };
-    });
+    }));
     ranked.sort((a, b) => (b.match_score ?? -1) - (a.match_score ?? -1));
     res.json({
       resumeName: struct.name,
