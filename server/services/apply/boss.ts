@@ -7,7 +7,7 @@
  * 脚本状态驱动、可重复执行：登录态由持久化上下文保留，遇到滑块返回 need_captcha，
  * 用户在打开的浏览器里人工过一下后再次调用即可继续。
  */
-import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
+import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
 import type { ApplyInput, ApplyResult } from './types.js';
 
 const LOGIN_URL = 'https://www.zhipin.com/web/user/?ka=header-login';
@@ -63,12 +63,17 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
     if (jobUrl) {
       // 立即沟通（BOSS 投递入口）
       let chatted = false;
-      for (const label of ['立即沟通', '投个简历', '在线简历']) {
-        const rr = await bexec(platform, 'click', { text: label, timeout: 6000 }, logs, `点击「${label}」`);
+      const labels = ['立即沟通', '投个简历', '在线简历', '投递', '沟通一下', '感兴趣', '发简历', '投递简历'];
+      for (const label of labels) {
+        const rr = await bexec(platform, 'click', { text: label, timeout: 10000 }, logs, `点击「${label}」`);
         if (rr.ok) { chatted = true; break; }
       }
       if (!chatted) {
         const shot = await tryScreenshot(platform);
+        const page = await pageText(platform);
+        const url = await pageUrl(platform);
+        const html = await bexec(platform, 'html', { maxLength: 4000 }, logs, '抓取页面HTML片段');
+        logs.step('诊断', false, `url=${url}; 页面文本前500字=${page.slice(0, 500)}; html片段=${(html.html || '').slice(0, 500)}`);
         return { platform, status: 'need_manual', message: '未找到「立即沟通/投简历」按钮，可能页面结构变化或需先完善在线简历', logs: logs.logs, company, position, screenshot: shot };
       }
       await sleep(2500);

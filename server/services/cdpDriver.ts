@@ -91,12 +91,24 @@ function __findEl(opts){
   }
   if (opts.text) {
     var t = opts.text;
-    var interactive = 'button, a[href], [role="button"], input[type="button"], input[type="submit"], [role="link"]';
-    function __vis(el){ if(!el) return false; if(el.offsetParent===null && el.getClientRects().length===0) return false; try{ return getComputedStyle(el).display!=='none'; }catch(e){ return true; } }
-    var nodes = Array.prototype.slice.call(document.querySelectorAll(interactive)).filter(function(n){ return norm(n.innerText).indexOf(t)>=0; });
+    function __vis(el){ if(!el) return false; if(el.offsetParent===null && el.getClientRects().length===0) return false; try{ var s=getComputedStyle(el); return s.display!=='none' && s.visibility!=='hidden' && s.opacity!=='0'; }catch(e){ return true; } }
+    function __clickable(el){ if(!el) return false; var tag=el.tagName; if(tag==='BUTTON' || tag==='A' || tag==='INPUT') return true; var r=el.getAttribute('role'); if(r==='button' || r==='link') return true; if(el.onclick || el.getAttribute('onclick')) return true; return false; }
+    // 1) 优先在显式可交互元素中匹配
+    var interactive = 'button, a[href], [role="button"], input[type="button"], input[type="submit"], [role="link"]'
+    var nodes = Array.prototype.slice.call(document.querySelectorAll(interactive)).filter(function(n){ return norm(n.innerText).indexOf(t)>=0 || (n.getAttribute('aria-label')||'').indexOf(t)>=0 || (n.title||'').indexOf(t)>=0; });
     var visNodes = nodes.filter(__vis);
     if (visNodes.length) return visNodes[opts.index||0];
     if (nodes.length) return nodes[opts.index||0];
+    // 2) BOSS 等站点按钮常是 div/span 并带点击事件，未声明 role；在可见元素中回退查找
+    var broad = Array.prototype.slice.call(document.querySelectorAll('div, span, a, button, [role="button"], [role="link"]')).filter(function(n){ return norm(n.innerText).indexOf(t)>=0 && __vis(n); });
+    if (broad.length) {
+      // 优先可点击（含子节点 button/a 也算）
+      var clickables = broad.filter(__clickable);
+      if (clickables.length) return clickables[opts.index||0];
+      // 否则找尺寸最大、最可能是按钮的那个
+      return broad.sort(function(a,b){ var ar=a.getBoundingClientRect(), br=b.getBoundingClientRect(); return (br.width*br.height)-(ar.width*ar.height); })[opts.index||0];
+    }
+    // 3) 叶子节点精确/部分匹配
     var exact = Array.prototype.slice.call(document.querySelectorAll('*')).filter(function(n){ return n.children && n.children.length===0 && norm(n.innerText)===t; });
     if (exact.length) return exact[opts.index||0];
     var partial = Array.prototype.slice.call(document.querySelectorAll('*')).filter(function(n){ return n.children && n.children.length===0 && norm(n.innerText).indexOf(t)>=0; });
