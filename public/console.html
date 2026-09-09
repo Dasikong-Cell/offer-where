@@ -162,6 +162,11 @@ const PLATFORMS = [
 const NAME = Object.fromEntries(PLATFORMS.map(p => [p.id, p.name]));
 const selected = new Set(['boss']);
 
+// API 基地址：页面若不是从 4400 打开的（如文件预览/其它端口），仍直连后端 4400
+const API_BASE = (location.protocol.startsWith('http') && location.port === '4400')
+  ? ''
+  : 'http://127.0.0.1:4400';
+
 const $ = (s) => document.querySelector(s);
 const logEl = $('#log');
 
@@ -197,7 +202,7 @@ function esc(s) {
 
 $('#btnClear').onclick = () => { logEl.innerHTML = ''; };
 $('#btnOpen').onclick = () => {
-  fetch('/api/browser/exec', {
+  fetch(API_BASE + '/api/browser/exec', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ platform: 'boss', action: 'bringToFront' })
   }).then(() => line('已尝试把调试浏览器窗口置顶（若未启动请先启动服务）。', 'info'))
@@ -250,7 +255,7 @@ function handleEvent(e, pfName) {
 
 async function runPlatform(pf, limit, intervalMs, sinceMinutes) {
   controller = new AbortController();
-  const res = await fetch('/api/apply/batch', {
+  const res = await fetch(API_BASE + '/api/apply/batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -313,7 +318,7 @@ $('#btnStart').onclick = async () => {
 
 async function pollStatus() {
   try {
-    const r = await fetch('/api/health');
+    const r = await fetch(API_BASE + '/api/health');
     const j = await r.json();
     const el = $('#pillApi');
     el.textContent = '后端 在线';
@@ -324,7 +329,7 @@ async function pollStatus() {
     el.className = 'pill off';
   }
   try {
-    const r = await fetch('/api/browser/sessions');
+    const r = await fetch(API_BASE + '/api/browser/sessions');
     const j = await r.json();
     const n = (j.sessions || []).length;
     const el = $('#pillCdp');
@@ -339,6 +344,7 @@ async function pollStatus() {
 pollStatus();
 setInterval(pollStatus, 5000);
 line('控制台就绪。选择平台后点「开始投递」。', 'info');
+if (API_BASE) line('检测到本页不是从 http://127.0.0.1:4400 打开，已自动直连后端；建议以后用桌面「投递Agent」图标打开。', 'warn');
 </script>
 </body>
 </html>
