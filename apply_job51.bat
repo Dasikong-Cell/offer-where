@@ -1,8 +1,9 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+call "%~dp0setenv.bat"
+if errorlevel 1 exit /b 1
 
-REM 检查后端是否启动（端口连通性即可，不支持 status 动作）
+REM 检查后端是否启动（端口连通性即可）
 curl -s -m 3 http://127.0.0.1:4400/ >nul 2>nul
 if errorlevel 1 (
   echo [错误] 后端服务未启动，请先双击 start_all.bat。
@@ -12,7 +13,7 @@ if errorlevel 1 (
 echo 开始 51job 批量投递（上限 50，间隔 20s）...
 echo 按 Ctrl+C 可随时中止。
 echo.
-node_modules\.bin\tsx scripts/batch_multi.ts job51 50 20000
+"%NODE%" "%ROOT%node_modules\tsx\dist\cli.mjs" scripts/batch_multi.ts job51 50 20000
 echo.
 echo 51job 投递结束。
 pause
