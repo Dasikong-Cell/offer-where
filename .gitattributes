@@ -1,0 +1,4 @@
+# Windows 批处理文件必须保持 CRLF 行尾，否则双击会因 cmd.exe 无法解析 LF 而闪退。
+# 无论克隆者本机 core.autocrlf 如何设置，检出时一律还原为 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
