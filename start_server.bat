@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 call "%~dp0setenv.bat"
 if errorlevel 1 exit /b 1
 cd /d "%ROOT%"
