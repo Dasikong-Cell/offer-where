@@ -15,6 +15,7 @@ import { isAiEnabled } from "./services/apply/aiClient.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
+import { runAutoReply } from "./services/apply/autoReplyRunner.js";
 import { collectOfferbiu } from "./services/offerbiuCollect.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
@@ -601,6 +602,51 @@ app.post("/api/apply/batch", async (req, res) => {
 });
 
 // ============= 跨平台专用投递（BOSS / 智联） =============
+
+// ============= BOSS HR 消息自动回复（SSE 流式，控制台可视化） =============
+
+let autoReplyController: AbortController | null = null;
+
+app.get("/api/auto-reply/run", async (req, res) => {
+  const q = req.query || {};
+  const unreadOnly = q.unreadOnly !== '0' && q.unreadOnly !== 'false';
+  const limit = Number(q.limit || 0) || 0;
+  const realSend = q.realSend === '1' || q.realSend === 'true';
+
+  if (autoReplyController) {
+    return res.status(409).json({ error: '自动回复正在运行，请先停止' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  autoReplyController = new AbortController();
+  const signal = autoReplyController.signal;
+  const send = (ev: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  };
+
+  try {
+    await runAutoReply({ unreadOnly, limit, realSend, signal }, send);
+  } catch (e: unknown) {
+    send({ type: 'error', message: String((e as Error)?.message || e) });
+  } finally {
+    autoReplyController = null;
+    send({ type: 'end' });
+    res.end();
+  }
+});
+
+app.post("/api/auto-reply/stop", (_req, res) => {
+  if (autoReplyController) {
+    autoReplyController.abort();
+    autoReplyController = null;
+  }
+  res.json({ ok: true });
+});
 
 app.post("/api/apply", async (req, res) => {
   try {
