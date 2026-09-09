@@ -5,7 +5,11 @@ cd /d "%~dp0"
 call "%~dp0setenv.bat"
 if errorlevel 1 exit /b 1
 
-set "CHROME=C:\Program Files\Google\Chrome\Application\chrome.exe"
+REM Reuse CHROME path detected by setenv.bat. If it is still blank, show a clear error.
+if not defined CHROME (
+  echo [error] CHROME not detected. Please install Google Chrome and try again.
+  pause & exit /b 1
+)
 if not exist "%CHROME%" (
   echo [error] Chrome not found: %CHROME%
   pause & exit /b 1

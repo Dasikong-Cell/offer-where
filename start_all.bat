@@ -10,7 +10,11 @@ echo   Backend: http://127.0.0.1:4400  (must be 4400)
 echo ============================================
 echo.
 
-set "CHROME=C:\Program Files\Google\Chrome\Application\chrome.exe"
+REM Reuse CHROME path detected by setenv.bat. If it is still blank, show a clear error.
+if not defined CHROME (
+  echo [error] CHROME not detected. Please install Google Chrome and try again.
+  pause & exit /b 1
+)
 if not exist "%CHROME%" (
   echo [error] Chrome not found: %CHROME%
   pause & exit /b 1
