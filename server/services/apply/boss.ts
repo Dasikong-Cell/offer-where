@@ -7,7 +7,7 @@
  * 脚本状态驱动、可重复执行：登录态由持久化上下文保留，遇到滑块返回 need_captcha，
  * 用户在打开的浏览器里人工过一下后再次调用即可继续。
  */
-import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
+import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode, resolveResumePath } from './common.js';
 import type { ApplyInput, ApplyResult } from './types.js';
 
 const LOGIN_URL = 'https://www.zhipin.com/web/user/?ka=header-login';
@@ -21,7 +21,7 @@ function needsLogin(url: string, text: string): boolean {
 export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
   const logs = new ApplyLogger();
   const platform = 'boss';
-  const resumePath = input.profile.resume_path || undefined;
+  const resumePath = resolveResumePath(input.profile.resume_path);
   const jobUrl = input.jobUrl || input.job?.apply_url || undefined;
   const company = input.job?.company ?? null;
   const position = input.job?.position ?? null;
@@ -78,15 +78,30 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       }
       await sleep(2500);
 
-      // 3.5) 点击后 BOSS 可能跳到「完善在线简历」或「开通 VIP」页，而不是聊天页
+      // 3.5) 点击后检测页面状态：可能进入聊天，也可能被引导到「完善在线简历 / 开通 VIP」页
       const postClickUrl = await pageUrl(platform);
       const postClickText = await pageText(platform);
-      if (/cv\.zhipin\.com\/edit-resume|linkFrom=boss|完善简历|在线简历|开通会员|VIP|尊享会员/.test(postClickUrl + ' ' + postClickText.slice(0, 300))) {
+      const guidedToResume = /cv\.zhipin\.com\/edit-resume|linkFrom=boss|完善简历|在线简历|开通会员|尊享会员/.test(postClickUrl + ' ' + postClickText.slice(0, 300));
+      const inChat = /web\/im|chat\.zhipin|web\/geek\/chat|\.chat-conversation|聊天/.test(postClickUrl + ' ' + postClickText.slice(0, 300));
+
+      // 情况 A：进入「完善在线简历 / VIP」引导页（未进入聊天）—— 直接尝试发送附件简历，不走完善在线简历
+      if (guidedToResume && !inChat) {
+        logs.step('投递引导', false, `点击后进入简历完善/VIP 引导页：${postClickUrl}，尝试直接发送附件简历`);
+        const sent = await uploadResumeAttachment(platform, resumePath, logs);
+        await sleep(2500);
+        const afterText = await pageText(platform);
+        const afterUrl = await pageUrl(platform);
         const shot = await tryScreenshot(platform);
-        logs.step('投递中断', false, `点击后进入简历完善/VIP 页：${postClickUrl}`);
-        return { platform, status: 'need_manual', message: 'BOSS 要求先完善在线简历或开通 VIP 后才能投递，请在调试 Chrome 内手动处理后再试', logs: logs.logs, company, position, screenshot: shot };
+        if (sent && (/(已发送|发送成功|简历已送达|沟通中|投递成功|附件已|已发送给您)/.test(afterText) || /web\/im|chat/.test(afterUrl))) {
+          return { platform, status: 'applied', message: `已在引导页通过附件简历向「${company || position || '该岗位'}」发起沟通`, logs: logs.logs, company, position, screenshot: shot };
+        }
+        if (sent) {
+          return { platform, status: 'need_manual', message: '已在引导页上传附件简历，但未能确认沟通是否建立，请在调试 Chrome 中确认是否成功发送', logs: logs.logs, company, position, screenshot: shot };
+        }
+        return { platform, status: 'need_manual', message: 'BOSS 要求先完善在线简历或开通 VIP 才能投递。可在调试 Chrome 内点「上传附件简历」手动发送，或完善在线简历后再试', logs: logs.logs, company, position, screenshot: shot };
       }
 
+      // 情况 B：已进入聊天（或岗位页可直接沟通）—— 发送招呼语 + 附件简历
       // 在聊天框发送招呼语（BOSS 需主动发消息才会建立沟通）
       const greeting = `您好，我对「${position || '该岗位'}」很感兴趣，这是我的简历，期待进一步沟通。`;
       for (const sel of ['.chat-input', '#chat-input', 'textarea[placeholder*="沟通"]', 'div[contenteditable="true"]']) {
@@ -98,22 +113,17 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
         if (sr.ok) break;
       }
 
-      // 上传简历附件（若有）
-      if (resumePath) {
-        for (const sel of ['input[type=file]', '.resume-upload input', 'input[accept*="pdf"]']) {
-          const ur = await bexec(platform, 'upload', { selector: sel, filePath: resumePath, timeout: 8000 }, logs, '上传简历附件');
-          if (ur.ok) break;
-        }
-      }
+      // 上传附件简历（固定使用默认简历 PDF，无需完善在线简历）
+      await uploadResumeAttachment(platform, resumePath, logs);
       await sleep(2000);
 
       text = await pageText(platform);
       const shot = await tryScreenshot(platform);
-      const ok = /(已发送|发送成功|简历已送达|沟通中|在线简历已)/.test(text) || /沟通/.test(text);
+      const ok = /(已发送|发送成功|简历已送达|沟通中|在线简历已|附件已|已发送给您)/.test(text) || /沟通/.test(text);
       if (ok) {
-        return { platform, status: 'applied', message: `已在 BOSS 向「${company || position || '该岗位'}」发起沟通并发送简历`, logs: logs.logs, company, position, screenshot: shot };
+        return { platform, status: 'applied', message: `已在 BOSS 向「${company || position || '该岗位'}」发起沟通并发送附件简历`, logs: logs.logs, company, position, screenshot: shot };
       }
-      return { platform, status: 'need_manual', message: '已点击沟通但未能确认投递成功，请检查打开的浏览器', logs: logs.logs, company, position, screenshot: shot };
+      return { platform, status: 'need_manual', message: '已点击沟通并发送附件简历，但未能确认投递成功，请检查打开的浏览器', logs: logs.logs, company, position, screenshot: shot };
     }
 
     // 未给岗位链接：仅完成登录即返回，等待用户补充岗位
@@ -123,6 +133,47 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
     const shot = await tryScreenshot(platform).catch(() => undefined);
     return { platform, status: 'error', message: e?.message || String(e), logs: logs.logs, company, position, screenshot: shot };
   }
+}
+
+/**
+ * 上传附件简历（PDF）。BOSS 聊天页 / 简历完善页均有「上传附件简历」入口，
+ * 对应隐藏 file input 为 input[ka=user-resume-upload-file]（accept 含 pdf）。
+ * 优先直接对 file input 写入文件；若 file input 尚未出现，则先点按钮唤起再上传。
+ */
+async function uploadResumeAttachment(platform: string, resumePath: string | undefined, logs: ApplyLogger): Promise<boolean> {
+  if (!resumePath) {
+    logs.step('简历附件', false, '未配置简历路径，跳过附件上传');
+    return false;
+  }
+  const selectors = [
+    'input[ka=user-resume-upload-file]',
+    'input[accept*="pdf"]',
+    'input[type=file]',
+    '.resume-upload input',
+  ];
+  // 1) 先尝试直接对 file input 写文件（最精准，不依赖先点按钮）
+  for (const sel of selectors) {
+    const ur = await bexec(platform, 'upload', { selector: sel, filePath: resumePath, timeout: 8000 }, logs, '上传简历附件');
+    if (ur.ok) {
+      logs.step('简历附件', true, `已上传附件简历：${resumePath}`);
+      return true;
+    }
+  }
+  // 2) file input 未出现：先点「上传附件简历」按钮唤起，再上传
+  for (const label of ['上传附件简历', '发送附件简历', '上传简历', '附件简历']) {
+    const cr = await bexec(platform, 'click', { text: label, timeout: 4000 }, logs, `点击「${label}」`);
+    if (cr.ok) break;
+  }
+  await sleep(1500);
+  for (const sel of selectors) {
+    const ur = await bexec(platform, 'upload', { selector: sel, filePath: resumePath, timeout: 10000 }, logs, '上传简历附件');
+    if (ur.ok) {
+      logs.step('简历附件', true, `已上传附件简历：${resumePath}`);
+      return true;
+    }
+  }
+  logs.step('简历附件', false, '未找到上传附件简历入口');
+  return false;
 }
 
 /** BOSS 邮箱验证码登录 */
