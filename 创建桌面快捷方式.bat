@@ -1,34 +1,31 @@
 @echo off
 chcp 65001 >nul
 REM ============================================================
-REM  为「当前这台电脑」在桌面生成快捷方式。
-REM  - 优先生成真正的 .lnk 快捷方式（需系统允许 WScript.Shell COM）
-REM  - 若被安全策略禁用，则退化为 .bat 桌面快捷方式（双击效果相同）
-REM  生成的快捷方式指向「本包内」的 start_all.bat / apply_*.bat，
-REM  所以你把整个 job-apply-agent 文件夹移动/发送给别人后，
-REM  别人只需在自己的电脑上再双击一次本文件即可重建他们的桌面快捷方式。
+REM  在桌面创建「唯一入口」快捷方式 —— 投递Agent
+REM  双击它 → 启动服务并打开控制台页面（在页面里选平台、填数量即可）。
+REM  不再为每个平台单独建图标，保持桌面清爽。
+REM
+REM  - 优先生成真正的 .lnk（需系统允许 WScript.Shell COM）
+REM  - 被安全策略禁用时退化为 .bat（双击效果相同）
 REM ============================================================
 set "PKG=%~dp0"
 REM 解析真实桌面路径（部分机器桌面被重定向到非 %USERPROFILE%\Desktop）
 for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP=%%D"
 if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
 
-echo 正在为当前用户创建桌面快捷方式（指向 %PKG%）...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $items=@(@{n='投递Agent-启动服务';t='start_all.bat'},@{n='投递Agent-BOSS投50';t='apply_boss.bat'},@{n='投递Agent-51job投50';t='apply_job51.bat'},@{n='投递Agent-猎聘投50';t='apply_liepin.bat'}); foreach($i in $items){ $lnk=$ws.CreateShortcut('%DESKTOP%\'+$i.n+'.lnk'); $lnk.TargetPath='%PKG%'+$i.t; $lnk.WorkingDirectory='%PKG%'; $lnk.Description='Job Apply Agent'; $lnk.Save(); Write-Host ('lnk: '+$i.n) }" 2>nul
+echo 正在桌面创建唯一入口「投递Agent」...
+echo 指向：%PKG%start_all.bat
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $lnk=$ws.CreateShortcut('%DESKTOP%\投递Agent.lnk'); $lnk.TargetPath='%PKG%start_all.bat'; $lnk.WorkingDirectory='%PKG%'; $lnk.Description='简历投递 Agent 控制台'; $lnk.Save()" 2>nul
 
 if errorlevel 1 (
-  REM ---- COM 被禁用，退化为 .bat 桌面快捷方式 ----
-  echo @echo off > "%DESKTOP%\投递Agent-启动服务.bat"
-  echo call "%PKG%start_all.bat" >> "%DESKTOP%\投递Agent-启动服务.bat"
-  echo @echo off > "%DESKTOP%\投递Agent-BOSS投50.bat"
-  echo call "%PKG%apply_boss.bat" >> "%DESKTOP%\投递Agent-BOSS投50.bat"
-  echo @echo off > "%DESKTOP%\投递Agent-51job投50.bat"
-  echo call "%PKG%apply_job51.bat" >> "%DESKTOP%\投递Agent-51job投50.bat"
-  echo @echo off > "%DESKTOP%\投递Agent-猎聘投50.bat"
-  echo call "%PKG%apply_liepin.bat" >> "%DESKTOP%\投递Agent-猎聘投50.bat"
-  echo 已创建 4 个桌面 .bat 快捷方式（本机禁用了 .lnk COM，故用 .bat，效果相同）。
+  echo @echo off > "%DESKTOP%\投递Agent.bat"
+  echo call "%PKG%start_all.bat" >> "%DESKTOP%\投递Agent.bat"
+  echo 已创建：%DESKTOP%\投递Agent.bat（本机禁用了 .lnk COM，故用 .bat，双击效果相同）
+) else (
+  echo 已创建：%DESKTOP%\投递Agent.lnk
 )
 
 echo.
-echo 完成。桌面现在应有「投递Agent-*.」快捷方式。
+echo 双击桌面「投递Agent」即可打开控制台：选择平台 → 设置数量 → 开始投递。
 pause

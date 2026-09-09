@@ -21,12 +21,19 @@ start "" "%CHROME%" ^
   --disable-renderer-backgrounding
 timeout /t 3 >nul
 
-REM 2) 启动后端服务（独立窗口，关闭该窗口即可停服）
-start "JobApply-Server" cmd /k call "%~dp0start_server.bat"
+REM 2) 启动后端服务（已在运行则跳过，避免重复启动报端口占用）
+curl -s -m 3 http://127.0.0.1:4400/api/health >nul 2>nul
+if errorlevel 1 (
+  start "JobApply-Server" cmd /k call "%~dp0start_server.bat"
+) else (
+  echo 后端服务已在运行，跳过启动。
+)
 
-echo 后端启动中，约 5 秒后可访问 http://127.0.0.1:4400
+echo 打开投递控制台...
 timeout /t 5 >nul
-start "" http://127.0.0.1:4400
+start "" http://127.0.0.1:4400/
 echo.
-echo 启动完成。投递请双击 apply_*.bat；关闭时关掉「后端服务」窗口即可。
+echo 已打开控制台 http://127.0.0.1:4400/
+echo 在页面里选择平台与数量后点「开始投递」即可。
+echo 关闭时关掉标题为「JobApply-Server」的窗口即可停服。
 pause

@@ -3,57 +3,60 @@
 ============================================================
 
 【这是什么】
-一键在 BOSS直聘 / 51job / 猎聘 等平台批量投递简历，
-并对 HR 的回复做自动应答（直到约到面试或礼貌收尾）。
+一个带界面的简历批量投递工具：在网页里勾选平台、填数量，点一下就开始投。
+支持 BOSS直聘 / 51job / 猎聘 / 智联招聘，投递过程实时显示进度。
 自带 Node 运行时，正常情况下无需安装任何环境。
 
 【给别人用的前提】
-1. 接收者电脑需安装 Google Chrome（用于调试投递的浏览器实例）。
+1. 接收者电脑需安装 Google Chrome。
    - 下载：https://www.google.com/chrome/
-2. 接收者需自己拥有上述招聘平台的账号，并在首次启动时登录
-   （本包不含任何人的登录态，chrome-cdp-profile 已被打包时排除）。
+2. 接收者需自己拥有上述招聘平台的账号，并在首次使用时登录
+   （本包不含任何人的登录态，chrome-cdp-profile 与 data/ 已被打包时排除）。
 
-【快速开始（接收者）】
-1. 把 job-apply-agent 文件夹解压到任意位置。
-2. （可选）双击「创建桌面快捷方式.bat」，桌面会出现 4 个入口。
-3. 双击「start_all.bat」：
-   - 自动打开一个独立的 Chrome 调试窗口（端口 9222）
-   - 自动启动后端服务（端口 4400）并打开管理页
-4. 在弹出的 Chrome 调试窗口里，登录你要投的平台账号。
-5. 双击「apply_boss.bat / apply_job51.bat / apply_liepin.bat」
-   即可开始批量投递（默认各上限 50 份）。
+【快速开始】
+1. 解压到任意位置。
+2. （可选）双击「创建桌面快捷方式.bat」→ 桌面只会出现一个「投递Agent」图标。
+3. 双击「投递Agent」（或直接双击 start_all.bat）：
+   - 自动打开独立的 Chrome 调试窗口
+   - 自动启动后端服务并打开控制台页面 http://127.0.0.1:4400
+4. 在弹出的 Chrome 调试窗口里登录你要投的平台账号。
+5. 回到控制台页面：
+   ① 勾选平台（可多选）  ② 填每平台投递数量与间隔  ③ 点「开始投递」
+   进度和每条结果会实时显示在页面下方的日志区。
 
 【目录与文件说明】
-  start_all.bat          一键启动 CDP Chrome + 后端服务
-  start_server.bat       仅启动后端服务（被 start_all 调用）
-  apply_boss.bat          BOSS 批量投递
-  apply_job51.bat        51job 批量投递
-  apply_liepin.bat       猎聘批量投递
-  setenv.bat             公共环境初始化（自动找 Node / Chrome / profile）
-  创建桌面快捷方式.bat   在本机桌面生成快捷方式（可分享后重跑）
-  打包.bat               生成可分发压缩包到桌面（已排除个人登录态）
-  node\node.exe          自带 Node 运行时（接收者无需安装 Node）
-  node_modules\          运行依赖
-  server\ / scripts\     源码
+  投递Agent（桌面唯一入口）  启动服务并打开控制台
+  start_all.bat              一键启动 CDP Chrome + 后端服务 + 打开控制台
+  start_server.bat           仅启动后端服务（被 start_all 调用，已做幂等：服务在跑就跳过）
+  setenv.bat                 公共环境初始化（自动找 Node / Chrome / profile）
+  创建桌面快捷方式.bat        在桌面创建唯一入口「投递Agent」
+  打包.bat                   生成可分发压缩包（已排除个人登录态）
+  public/console.html        控制台页面（单页，由后端 4400 端口托管）
+  node\node.exe              自带 Node 运行时（接收者无需安装 Node）
+  node_modules\              运行依赖
+  server\ / scripts\         源码
+  apply_boss|job51|liepin.bat  单平台命令行投递（备用，一般直接用控制台）
 
 【常见问题】
 Q: 启动提示“未检测到 Google Chrome”？
 A: 安装 Chrome 后重跑即可。
 
-Q: 投递没反应 / 提示后端未启动？
-A: 先双击 start_all.bat 等约 5 秒，确认管理页 http://127.0.0.1:4400 能打开。
+Q: 控制台打不开 / 显示后端离线？
+A: 先看是否有一个标题为「JobApply-Server」的窗口；没有就双击 start_all.bat。
 
-Q: 投到一半被风控要求短信验证（常见于猎聘）？
-A: 在调试 Chrome 窗口里完成短信验证，再重跑对应 apply_*.bat。
+Q: 投到一半提示“需要人工处理（captcha / manual）”？
+A: 说明碰到验证码或需手工填写。请在调试 Chrome 窗口里处理完，再继续。
+
+Q: 猎聘提示短信验证？
+A: 在调试 Chrome 窗口里完成短信验证，然后重新点「开始投递」。
 
 Q: 换电脑/移动文件夹后还能用吗？
-A: 能。所有路径都相对本文件夹；移动后双击一次「创建桌面快捷方式.bat」重建桌面入口即可。
+A: 能。所有路径都相对本文件夹；移动后双击一次「创建桌面快捷方式.bat」重建入口即可。
 
-Q: 为什么压缩包较大（约几百 MB~1GB）？
+Q: 为什么压缩包较大（约 330MB）？
 A: 内含完整 node_modules 运行依赖与自带 Node，为的是“无需安装任何环境”。
-   若你懂 npm，可删除 node_modules 后用「npm install」瘦身（需接收者自备 Node）。
 
 【隐私说明】
-打包时已排除 chrome-cdp-profile（你的平台登录 Cookie）与 .git，
-不会把你的账号登录态泄露给接收者。
+打包时已排除 chrome-cdp-profile（你的平台登录 Cookie）、data/（浏览器会话与数据库）
+以及 .git、*.log，不会把你的账号登录态泄露给接收者。
 ============================================================

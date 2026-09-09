@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>简历投递 Agent</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --line: #e5e7eb;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --brand: #2563eb;
+    --brand-soft: #eff6ff;
+    --ok: #059669;
+    --err: #dc2626;
+    --warn: #d97706;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 48px;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--brand); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700;
+  }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .status { margin-left: auto; display: flex; gap: 8px; font-size: 12px; }
+  .pill {
+    padding: 4px 10px; border-radius: 999px;
+    background: #eef0f3; color: var(--muted); border: 1px solid var(--line);
+  }
+  .pill.on { background: #ecfdf5; color: var(--ok); border-color: #a7f3d0; }
+  .pill.off { background: #fef2f2; color: var(--err); border-color: #fecaca; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); font-weight: 600; }
+
+  .platforms { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .pf {
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 12px 14px;
+    cursor: pointer; user-select: none; transition: .15s; background: #fff;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .pf:hover { border-color: #c7d2fe; }
+  .pf.sel { border-color: var(--brand); background: var(--brand-soft); }
+  .pf .dot {
+    width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid #cbd5e1; flex: 0 0 18px;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff;
+  }
+  .pf.sel .dot { background: var(--brand); border-color: var(--brand); }
+  .pf .nm { font-size: 14px; font-weight: 600; }
+  .pf .hint { font-size: 11px; color: var(--muted); }
+
+  .fields { display: flex; gap: 16px; flex-wrap: wrap; }
+  .field { flex: 1 1 160px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .field input {
+    width: 100%; padding: 9px 11px; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text);
+  }
+  .field input:focus { outline: 2px solid #bfdbfe; border-color: var(--brand); }
+
+  .actions { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+  button {
+    padding: 10px 20px; font-size: 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--text); transition: .15s;
+    font-weight: 600;
+  }
+  button:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+  button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+  button.primary:hover:not(:disabled) { opacity: .9; color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .log {
+    background: #0f172a; color: #cbd5e1; border-radius: 12px; padding: 14px;
+    height: 320px; overflow-y: auto; font-family: ui-monospace, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+  }
+  .log .t { color: #64748b; }
+  .log .ok { color: #4ade80; }
+  .log .err { color: #f87171; }
+  .log .warn { color: #fbbf24; }
+  .log .info { color: #93c5fd; }
+  .log .dim { color: #64748b; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">投</div>
+    <div>
+      <h1>简历投递 Agent</h1>
+      <div class="sub">选择平台 → 设置数量 → 一键投递</div>
+    </div>
+    <div class="status">
+      <span class="pill" id="pillApi">后端 检测中</span>
+      <span class="pill" id="pillCdp">CDP 检测中</span>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>① 选择投递平台（可多选）</h2>
+    <div class="platforms" id="platforms"></div>
+  </div>
+
+  <div class="card">
+    <h2>② 投递设置</h2>
+    <div class="fields">
+      <div class="field">
+        <label>每平台投递数量（份）</label>
+        <input type="number" id="limit" value="20" min="1" max="200" />
+      </div>
+      <div class="field">
+        <label>每次投递间隔（秒）</label>
+        <input type="number" id="interval" value="20" min="1" max="300" />
+      </div>
+      <div class="field">
+        <label>只投最近发布的岗位（分钟，0=不限）</label>
+        <input type="number" id="since" value="0" min="0" />
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="actions">
+      <button class="primary" id="btnStart">开始投递</button>
+      <button id="btnStop" disabled>停止</button>
+      <button id="btnClear">清空日志</button>
+      <button id="btnOpen">打开调试浏览器</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row-between" style="margin-bottom:10px">
+      <h2 style="margin:0">③ 实时进度</h2>
+      <span class="sub" id="progressText">空闲</span>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+const PLATFORMS = [
+  { id: 'boss',    name: 'BOSS 直聘', hint: '沟通效率高' },
+  { id: 'job51',   name: '51job',     hint: '岗位库大' },
+  { id: 'liepin',  name: '猎聘',       hint: '中高端' },
+  { id: 'zhilian', name: '智联招聘',   hint: '综合' },
+];
+const NAME = Object.fromEntries(PLATFORMS.map(p => [p.id, p.name]));
+const selected = new Set(['boss']);
+
+const $ = (s) => document.querySelector(s);
+const logEl = $('#log');
+
+function renderPlatforms() {
+  $('#platforms').innerHTML = PLATFORMS.map(p => `
+    <div class="pf ${selected.has(p.id) ? 'sel' : ''}" data-id="${p.id}">
+      <div class="dot">${selected.has(p.id) ? '✓' : ''}</div>
+      <div><div class="nm">${p.name}</div><div class="hint">${p.hint}</div></div>
+    </div>`).join('');
+  $('#platforms').querySelectorAll('.pf').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.id;
+      selected.has(id) ? selected.delete(id) : selected.add(id);
+      renderPlatforms();
+    };
+  });
+}
+renderPlatforms();
+
+function now() {
+  const d = new Date();
+  return d.toTimeString().slice(0, 8);
+}
+function line(text, cls = 'dim') {
+  const el = document.createElement('div');
+  el.innerHTML = `<span class="t">[${now()}]</span> <span class="${cls}">${text}</span>`;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+$('#btnClear').onclick = () => { logEl.innerHTML = ''; };
+$('#btnOpen').onclick = () => {
+  fetch('/api/browser/exec', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platform: 'boss', action: 'bringToFront' })
+  }).then(() => line('已尝试把调试浏览器窗口置顶（若未启动请先启动服务）。', 'info'))
+    .catch(e => line('置顶失败：' + e.message, 'err'));
+};
+
+let controller = null;
+let running = false;
+
+$('#btnStop').onclick = () => {
+  if (controller) controller.abort();
+  running = false;
+  $('#btnStart').disabled = false;
+  $('#btnStop').disabled = true;
+  $('#progressText').textContent = '已请求停止';
+  line('已请求停止（服务端会完成当前这一条后停下）。', 'warn');
+};
+
+function handleEvent(e, pfName) {
+  switch (e.type) {
+    case 'start':
+      line(`${pfName}：${esc(e.message)}`, 'info');
+      $('#progressText').textContent = `${pfName} 0/${e.total}`;
+      break;
+    case 'progress':
+      $('#progressText').textContent = `${pfName} ${e.index}/${e.total}`;
+      line(`→ [${e.index}/${e.total}] ${esc(e.company || '')} ${esc(e.position || '')}`, 'dim');
+      break;
+    case 'result': {
+      const s = e.status || '';
+      const cls = s === 'applied' ? 'ok' : (s === 'error' ? 'err' : (s === 'skipped' ? 'dim' : 'warn'));
+      line(`✔ [${e.index}] ${s} — ${esc(e.message || '')}`, cls);
+      break;
+    }
+    case 'need_input':
+      line(`⚠ 需要人工处理（${e.inputType}）：${esc(e.message || '')} —— 请在调试浏览器里完成后继续`, 'warn');
+      break;
+    case 'done': {
+      const s = e.summary || {};
+      line(`${pfName} 完成：成功 ${s.applied ?? 0}，跳过 ${s.skipped ?? 0}，失败 ${s.failed ?? 0}`, 'ok');
+      break;
+    }
+    case 'error':
+      line(`✖ ${esc(e.message || '未知错误')}`, 'err');
+      break;
+    default:
+      line(esc(JSON.stringify(e)), 'dim');
+  }
+}
+
+async function runPlatform(pf, limit, intervalMs, sinceMinutes) {
+  controller = new AbortController();
+  const res = await fetch('/api/apply/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      // source 必须一起传：引擎按 source 过滤岗位库，只传 platform 会串平台
+      platform: pf, source: pf, limit, intervalMs, stream: true,
+      criteria: { excludeApplied: true },
+      ...(sinceMinutes > 0 ? { sinceMinutes } : {}),
+    }),
+    signal: controller.signal,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() || '';
+    for (const p of parts) {
+      for (const l of p.split('\n')) {
+        if (l.startsWith('data: ')) {
+          try { handleEvent(JSON.parse(l.slice(6)), NAME[pf] || pf); } catch (_) {}
+        }
+      }
+    }
+  }
+}
+
+$('#btnStart').onclick = async () => {
+  if (!selected.size) { line('请先选择至少一个平台。', 'warn'); return; }
+  const limit = Number($('#limit').value) || 20;
+  const intervalMs = (Number($('#interval').value) || 20) * 1000;
+  const sinceMinutes = Number($('#since').value) || 0;
+
+  running = true;
+  $('#btnStart').disabled = true;
+  $('#btnStop').disabled = false;
+  line(`开始任务：平台 ${[...selected].map(p => NAME[p]).join('、')}，每平台 ${limit} 份，间隔 ${intervalMs / 1000}s`, 'info');
+
+  for (const pf of selected) {
+    if (!running) break;
+    try {
+      await runPlatform(pf, limit, intervalMs, sinceMinutes);
+    } catch (e) {
+      if (e.name === 'AbortError') { line(`${NAME[pf]}：已停止。`, 'warn'); break; }
+      line(`${NAME[pf]} 失败：${esc(e.message)}`, 'err');
+    }
+  }
+  running = false;
+  $('#btnStart').disabled = false;
+  $('#btnStop').disabled = true;
+  $('#progressText').textContent = '全部完成';
+  line('本轮任务结束。', 'ok');
+};
+
+async function pollStatus() {
+  try {
+    const r = await fetch('/api/health');
+    const j = await r.json();
+    const el = $('#pillApi');
+    el.textContent = '后端 在线';
+    el.className = 'pill on';
+  } catch (_) {
+    const el = $('#pillApi');
+    el.textContent = '后端 离线';
+    el.className = 'pill off';
+  }
+  try {
+    const r = await fetch('/api/browser/sessions');
+    const j = await r.json();
+    const n = (j.sessions || []).length;
+    const el = $('#pillCdp');
+    el.textContent = `CDP ${n} 个会话`;
+    el.className = 'pill ' + (n > 0 ? 'on' : '');
+  } catch (_) {
+    const el = $('#pillCdp');
+    el.textContent = 'CDP 未知';
+    el.className = 'pill';
+  }
+}
+pollStatus();
+setInterval(pollStatus, 5000);
+line('控制台就绪。选择平台后点「开始投递」。', 'info');
+</script>
+</body>
+</html>

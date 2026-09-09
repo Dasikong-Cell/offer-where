@@ -51,6 +51,12 @@ const SCREENSHOT_DIR = path.join(__dirname, '..', 'data', 'screenshots');
 if (!fs.existsSync(SCREENSHOT_DIR)) fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 app.use('/data/screenshots', express.static(SCREENSHOT_DIR));
 
+// 静态资源：投递控制台（单一入口 App，public/console.html）
+const CONSOLE_DIR = path.join(__dirname, '..', 'public');
+if (!fs.existsSync(CONSOLE_DIR)) fs.mkdirSync(CONSOLE_DIR, { recursive: true });
+app.use(express.static(CONSOLE_DIR));
+app.get("/", (_req, res) => { res.sendFile(path.join(CONSOLE_DIR, 'console.html')); });
+
 // 缓存可用模型列表
 let cachedModels: Array<{ modelId: string; name: string; description?: string }> = [];
 const defaultModel = "claude-sonnet-4";
@@ -542,9 +548,14 @@ app.post("/api/apply/batch", async (req, res) => {
       return res.status(400).json({ error: `不支持的平台：${platform}（支持：boss / zhilian / job51 / nowcoder / offerbiu，或 auto 自动路由）` });
     }
 
+    // 修复：引擎是按 source 过滤岗位库的（db.listJobs({source})），不是按 platform。
+    // 只传 platform 时会拿其它平台的岗位去投（例如选 nowcoder 却投了 boss 的岗位），
+    // 因此 source 未显式指定时，让它跟随 platform。
+    const effectiveSource = source ?? (platform && platform !== 'auto' ? platform : undefined);
+
     const input = {
       platform,
-      source,
+      source: effectiveSource,
       criteria,
       collect: (collect === 'offerbiu' ? 'offerbiu' : false) as false | 'offerbiu',
       limit: limit ? Number(limit) : 10,
