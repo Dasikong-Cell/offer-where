@@ -19,8 +19,14 @@ echo 指向：%PKG%start_all.bat
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $lnk=$ws.CreateShortcut('%DESKTOP%\投递Agent.lnk'); $lnk.TargetPath='%PKG%start_all.bat'; $lnk.WorkingDirectory='%PKG%'; $lnk.Description='简历投递 Agent 控制台'; $lnk.Save()" 2>nul
 
 if errorlevel 1 (
-  echo @echo off > "%DESKTOP%\投递Agent.bat"
-  echo call "%PKG%start_all.bat" >> "%DESKTOP%\投递Agent.bat"
+  REM 退化：系统禁用 .lnk COM。写纯 ASCII 桌面 .bat（用 %%USERPROFILE%% 规避中文路径），加 pause 兜底防闪退
+  ( echo @echo off
+    echo chcp 65001 ^>nul
+    echo set "PKG=%%USERPROFILE%%\WorkBuddy\2026-09-02-09-33-33\job-apply-agent\"
+    echo if not exist "%%PKG%%start_all.bat" ^( echo [ERR] start_all.bat not found ^& pause ^& exit /b 1 ^)
+    echo call "%%PKG%%start_all.bat"
+    echo pause
+  ) > "%DESKTOP%\投递Agent.bat"
   echo 已创建：%DESKTOP%\投递Agent.bat（本机禁用了 .lnk COM，故用 .bat，双击效果相同）
 ) else (
   echo 已创建：%DESKTOP%\投递Agent.lnk
