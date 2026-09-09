@@ -78,6 +78,15 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       }
       await sleep(2500);
 
+      // 3.5) 点击后 BOSS 可能跳到「完善在线简历」或「开通 VIP」页，而不是聊天页
+      const postClickUrl = await pageUrl(platform);
+      const postClickText = await pageText(platform);
+      if (/cv\.zhipin\.com\/edit-resume|linkFrom=boss|完善简历|在线简历|开通会员|VIP|尊享会员/.test(postClickUrl + ' ' + postClickText.slice(0, 300))) {
+        const shot = await tryScreenshot(platform);
+        logs.step('投递中断', false, `点击后进入简历完善/VIP 页：${postClickUrl}`);
+        return { platform, status: 'need_manual', message: 'BOSS 要求先完善在线简历或开通 VIP 后才能投递，请在调试 Chrome 内手动处理后再试', logs: logs.logs, company, position, screenshot: shot };
+      }
+
       // 在聊天框发送招呼语（BOSS 需主动发消息才会建立沟通）
       const greeting = `您好，我对「${position || '该岗位'}」很感兴趣，这是我的简历，期待进一步沟通。`;
       for (const sel of ['.chat-input', '#chat-input', 'textarea[placeholder*="沟通"]', 'div[contenteditable="true"]']) {
