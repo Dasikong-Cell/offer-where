@@ -30,8 +30,15 @@ export async function extractResumeText(filePath: string): Promise<string> {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.pdf') {
     const mod: any = await import('pdf-parse');
-    const pdfParse = mod.default || mod;
     const buf = fs.readFileSync(filePath);
+    // pdf-parse v2.x 暴露 PDFParse 类（new PDFParse({data}).getText()）；
+    // 经典 v1.x 暴露默认可调用函数（pdfParse(buffer)）。两者 API 不同，需兼容。
+    if (typeof mod.PDFParse === 'function') {
+      const parser = new mod.PDFParse({ data: buf });
+      const r: any = await parser.getText();
+      return (r?.text || '') as string;
+    }
+    const pdfParse = mod.default || mod;
     const result = await pdfParse(buf);
     return (result?.text || '') as string;
   }
