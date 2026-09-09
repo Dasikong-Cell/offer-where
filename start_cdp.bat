@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-REM ===== 配置（变量均已赋值，避免「找不到 '.bat'」类空变量错误）=====
+REM ===== Config (variables are preset to avoid empty-variable errors) =====
 set "CDP_PORT=9222"
 set "CDP_PROFILE=C:/chrome-cdp-profile"
 set "CHROME=C:\Program Files\Google\Chrome\Application\chrome.exe"

@@ -1,16 +1,14 @@
 ﻿@echo off
 REM ============================================================
-REM  公共环境初始化（所有启动器都先 call 它）
-REM  作用：把路径全部改成「相对于本文件所在目录」，
-REM        这样整个 job-apply-agent 文件夹移动到任何地方、
-REM        拷给任何人都能用（不再依赖本机绝对路径）。
+REM Common environment init (called by all launchers)
+REM Uses paths relative to this file so the folder can be moved.
 REM ============================================================
 set "ROOT=%~dp0"
 
-REM 1) Node 运行时：优先用自带的 node/（打包进项目，接收者无需安装 Node）
+REM 1) Node runtime: prefer bundled node/ so recipients do not need Node installed
 if exist "%ROOT%node\node.exe" ( set "NODE=%ROOT%node\node.exe" ) else ( set "NODE=node" )
 
-REM 2) Chrome 自动探测（调试用 CDP 实例依赖它）
+REM 2) Auto-detect Chrome (required by the CDP debug instance)
 set "CHROME="
 if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
@@ -21,6 +19,6 @@ if not defined CHROME (
   pause & exit 1
 )
 
-REM 3) CDP 调试 profile：本机优先复用 C:\chrome-cdp-profile（保留你的登录态），
-REM    其它机器/别人电脑没有该目录时，自动用包内相对目录（首次运行需自己登录）。
+REM 3) CDP debug profile: prefer local C:\chrome-cdp-profile to keep login state.
+REM    Fallback to the bundled relative directory on other machines.
 if exist "C:\chrome-cdp-profile" ( set "PROFILE=C:\chrome-cdp-profile" ) else ( set "PROFILE=%ROOT%chrome-cdp-profile" )

@@ -10,7 +10,7 @@ echo   后端 : http://127.0.0.1:4400  (必须 4400)
 echo ============================================
 echo.
 
-REM 1) 启动 CDP Chrome（独立调试实例，Cookie 与日常 Chrome 隔离）
+REM 1) Start CDP Chrome (isolated debug instance)
 start "" "%CHROME%" ^
   --remote-debugging-port=9222 ^
   --user-data-dir="%PROFILE%" ^
@@ -21,7 +21,7 @@ start "" "%CHROME%" ^
   --disable-renderer-backgrounding
 timeout /t 3 >nul
 
-REM 2) 启动后端服务（已在运行则跳过，避免重复启动报端口占用）
+REM 2) Start backend (skip if already running to avoid port conflict)
 curl -s -m 3 http://127.0.0.1:4400/api/health >nul 2>nul
 if errorlevel 1 (
   start "JobApply-Server" cmd /k call "%~dp0start_server.bat"

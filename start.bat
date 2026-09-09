@@ -9,7 +9,7 @@ echo   前端: http://localhost:5173
 echo ============================================
 echo.
 
-REM 检查 Node 是否可用
+REM Check Node availability
 where node >nul 2>nul
 if %errorlevel% neq 0 (
   echo [错误] 未检测到 Node.js，请先安装 Node 18+ 并加入 PATH。
@@ -17,15 +17,15 @@ if %errorlevel% neq 0 (
   exit /b 1
 )
 
-REM 启动后端服务（独立窗口）——必须 PORT=4400，否则所有投递脚本连不上
+REM Start backend in a separate window (PORT must be 4400)
 start "JobApply-Server" cmd /k "title 后端服务 && set PORT=4400 && npm run server"
 timeout /t 4 >nul
 
-REM 启动前端开发服务器（独立窗口）
+REM Start frontend dev server in a separate window
 start "JobApply-Client" cmd /k "title 前端服务 && npm run dev:client"
 timeout /t 6 >nul
 
-REM 打开浏览器
+REM Open browser
 start "" http://localhost:5173
 
 echo 服务已启动，前端窗口正在打开。

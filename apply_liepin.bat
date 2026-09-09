@@ -3,7 +3,7 @@ chcp 65001 >nul
 call "%~dp0setenv.bat"
 if errorlevel 1 exit /b 1
 
-REM 检查后端是否启动（端口连通性即可）
+REM Check whether the backend is running (port connectivity)
 curl -s -m 3 http://127.0.0.1:4400/ >nul 2>nul
 if errorlevel 1 (
   echo [错误] 后端服务未启动，请先双击 start_all.bat。

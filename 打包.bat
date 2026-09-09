@@ -1,15 +1,14 @@
 ﻿@echo off
 chcp 65001 >nul
 REM ============================================================
-REM  打包成可分发压缩包（输出到桌面）
-REM  排除：.git（版本库，不需要）、chrome-cdp-profile（你的个人登录态，隐私！）
-REM         *.log（运行日志）
-REM  包含：源码、node_modules（运行依赖）、node\（自带 Node 运行时）
-REM  => 接收者解压后直接双击 start_all.bat 即可，无需安装 Node / 任何环境。
+REM Package into a distributable zip (output to desktop)
+REM Excludes: .git, chrome-cdp-profile (private login state), *.log
+REM Includes: source, node_modules, node\ runtime
+REM  => Recipients just unzip and double-click start_all.bat
 REM ============================================================
 set "ROOT=%~dp0"
 set "STAGE=%TEMP%\job-apply-agent-portable"
-REM 解析真实桌面路径（部分机器桌面被重定向）
+REM Resolve the real desktop path (some systems redirect it)
 for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP=%%D"
 if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
 set "ZIP=%DESKTOP%\job-apply-agent-portable.zip"
