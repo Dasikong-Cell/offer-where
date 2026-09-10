@@ -187,7 +187,7 @@ export function detectIntent(text: string): HrIntent {
   return 'other';
 }
 
-const pos = (ctx: ReplyContext) => ctx.position || '该岗位';
+const pos = (ctx: ReplyContext) => ctx.position || '相关岗位';
 const com = (ctx: ReplyContext) => ctx.company || '贵公司';
 const name = (ctx: ReplyContext) => ctx.profile?.name || '';
 
