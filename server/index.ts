@@ -9,6 +9,7 @@ import { promisify } from "util";
 import * as db from "./db.js";
 import { fetchLatestCode, listRecentMails, testConnection } from "./services/mail.js";
 import { execAction, listSessions, closeAll } from "./services/browser.js";
+import { probePlatformConnections } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
 import { isAiEnabled } from "./services/apply/aiClient.js";
@@ -362,6 +363,15 @@ app.post("/api/browser/exec", async (req, res) => {
 
 app.get("/api/browser/sessions", (req, res) => {
   res.json({ sessions: listSessions() });
+});
+
+// 各平台「浏览器连接」状态（CDP 端口是否可达）：供控制台「自动识别有连接的投递」
+app.get("/api/browser/connections", async (req, res) => {
+  try {
+    res.json({ connections: await probePlatformConnections() });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "连接检测失败" });
+  }
 });
 
 app.post("/api/browser/close-all", async (req, res) => {

@@ -62,6 +62,13 @@
   .pf.sel .dot { background: var(--brand); border-color: var(--brand); }
   .pf .nm { font-size: 14px; font-weight: 600; }
   .pf .hint { font-size: 11px; color: var(--muted); }
+  .pf .conn { font-size: 11px; margin-top: 3px; display: flex; align-items: center; gap: 4px; }
+  .pf .conn.on { color: var(--ok); }
+  .pf .conn.off { color: var(--muted); }
+  .pf.off { opacity: .62; }
+  .connbar { margin-top: 12px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .connbar button { padding: 6px 14px; font-size: 13px; }
+  .conn-summary { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
 
   .fields { display: flex; gap: 16px; flex-wrap: wrap; }
   .field { flex: 1 1 160px; }
@@ -120,7 +127,12 @@
 
   <div class="card">
     <h2>① 选择投递平台（可多选）</h2>
+    <p class="conn-summary" id="connSummary">正在检测各平台浏览器连接…</p>
     <div class="platforms" id="platforms"></div>
+    <div class="connbar">
+      <label class="checkline"><input type="checkbox" id="onlyConnected" checked /> 仅投递已连接的平台（自动跳过未连接）</label>
+      <button id="btnRefreshConn">刷新连接状态</button>
+    </div>
   </div>
 
   <div class="card">
@@ -199,6 +211,11 @@ const PLATFORMS = [
 const NAME = Object.fromEntries(PLATFORMS.map(p => [p.id, p.name]));
 const selected = new Set(['boss']);
 
+// 各平台连接状态（来自 /api/browser/connections）与「仅投已连接」开关
+let connections = {};
+let onlyConnected = true;
+let autoApplied = false;
+
 // API 基地址：页面若不是从 4400 打开的（如文件预览/其它端口），仍直连后端 4400
 const API_BASE = (location.protocol.startsWith('http') && location.port === '4400')
   ? ''
@@ -208,11 +225,22 @@ const $ = (s) => document.querySelector(s);
 const logEl = $('#log');
 
 function renderPlatforms() {
-  $('#platforms').innerHTML = PLATFORMS.map(p => `
-    <div class="pf ${selected.has(p.id) ? 'sel' : ''}" data-id="${p.id}">
+  $('#platforms').innerHTML = PLATFORMS.map(p => {
+    const conn = connections[p.id];
+    const connOn = !!(conn && conn.connected);
+    const connCls = conn ? (connOn ? 'on' : 'off') : '';
+    const connLabel = conn ? (connOn ? '● 已连接' : '○ 未连接') : '· 检测中';
+    const offCls = conn && !connOn ? 'off' : '';
+    return `
+    <div class="pf ${selected.has(p.id) ? 'sel' : ''} ${offCls}" data-id="${p.id}">
       <div class="dot">${selected.has(p.id) ? '✓' : ''}</div>
-      <div><div class="nm">${p.name}</div><div class="hint">${p.hint}</div></div>
-    </div>`).join('');
+      <div>
+        <div class="nm">${p.name}</div>
+        <div class="hint">${p.hint}</div>
+        <div class="conn ${connCls}">${connLabel}</div>
+      </div>
+    </div>`;
+  }).join('');
   $('#platforms').querySelectorAll('.pf').forEach(el => {
     el.onclick = () => {
       const id = el.dataset.id;
@@ -220,6 +248,31 @@ function renderPlatforms() {
       renderPlatforms();
     };
   });
+}
+
+/** 拉取各平台连接状态：自动选中已连接平台（仅首次），并更新卡片状态 */
+async function updateConnections() {
+  try {
+    const r = await fetch(API_BASE + '/api/browser/connections');
+    const j = await r.json();
+    connections = (j && j.connections) || {};
+    const connIds = PLATFORMS.filter(p => connections[p.id] && connections[p.id].connected).map(p => p.id);
+    if (!autoApplied) {
+      autoApplied = true;
+      if (connIds.length) {
+        selected.clear();
+        connIds.forEach(id => selected.add(id));
+        line(`已自动选中已连接的平台：${connIds.map(id => NAME[id]).join('、')}`, 'info');
+      } else {
+        line('暂未检测到任何已连接的平台。请双击桌面「投递Agent」启动各平台调试 Chrome 窗口。', 'warn');
+      }
+    }
+    renderPlatforms();
+    const total = PLATFORMS.length;
+    $('#connSummary').textContent = `已连接 ${connIds.length} / ${total} 个平台`;
+  } catch (_) {
+    $('#connSummary').textContent = '连接状态检测失败（后端可能离线）';
+  }
 }
 renderPlatforms();
 
@@ -328,6 +381,21 @@ async function runPlatform(pf, limit, intervalMs, sinceMinutes) {
 
 $('#btnStart').onclick = async () => {
   if (!selected.size) { line('请先选择至少一个平台。', 'warn'); return; }
+  onlyConnected = $('#onlyConnected').checked;
+  // 自动识别有连接的投递：勾选「仅投递已连接的平台」时，只跑已连接平台，自动跳过未连接
+  const runSet = onlyConnected
+    ? [...selected].filter(p => connections[p] && connections[p].connected)
+    : [...selected];
+  const skipped = onlyConnected
+    ? [...selected].filter(p => !(connections[p] && connections[p].connected))
+    : [];
+  if (!runSet.length) {
+    line('没有已连接的平台可投递。请先启动对应平台的调试 Chrome 窗口（双击桌面「投递Agent」），或取消勾选「仅投递已连接的平台」。', 'warn');
+    return;
+  }
+  if (skipped.length) {
+    line(`将跳过未连接平台：${skipped.map(p => NAME[p]).join('、')}`, 'warn');
+  }
   const limit = Number($('#limit').value) || 20;
   const intervalMs = (Number($('#interval').value) || 20) * 1000;
   const sinceMinutes = Number($('#since').value) || 0;
@@ -335,9 +403,9 @@ $('#btnStart').onclick = async () => {
   running = true;
   $('#btnStart').disabled = true;
   $('#btnStop').disabled = false;
-  line(`开始任务：平台 ${[...selected].map(p => NAME[p]).join('、')}，每平台 ${limit} 份，间隔 ${intervalMs / 1000}s`, 'info');
+  line(`开始任务：平台 ${runSet.map(p => NAME[p]).join('、')}，每平台 ${limit} 份，间隔 ${intervalMs / 1000}s`, 'info');
 
-  for (const pf of selected) {
+  for (const pf of runSet) {
     if (!running) break;
     try {
       await runPlatform(pf, limit, intervalMs, sinceMinutes);
@@ -383,7 +451,18 @@ async function pollStatus() {
     el.textContent = 'CDP 未知';
     el.className = 'pill';
   }
+  // 各平台浏览器连接状态（供「自动识别有连接的投递」）
+  updateConnections();
 }
+
+$('#onlyConnected').onchange = (e) => {
+  onlyConnected = e.target.checked;
+  line(`已${onlyConnected ? '开启' : '关闭'}「仅投递已连接的平台」：${onlyConnected ? '将自动跳过未连接平台' : '将按手动勾选执行'}`, 'info');
+};
+$('#btnRefreshConn').onclick = () => {
+  line('手动刷新各平台连接状态…', 'info');
+  updateConnections();
+};
 // ===== 自动回复 / 消息跟进（SSE 实时）=====
 let replyController = null;
 let replyRunning = false;
