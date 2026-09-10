@@ -16,6 +16,8 @@ const PORT = Number(process.env.PORT) || 4400;
 const PLATFORM = 'boss';
 const BASE = `http://127.0.0.1:${PORT}/api/browser/exec`;
 
+import type { ChatDriver, ConvSummary, ParsedMessage } from './chatTypes.js';
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function ex(action: string, extra: any = {}): Promise<any> {
@@ -25,15 +27,6 @@ async function ex(action: string, extra: any = {}): Promise<any> {
     body: JSON.stringify({ platform: PLATFORM, action, ...extra }),
   });
   return r.json();
-}
-
-export interface ConvSummary {
-  key: string;
-  name: string;
-  company: string;
-  lastMsg: string;
-  unread: boolean;
-  raw: string;
 }
 
 /** 进聊天页（重新导航 + 点消息，兼容标签被风控重置） */
@@ -112,11 +105,6 @@ export async function openConversation(key: string): Promise<boolean> {
   });
   await sleep(8000);
   return (r.data as string) === 'opened';
-}
-
-export interface ParsedMessage {
-  side: 'hr' | 'me';
-  text: string;
 }
 
 /**
@@ -210,3 +198,14 @@ export async function sendResume(): Promise<boolean> {
   await sleep(3500);
   return (c2.data as string) === 'picked' || (c2.data as string) === 'sent';
 }
+
+/** BOSS 平台 ChatDriver 实现（供自动回复引擎统一调度） */
+export const bossChatDriver: ChatDriver = {
+  platform: PLATFORM,
+  openChat,
+  listConversations,
+  openConversation,
+  readConversation,
+  sendText,
+  sendResume,
+};

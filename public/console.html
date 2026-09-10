@@ -159,9 +159,16 @@
   </div>
 
   <div class="card">
-    <h2>④ 自动回复 / 消息跟进（BOSS）</h2>
+    <h2>④ 自动回复 / 消息跟进</h2>
     <div class="sub" style="margin-bottom:12px">HR 发来消息时自动识别意图并回复，像职得鸭一样托管沟通。建议先用「预览」观察效果，确认无误再切「真实发送」。</div>
     <div class="fields">
+      <div class="field">
+        <label>平台</label>
+        <select id="replyPlatform">
+          <option value="boss">BOSS 直聘</option>
+          <option value="liepin">猎聘</option>
+        </select>
+      </div>
       <div class="field">
         <label>处理会话数量（0 = 全部）</label>
         <input type="number" id="replyLimit" value="0" min="0" max="100" />
@@ -384,7 +391,7 @@ let replyRunning = false;
 function handleReplyEvent(ev) {
   switch (ev.type) {
     case 'start':
-      line(`自动回复引擎启动：mode=${ev.realSend ? '真实发送' : '预览'} unreadOnly=${ev.unreadOnly} limit=${ev.limit}`, 'info');
+      line(`自动回复引擎启动：平台=${ev.platform || 'boss'} mode=${ev.realSend ? '真实发送' : '预览'} unreadOnly=${ev.unreadOnly} limit=${ev.limit}`, 'info');
       break;
     case 'list':
       line(`会话总数 ${ev.total}｜未读 ${ev.unread}｜本次处理 ${ev.will}`, 'info');
@@ -424,10 +431,12 @@ function handleReplyEvent(ev) {
 }
 
 async function runAutoReply() {
+  const platform = $('#replyPlatform').value;
   const unreadOnly = $('#replyUnread').checked;
   const limit = Number($('#replyLimit').value) || 0;
   const realSend = $('#replyMode').value === 'send';
   const params = new URLSearchParams({
+    platform,
     unreadOnly: unreadOnly ? '1' : '0',
     limit: String(limit),
     realSend: realSend ? '1' : '0',
@@ -437,7 +446,7 @@ async function runAutoReply() {
   replyRunning = true;
   $('#btnReplyStart').disabled = true;
   $('#btnReplyStop').disabled = false;
-  line(`开始自动回复：mode=${realSend ? '真实发送' : '预览'} 仅未读=${unreadOnly} 数量=${limit}`, 'info');
+  line(`开始自动回复：平台=${platform} mode=${realSend ? '真实发送' : '预览'} 仅未读=${unreadOnly} 数量=${limit}`, 'info');
 
   try {
     const res = await fetch(API_BASE + '/api/auto-reply/run?' + params.toString(), { signal: replyController.signal });

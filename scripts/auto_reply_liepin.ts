@@ -1,11 +1,14 @@
 /**
- * BOSS 自动回复命令行入口（薄包装，核心逻辑在 server/services/apply/autoReplyRunner.ts）
+ * 猎聘（Liepin）自动回复命令行入口（薄包装，核心逻辑在 server/services/apply/autoReplyRunner.ts）
  *
  * 用法：
- *   tsx scripts/auto_reply_boss.ts                      预览全部会话（不发送）
- *   tsx scripts/auto_reply_boss.ts --send              真实发送
- *   tsx scripts/auto_reply_boss.ts --unread            仅处理未读会话
- *   tsx scripts/auto_reply_boss.ts --unread --send --limit=10 --name=张三,李四
+ *   tsx scripts/auto_reply_liepin.ts                      预览全部会话（不发送）
+ *   tsx scripts/auto_reply_liepin.ts --send              真实发送
+ *   tsx scripts/auto_reply_liepin.ts --unread            仅处理未读会话
+ *   tsx scripts/auto_reply_liepin.ts --unread --send --limit=10 --name=张三,李四
+ *
+ * 注意：猎聘 IM 的 DOM 选择器为最佳推断，首次真机运行若列表/消息解析为空，
+ * 请查看 server 日志的 [LiepinChat] 提示校准选择器（需 liepin 端口 9224 已登录）。
  */
 import { runAutoReply, ReplyEvent } from '../server/services/apply/autoReplyRunner.js';
 
@@ -19,7 +22,7 @@ const names = nameArg ? nameArg.split('=')[1].split(',').map((s) => s.trim()).fi
 function log(ev: ReplyEvent): void {
   switch (ev.type) {
     case 'start':
-      console.log(`\n===== BOSS 自动回复 (${ev.realSend ? 'REAL SEND' : 'DRY-RUN 预览'} ) =====`);
+      console.log(`\n===== 猎聘自动回复 (${ev.realSend ? 'REAL SEND' : 'DRY-RUN 预览'} ) =====`);
       break;
     case 'list':
       console.log(`会话总数 ${ev.total}，未读 ${ev.unread}，本次处理 ${ev.will}`);
@@ -58,7 +61,7 @@ function log(ev: ReplyEvent): void {
   }
 }
 
-runAutoReply('boss', { unreadOnly, limit, realSend, names }, log).catch((e) => {
+runAutoReply('liepin', { unreadOnly, limit, realSend, names }, log).catch((e) => {
   console.error('FATAL', e);
   process.exit(1);
 });

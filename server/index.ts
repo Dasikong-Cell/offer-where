@@ -612,6 +612,7 @@ app.get("/api/auto-reply/run", async (req, res) => {
   const unreadOnly = q.unreadOnly !== '0' && q.unreadOnly !== 'false';
   const limit = Number(q.limit || 0) || 0;
   const realSend = q.realSend === '1' || q.realSend === 'true';
+  const platform = typeof q.platform === 'string' && ['boss', 'liepin'].includes(q.platform) ? q.platform : 'boss';
 
   if (autoReplyController) {
     return res.status(409).json({ error: '自动回复正在运行，请先停止' });
@@ -630,7 +631,7 @@ app.get("/api/auto-reply/run", async (req, res) => {
   };
 
   try {
-    await runAutoReply({ unreadOnly, limit, realSend, signal }, send);
+    await runAutoReply(platform as any, { unreadOnly, limit, realSend, signal }, send);
   } catch (e: unknown) {
     send({ type: 'error', message: String((e as Error)?.message || e) });
   } finally {

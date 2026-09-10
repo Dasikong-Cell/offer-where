@@ -17,6 +17,10 @@ vite.config.d.ts
 server/**/*.d.ts
 shared/**/*.d.ts
 
+# tsc -b 生成的 JS 编译产物（运行用 tsx 跑 .ts，不依赖编译产物；与 .d.ts 同理）
+server/**/*.js
+shared/**/*.js
+
 # shared/agentPrompt.ts 的编译产物（注意：postcss.config.js / tailwind.config.js 是真实配置，保留）
 shared/agentPrompt.js
 

@@ -139,7 +139,7 @@ export async function runBatchApply(
   // 3) 按需解析简历，并以 AI（无 AI 时回退规则）补全缺失的匹配分
   const needScore = input.criteria?.minScore != null;
   let struct: Awaited<ReturnType<typeof parseResumeFile>> | null = null;
-  const scoreMap = new Map<number, number>();
+  const scoreMap = new Map<string, number>();
   if (needScore) {
     try { struct = await parseResumeFile(resumePath); }
     catch (e: any) { console.warn('[Batch] 简历解析失败，按已存匹配分过滤：', e?.message); }
