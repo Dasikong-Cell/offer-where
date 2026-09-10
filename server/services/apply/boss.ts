@@ -63,7 +63,12 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
     if (jobUrl) {
       // 立即沟通（BOSS 投递入口）
       let chatted = false;
-      const labels = ['立即沟通', '投个简历', '在线简历', '投递', '沟通一下', '感兴趣', '发简历', '投递简历'];
+      // BOSS JD 页真实投递按钮文案实测为「继续沟通」，而不是常说的「立即沟通」。
+      // ⚠️ 千万不要把「在线简历」「完善在线简历」「感兴趣」放进候选列表：JD 页右侧常驻这些
+      //    辅助入口，点了只会跳到简历编辑页 / 标记感兴趣，不会发起沟通。
+      //    实测教训：候选里有「在线简历」→ 点中后跳 https://www.zhipin.com/web/geek/resume，
+      //    脚本误以为已进入引导页并在那里上传简历，最终报 need_manual、一个都没投出去。
+      const labels = ['继续沟通', '立即沟通', '沟一下', '沟通', '投个简历', '发简历', '投递简历', '投递'];
       for (const label of labels) {
         const rr = await bexec(platform, 'click', { text: label, timeout: 10000 }, logs, `点击「${label}」`);
         if (rr.ok) { chatted = true; break; }
@@ -78,10 +83,22 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       }
       await sleep(2500);
 
+      // 3.4) 二次确认弹窗：若与该 Boss 此前已沟通过，点「继续沟通」后 BOSS 会弹
+      //      「温馨提示：您与该Boss已沟通过，是否就新职位<岗位名>继续沟通？取消 / 沟通新职位」。
+      //      必须点「沟通新职位」才算就本岗位建立沟通，否则停在弹窗上，什么都没发生。
+      const switchJob = await bexec(platform, 'click', { text: '沟通新职位', timeout: 5000 }, logs, '确认「沟通新职位」');
+      if (switchJob.ok) {
+        logs.step('更换沟通职位', true, '该 Boss 此前已沟通过，已确认就本岗位继续沟通');
+        await sleep(2500);
+      }
+
       // 3.5) 点击后检测页面状态：可能进入聊天，也可能被引导到「完善在线简历 / 开通 VIP」页
       const postClickUrl = await pageUrl(platform);
       const postClickText = await pageText(platform);
-      const guidedToResume = /cv\.zhipin\.com\/edit-resume|linkFrom=boss|完善简历|在线简历|开通会员|尊享会员/.test(postClickUrl + ' ' + postClickText.slice(0, 300));
+      // ⚠️ 不能用「完善简历/在线简历」字样判断被引导：JD 页右侧本来就常驻「完善在线简历」
+      //    按钮，正文里天然含这些词，留在正则里会导致「明明已进聊天却误判成引导页」。
+      //    真正被引导的标志只有 URL（简历编辑页 / linkFrom=boss）和明确的 VIP 付费墙字样。
+      const guidedToResume = /cv\.zhipin\.com\/edit-resume|geek\/resume|linkFrom=boss|开通会员|尊享会员|升级VIP|求职VIP|先完善/.test(postClickUrl + ' ' + postClickText.slice(0, 300));
       const inChat = /web\/im|chat\.zhipin|web\/geek\/chat|\.chat-conversation|聊天/.test(postClickUrl + ' ' + postClickText.slice(0, 300));
 
       // 情况 A：进入「完善在线简历 / VIP」引导页（未进入聊天）—— 直接尝试发送附件简历，不走完善在线简历
@@ -118,8 +135,14 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       await sleep(2000);
 
       text = await pageText(platform);
+      const finalUrl = await pageUrl(platform);
       const shot = await tryScreenshot(platform);
-      const ok = /(已发送|发送成功|简历已送达|沟通中|在线简历已|附件已|已发送给您)/.test(text) || /沟通/.test(text);
+      logs.step('最终URL', true, finalUrl);
+      // 「继续沟通」成功会跳进聊天页；仍停在 JD 页说明沟通并未建立。
+      // ⚠️ 不能只用 /沟通/.test(text) 判定成功：JD 页正文天然含「继续沟通」按钮文案，
+      //    那样会让「点了按钮但没有任何效果」也被误报成 applied。
+      const enteredChat = /web\/im|geek\/chat|chat\.|im\//.test(finalUrl);
+      const ok = enteredChat || /(已发送|发送成功|简历已送达|沟通中|附件已|已发送给您)/.test(text);
       if (ok) {
         return { platform, status: 'applied', message: `已在 BOSS 向「${company || position || '该岗位'}」发起沟通并发送附件简历`, logs: logs.logs, company, position, screenshot: shot };
       }
