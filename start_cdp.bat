@@ -48,27 +48,36 @@ echo.
 
 set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
 
+REM Window layout: 640x700 grid so all 5 windows fit on a 1920x1080 screen
+set "WIN_W=640"
+set "WIN_H=700"
+set "BOSS_POS=0,0"
+set "LIE_PIN_POS=660,0"
+set "JOB51_POS=1320,0"
+set "ZHILIAN_POS=0,720"
+set "OFFICIAL_POS=660,720"
+
 REM BOSS: prefer the shared profile (keeps login state); fall back to isolated
 REM profile if it fails to start (e.g. profile locked by a leftover Chrome).
 curl -s -m 2 http://127.0.0.1:%BOSS_PORT%/json/version >nul 2>nul
 if not errorlevel 1 (
   echo [OK] BOSS already running on %BOSS_PORT% (reuse)
 ) else (
-  start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%BOSS_PROFILE%" --window-position=0,0 --window-size=760,900 %ARGS%
+  start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%BOSS_PROFILE%" --window-position=%BOSS_POS% --window-size=%WIN_W%,%WIN_H% %ARGS%
   timeout /t 3 >nul
   curl -s -m 2 http://127.0.0.1:%BOSS_PORT%/json/version >nul 2>nul
   if errorlevel 1 (
     echo [WARN] BOSS failed with shared profile; retry with isolated profile
-    start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%PROFILE%-boss" --window-position=0,0 --window-size=760,900 %ARGS%
+    start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%PROFILE%-boss" --window-position=%BOSS_POS% --window-size=%WIN_W%,%WIN_H% %ARGS%
   ) else (
     echo [OK] BOSS window ready on %BOSS_PORT%
   )
 )
 
-call :launch_platform liepin %LIE_PIN_PORT% "%LIE_PIN_PROFILE%" 780,0
-call :launch_platform job51 %JOB51_PORT% "%JOB51_PROFILE%" 1560,0
-call :launch_platform zhilian %ZHILIAN_PORT% "%ZHILIAN_PROFILE%" 2340,0
-call :launch_platform official %OFFICIAL_PORT% "%OFFICIAL_PROFILE%" 3120,0
+call :launch_platform liepin %LIE_PIN_PORT% "%LIE_PIN_PROFILE%" %LIE_PIN_POS%
+call :launch_platform job51 %JOB51_PORT% "%JOB51_PROFILE%" %JOB51_POS%
+call :launch_platform zhilian %ZHILIAN_PORT% "%ZHILIAN_PROFILE%" %ZHILIAN_POS%
+call :launch_platform official %OFFICIAL_PORT% "%OFFICIAL_PROFILE%" %OFFICIAL_POS%
 timeout /t 3 >nul
 goto :after_launch_cdp
 

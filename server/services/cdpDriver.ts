@@ -155,6 +155,13 @@ function attachSession(ws: WebSocket, platform: string): PageSession {
       ws2.forEach(fn => { try { fn(); } catch { /* ignore */ } });
     }
   });
+  ws.on('error', (err: Error) => {
+    console.error(`[CDP ${platform}] WebSocket error:`, err?.message || err);
+    s.dead = true;
+    for (const [, p] of s.pending) { try { p.rej(err); } catch { /* ignore */ } }
+    s.pending.clear();
+  });
+  ws.on('close', () => { s.dead = true; });
   return s;
 }
 

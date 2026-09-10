@@ -79,7 +79,12 @@ type OneClickResult = { applied: boolean; needResume: boolean };
 
 /** 在 JD 页点击投递/沟通按钮并确认 */
 async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogger): Promise<OneClickResult> {
-  const r = await bexec(platform, 'eval', { script: cfg.applyScript }, logs, `点击「${cfg.chatBased ? '沟通' : '投递'}」按钮`);
+  let r: any = { ok: false, data: null };
+  try {
+    r = await bexec(platform, 'eval', { script: cfg.applyScript }, logs, `点击「${cfg.chatBased ? '沟通' : '投递'}」按钮`);
+  } catch (e: any) {
+    logs.step('点击按钮异常', false, e?.message || String(e));
+  }
   await sleep(2500);
   // 非沟通型平台常弹出「选择简历 / 确认投递」弹窗，补点确认
   if (!cfg.chatBased) {
@@ -147,8 +152,8 @@ async function oneClickApply(platform: string, cfg: PlatformCfg, logs: ApplyLogg
       }
     }
   }
-  const text = await pageText(platform);
-  const clicked = r.data === true;
+  const text = await pageText(platform).catch(() => '');
+  const clicked = r && r.data === true;
   const confirmed = new RegExp(cfg.confirmRegex).test(text);
   if (cfg.chatBased) {
     // 沟通型（BOSS/猎聘）：发起沟通即视为成功，页面无「投递成功」文案

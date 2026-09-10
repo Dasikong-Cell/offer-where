@@ -217,7 +217,27 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       document.querySelectorAll('a[href*="liepin.com/job/"], a[href*="liepin.com/lptjob/"]').forEach(a => { const h = a.href; if (h) set.add(h.split('?')[0]); });
       return Array.from(set);
     })()`,
-    applyScript: `(() => { const b = document.querySelector('.btn-main'); if (b) { const t = (b.textContent || '').trim(); if (t.includes('聊一聊')) { b.click(); return true; } } return false; })()`,
+    applyScript: `(() => {
+      function norm(s){ return (s || '').replace(/\\s+/g, ' ').trim(); }
+      function vis(el){ if(!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden'; }
+      const all = [...document.querySelectorAll('button, a, [class*="btn"], [class*="apply"], [class*="main"], .op-btn, .job-card-btn, .chat-btn')].filter(vis);
+      const byText = (re) => all.find(x => re.test(norm(x.innerText || x.textContent || x.value || '')));
+      // close possible popups first
+      for (const h of ['关闭', '我知道了', '暂不', '取消']) {
+        const el = byText(new RegExp('^' + h + '$'));
+        if (el) { try { el.click(); } catch (e) {} }
+      }
+      // main button text candidates
+      const main = byText(/^(聊一聊|立即沟通|打招呼|投递|立即投递|感兴趣|沟通一下|应聘|申请)$/) ||
+                   byText(/(聊一聊|立即沟通|打招呼|投递|立即投递|感兴趣|沟通一下|应聘)/);
+      if (main) { main.click(); return true; }
+      // fallback selectors
+      for (const sel of ['.btn-main', '.op-btn', '.job-card-btn', '.btn-sure', '.chat-btn', '.btn-apply', '.apply-btn', '[class*="btn-main"]', '[class*="chat-btn"]', 'a[ka*="chat"]', 'button[ka*="chat"]']) {
+        const el = document.querySelector(sel);
+        if (el && vis(el)) { el.click(); return true; }
+      }
+      return false;
+    })()`,
     confirmRegex: '已发送|打招呼成功|聊一聊成功|沟通中|交换微信',
     loginCheck: (text, url) =>
       /(请登录|登录猎聘|账号登录|登录后)/.test(text) && !/(聊一聊成功|打招呼成功)/.test(text),

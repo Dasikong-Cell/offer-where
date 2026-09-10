@@ -280,31 +280,42 @@ export async function runJob51(input: ApplyInput): Promise<ApplyResult> {
     if (jobUrl) {
       // 用平台专用 applyScript 点主投递按钮（锚定正则，兼容「投递/立即投递/立即申请/申请职位」等变体，
       // 并自动关掉「我知道了」提示）。job51 走 CDP 真实 Chrome，eval 同样可用。
+      // 部分 JD 页按钮异步渲染，先等 1 秒再试，最多重试 3 次。
       const applyScript = getPlatform('job51')?.applyScript;
       let applied = false;
-      if (applyScript) {
-        const r = await bexec(platform, 'eval', { script: applyScript }, logs, '点击主投递按钮');
-        applied = r.ok && (r.data === 'main' || r.data === true);
-      }
-      // 兜底：通用文本点击。applyScript 的锚定正则已覆盖大部分变体，这里只补最短的两个词，
-      // 且超时压到 2.5s —— 批量投递时逐标签全量轮询会把单个岗位拖到 1 分钟以上。
-      if (!applied) {
-        for (const label of ['投递', '立即投递', '申请', '立即申请', '申请职位', '投递简历', '申请该职位', '一键投递']) {
+      let lastApplyData: any = null;
+      for (let attempt = 0; attempt < 3 && !applied; attempt++) {
+        if (attempt > 0) {
+          await sleep(1000);
+          logs.step('重试投递按钮', false, `第 ${attempt + 1} 次查找`);
+        }
+        if (applyScript) {
+          const r = await bexec(platform, 'eval', { script: applyScript }, logs, '点击主投递按钮');
+          lastApplyData = r.data;
+          applied = r.ok && (r.data === 'main' || r.data === true);
+          if (applied) break;
+        }
+        // 兜底：通用文本点击。扩展文案覆盖常见变体。
+        for (const label of ['投递', '立即投递', '申请', '立即申请', '申请职位', '投递简历', '申请该职位', '一键投递', '投简历', '确认投递', '提交申请', '我要投递']) {
           const rr = await bexec(platform, 'click', { text: label, timeout: 4000 }, logs, `点击「${label}」`);
           if (rr.ok) { applied = true; break; }
         }
+        if (applied) break;
+        // 滚动到底部再试一次（有些按钮在首屏下方异步加载）
+        await bexec(platform, 'eval', { script: 'window.scrollTo(0, document.body.scrollHeight); true;' }, logs, '滚动页面');
       }
       if (!applied) {
         const shot = await tryScreenshot(platform);
         const isWechatH5 = /\/wechat\/|xym\.51job|m\.51job/.test(jobUrl);
         const curUrl = await pageUrl(platform).catch(() => jobUrl);
         const html = await bexec(platform, 'html', { maxLength: 6000 }, logs, '抓取页面HTML片段').catch(() => ({ html: '' }));
-        logs.step('诊断', false, `url=${curUrl}; html片段=${(html.html || '').slice(0, 600)}`);
+        const htmlPreview = (html.html || '').slice(0, 500).replace(/\s+/g, ' ');
+        logs.step('诊断', false, `url=${curUrl}; applyData=${JSON.stringify(lastApplyData)}; html片段=${htmlPreview}`);
         return {
           platform, status: 'need_manual', logs: logs.logs, company, position, screenshot: shot,
           message: isWechatH5
             ? '该岗位链接是 51job 微信端/移动端页面（Vue 单页应用，无桌面投递按钮），自动投递不可靠，请手动打开链接投递'
-            : '未找到「投递/申请职位」按钮，可能页面结构变化或需先完善简历',
+            : `未找到「投递/申请职位」按钮，可能页面结构变化或需先登录。url=${curUrl}`,
         };
       }
       await sleep(2500);

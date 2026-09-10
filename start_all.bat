@@ -32,6 +32,15 @@ set "JOB51_PROFILE=%PROFILE%-job51"
 set "ZHILIAN_PROFILE=%PROFILE%-zhilian"
 set "OFFICIAL_PROFILE=%PROFILE%-official"
 
+REM Window layout: 640x700 grid so all 5 windows fit on a 1920x1080 screen
+set "WIN_W=640"
+set "WIN_H=700"
+set "BOSS_POS=0,0"
+set "LIE_PIN_POS=660,0"
+set "JOB51_POS=1320,0"
+set "ZHILIAN_POS=0,720"
+set "OFFICIAL_POS=660,720"
+
 REM 1) Start one isolated Chrome window per platform (Zhideya-style)
 REM    Pre-check each debug port: if already listening, reuse it instead of
 REM    starting a second instance (which would silently fail on port conflict).
@@ -44,21 +53,21 @@ curl -s -m 2 http://127.0.0.1:%BOSS_PORT%/json/version >nul 2>nul
 if not errorlevel 1 (
   echo [OK] BOSS already running on port %BOSS_PORT% (reuse)
 ) else (
-  start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%BOSS_PROFILE%" --window-position=0,0 --window-size=760,900 %ARGS%
+  start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%BOSS_PROFILE%" --window-position=%BOSS_POS% --window-size=%WIN_W%,%WIN_H% %ARGS%
   timeout /t 3 >nul
   curl -s -m 2 http://127.0.0.1:%BOSS_PORT%/json/version >nul 2>nul
   if errorlevel 1 (
     echo [WARN] BOSS window failed with shared profile; retry with isolated profile
-    start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%PROFILE%-boss" --window-position=0,0 --window-size=760,900 %ARGS%
+    start "" "%CHROME%" --remote-debugging-port=%BOSS_PORT% --user-data-dir="%PROFILE%-boss" --window-position=%BOSS_POS% --window-size=%WIN_W%,%WIN_H% %ARGS%
   ) else (
     echo [OK] BOSS window ready on port %BOSS_PORT%
   )
 )
 
-call :launch_platform liepin %LIE_PIN_PORT% "%LIE_PIN_PROFILE%" 780,0
-call :launch_platform job51 %JOB51_PORT% "%JOB51_PROFILE%" 1560,0
-call :launch_platform zhilian %ZHILIAN_PORT% "%ZHILIAN_PROFILE%" 2340,0
-call :launch_platform official %OFFICIAL_PORT% "%OFFICIAL_PROFILE%" 3120,0
+call :launch_platform liepin %LIE_PIN_PORT% "%LIE_PIN_PROFILE%" %LIE_PIN_POS%
+call :launch_platform job51 %JOB51_PORT% "%JOB51_PROFILE%" %JOB51_POS%
+call :launch_platform zhilian %ZHILIAN_PORT% "%ZHILIAN_PROFILE%" %ZHILIAN_POS%
+call :launch_platform official %OFFICIAL_PORT% "%OFFICIAL_PROFILE%" %OFFICIAL_POS%
 timeout /t 3 >nul
 goto :after_launch
 
