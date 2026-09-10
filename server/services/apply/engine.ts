@@ -30,6 +30,35 @@ function unsupported(platform: string): ApplyResult {
   };
 }
 
+/**
+ * 判断当前 URL 是否仍是该平台的「岗位详情页」。
+ * 链接失效时站点会重定向到活动页/外部合作页（实测：猎聘旧版 /job/xxx.shtml
+ * 会跳到 wow.liepin.com 活动页），此时页面上根本没有投递按钮，
+ * 继续跑只会误报「已点击但未确认」。提前识别直接判 unavailable。
+ */
+function isJobPage(platform: string, url: string): boolean {
+  if (!url) return true; // 取不到 URL 时不误判
+  try {
+    const u = new URL(url);
+    const h = u.hostname;
+    const p = u.pathname || '';
+    switch (platform) {
+      case 'liepin':
+        return /liepin\.com$/.test(h) && /^\/(job|lptjob)\//.test(p);
+      case 'job51':
+        return /51job\.com$/.test(h);
+      case 'zhilian':
+        return /zhaopin\.com$/.test(h) && /\/jobdetail\//.test(p);
+      case 'boss':
+        return /zhipin\.com$/.test(h);
+      default:
+        return true;
+    }
+  } catch {
+    return true;
+  }
+}
+
 /** 检测/处理登录态；已登录返回 true，未登录尝试邮箱验证码登录；失败返回 false */
 async function ensureLoggedIn(
   platform: string,
@@ -196,6 +225,20 @@ async function runOneClick(input: ApplyInput): Promise<ApplyResult> {
     // 登录后重新打开岗位，确保投递态正确
     await bexec(platform, 'navigate', { url: jobUrl, waitUntil: 'domcontentloaded' }, logs, '登录后重新打开岗位');
     await sleep(2500);
+
+    // 岗位失效检测：链接可能已重定向到活动页/外部合作页（如猎聘跳 wow.liepin.com），
+    // 这类页面没有投递按钮，继续跑只会误报「已点击但未确认」。
+    const landed = await currentUrl(platform).catch(() => '');
+    if (landed && !isJobPage(platform, landed)) {
+      const shot = await tryScreenshot(platform).catch(() => undefined);
+      let host = landed;
+      try { host = new URL(landed).hostname; } catch { /* ignore */ }
+      logs.step('岗位失效', false, `链接已重定向到 ${landed}`);
+      return {
+        platform, status: 'unavailable', logs: logs.logs, company, position, screenshot: shot,
+        message: `岗位链接已失效/重定向到「${host}」，页面上没有投递入口，无法自动投递`,
+      };
+    }
 
     const oc = await oneClickApply(platform, cfg, logs);
     const shot = await tryScreenshot(platform);

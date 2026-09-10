@@ -278,6 +278,24 @@ export async function runJob51(input: ApplyInput): Promise<ApplyResult> {
     }
 
     if (jobUrl) {
+      // 校招/应届生岗位预检：51job 把这类岗位托管到「应届生求职网」(yingjiesheng.com)，
+      // 点投递会直接跳第三方站点，且需要单独的校招简历（账号没有）。
+      // 提前识别跳过，避免误跳站点后空等确认文案。
+      const preCheck = await bexec(platform, 'eval', {
+        script: 'JSON.stringify({t:document.title, u:location.href, p:(document.body?(document.body.innerText||""):"").slice(0,300)})',
+      }, logs, '校招岗位预检').catch(() => ({ data: null }));
+      const pre = (preCheck.data ? JSON.parse(String(preCheck.data)) : {}) as { t?: string; u?: string; p?: string };
+      const campusHit =
+        /在校生\s*\/\s*应届生|校招|校园招聘|应届生求职/.test(String(position || '')) ||
+        /校招|校园招聘|应届生/.test(String(pre.t || ''));
+      if (campusHit || /yingjiesheng\.com/.test(String(pre.u || ''))) {
+        logs.step('岗位类型', false, '校招/应届生岗位，51job 需单独校招简历且会跳转应届生求职网，已跳过');
+        return {
+          platform, status: 'unavailable', logs: logs.logs, company, position,
+          message: '校招/应届生岗位：51job 需单独的校招简历，且点击后会跳转到「应届生求职网」，自动投递不可用，请手动处理',
+        };
+      }
+
       // 用平台专用 applyScript 点主投递按钮（锚定正则，兼容「投递/立即投递/立即申请/申请职位」等变体，
       // 并自动关掉「我知道了」提示）。job51 走 CDP 真实 Chrome，eval 同样可用。
       // 部分 JD 页按钮异步渲染，先等 1 秒再试，最多重试 3 次。
@@ -319,6 +337,19 @@ export async function runJob51(input: ApplyInput): Promise<ApplyResult> {
         };
       }
       await sleep(2500);
+
+      // 点击后若离开 51job 域名（校招岗位托管到「应届生求职网」等第三方站点），
+      // 后续所有 51job 弹窗/确认文案都不会出现，必须提前识别并给出明确原因。
+      const afterClick = await bexec(platform, 'eval', { script: 'location.href' }, logs, '读取点击后URL').catch(() => ({ data: '' }));
+      const afterClickUrl = String(afterClick.data || '');
+      if (afterClickUrl && !/51job\.com/.test(afterClickUrl)) {
+        logs.step('投递中断', false, `点击后跳转到第三方站点：${afterClickUrl}`);
+        const shot = await tryScreenshot(platform).catch(() => undefined);
+        return {
+          platform, status: 'unavailable', logs: logs.logs, company, position, screenshot: shot,
+          message: `点击投递后跳转到第三方站点（${new URL(afterClickUrl).hostname}），通常是校招/应届生岗位（需单独校招简历），自动投递不可用`,
+        };
+      }
 
       // 岗位已下线/审核中：51job 会直接跳到「当前职位审核中或已下线」页，不弹投递框
       const preText = await pageText(platform);

@@ -14,6 +14,7 @@ export type ApplyStatus =
   | 'need_captcha'   // 出现滑块/图形验证码，需在打开的浏览器里人工过一下后重试
   | 'need_manual'    // 遇到非标准流程，需人工在浏览器完成
   | 'need_resume'    // 缺少在线简历，需先上传简历再投
+  | 'unavailable'    // 岗位本身不可投（已下线/审核中/校招需单独简历/链接失效重定向）
   | 'error';         // 脚本执行出错
 
 export interface ApplyProfile {

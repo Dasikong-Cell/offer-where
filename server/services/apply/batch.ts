@@ -273,6 +273,20 @@ export async function runBatchApply(
         type: 'need_input', inputType: 'manual', platform, jobId: job.id,
         company: job.company, position: job.position, message: res.message,
       });
+    } else if (res.status === 'unavailable') {
+      // 岗位本身不可投（已下线 / 校招需单独简历 / 链接失效重定向），
+      // 不是脚本错误，计入 skipped，避免污染失败数。
+      skipped++;
+      results.push({
+        jobId: job.id,
+        company: res.company || job.company,
+        position: res.position || job.position,
+        platform,
+        status: res.status,
+        message: res.message,
+      });
+      onEvent?.({ type: 'result', index: i, jobId: job.id, status: res.status, message: res.message });
+      continue;
     } else { error++; }
 
     results.push({
