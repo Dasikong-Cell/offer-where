@@ -42,14 +42,30 @@ offer-where/
 │   │   ├── match.ts             # 本地规则匹配（兜底）
 │   │   └── resume.ts            # 简历解析
 │   └── db.ts                    # SQLite（better-sqlite3）
-├── public/console.html          # 单一控制台入口（由 4400 托管）
+├── src/                         # 前端（React + Vite + @tencent-ai/agent-sdk）：Agent 分析界面，npm run dev 使用
+├── public/console.html          # 生产控制台入口（由 4400 托管）
 ├── scripts/                     # 脚本工具（登录引导、采集等）
 ├── data/                        # 本地数据（岗位库 / 投递记录 / 会话 / 截图）—— 不入库
 ├── node/                        # 自带 Node 运行时（便携包用，免安装）
 └── *.bat                        # Windows 一键启动器（含 %USERPROFILE% 规避中文路径 + UTF-8 BOM）
 ```
 
-**浏览器自动化**：通过本地 CDP Chrome（默认 `9222` 端口、`C:/chrome-cdp-profile` 登录态隔离）驱动各招聘站点；服务端默认监听 **4400**。
+**浏览器自动化**：通过本地 CDP Chrome 多实例（各平台独立端口 `9223`~`9227`、`C:/chrome-cdp-profile*` 登录态隔离，见 `data/browser/cdp.json`）驱动各招聘站点；服务端默认监听 **4400**。
+
+---
+
+## 前端界面：两套并存与分工
+
+本项目**同时存在两套前端**，由不同运行模式驱动，共用同一后端 API（无接口断链）：
+
+| 界面 | 技术 | 由谁托管 / 何时用 | 主要功能 |
+|---|---|---|---|
+| `public/console.html` | 原生 JS 单页 | **生产控制台**：`npm run server`（或 `start_all.bat`）在 `/` 直出（默认 `4400`） | 平台多选、自动识别有连接的平台、批量投递、自动回复/消息跟进面板、SSE 实时日志 |
+| `src/`（React + Vite + `@tencent-ai/agent-sdk`） | React SPA | **开发 / Agent 分析界面**：`npm run dev` 由 Vite 在 `5173` 提供，经 CORS 调后端 | Agent 对话(`ChatPage`)、岗位匹配(`JobMatchPage`)、投递记录(`ApplicationsPage`)、档案(`ProfilePage`)；`vite build` 产物在 `dist/` |
+
+- 后端 `server/index.ts` 同时提供**投递类**（`/api/apply/batch`、`/api/auto-reply/*`、`/api/browser/*` 等，供 console.html）与 **Agent 类**（`/api/chat`、`/api/sessions`、`/api/permission-response` 等，供 React 应用）API。
+- 生产部署以 `console.html` 为准；React 应用用于本地开发期的高级 Agent 分析，二者不冲突、不重复开发。
+- 磁盘上的 `server/**/*.js`、`.d.ts`、`vite.config.js`、`*.tsbuildinfo`、`_*.cjs` 等均为 `.gitignore` 已忽略的构建/临时产物，会由 `tsc`/`vite` 重新生成，**不入库、不影响运行**（运行时用 `tsx` 直跑 `.ts`）。
 
 ---
 
@@ -112,9 +128,12 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 
 ```bash
 npm install
-npm run dev          # 前端(5173) + 后端(默认 3000)；生产以 PORT=4400 tsx server/index.ts 启动
-npm run build        # tsc -b && vite build
+npm run dev          # 前端(React, 5173) + 后端(默认 3000，CORS 互通)；浏览器开 http://127.0.0.1:5173 使用 React 界面
+npm run build        # tsc -b && vite build（产物 dist/，供自托管/开发用）
+npm run server       # 仅起后端，并在 / 托管 public/console.html（生产控制台，默认 3000，PORT=4400 覆盖）
 ```
+
+> 生产一键启动：双击桌面「投递Agent」（= `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 自动打开 `http://127.0.0.1:4400/`（console.html 控制台）。
 
 ## License
 
