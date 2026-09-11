@@ -24,7 +24,11 @@ export function getAiConfig(): AiClientConfig | null {
   const baseUrl = (process.env.LLM_BASE_URL || '').trim().replace(/\/$/, '');
   const model = (process.env.LLM_MODEL || '').trim();
   if (!baseUrl || !model) return null;
-  return { baseUrl, apiKey: (process.env.LLM_API_KEY || '').trim() || undefined, model };
+  const apiKey = (process.env.LLM_API_KEY || '').trim();
+  // 本地网关（Ollama 等）无需 key；远程网关必须提供 key，否则视为未启用（避免发起必败的 401 请求）
+  const isLocal = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(baseUrl);
+  if (!isLocal && !apiKey) return null;
+  return { baseUrl, apiKey: apiKey || undefined, model };
 }
 
 /** 是否启用了 AI（供 UI 提示） */

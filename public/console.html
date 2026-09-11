@@ -83,6 +83,9 @@
     border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text);
   }
   .checkline { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); }
+  .badge.ok { background: #ecfdf5; color: var(--ok); border-color: #a7f3d0; }
+  .badge.warn { background: #fffbeb; color: #b45309; border-color: #fde68a; }
   .checkline input { width: 16px; height: 16px; }
 
   .actions { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
@@ -173,6 +176,7 @@
   <div class="card">
     <h2>④ 自动回复 / 消息跟进</h2>
     <div class="sub" style="margin-bottom:12px">HR 发来消息时自动识别意图并回复，像职得鸭一样托管沟通。建议先用「预览」观察效果，确认无误再切「真实发送」。</div>
+    <div id="aiStatusBadge" class="badge" style="margin-bottom:10px">AI 话术：检测中…</div>
     <div class="fields">
       <div class="field">
         <label>平台</label>
@@ -195,6 +199,7 @@
     </div>
     <div class="actions" style="margin-top:12px">
       <label class="checkline"><input type="checkbox" id="replyUnread" checked /> 仅处理未读会话</label>
+      <label class="checkline"><input type="checkbox" id="replyUseAi" checked /> AI 生成话术（未配置模型时自动用规则）</label>
       <button class="primary" id="btnReplyStart">开始自动回复</button>
       <button id="btnReplyStop" disabled>停止</button>
     </div>
@@ -482,11 +487,11 @@ function handleReplyEvent(ev) {
       line(`  跳过(${ev.reason}) ${ev.name || ''}`, 'warn');
       break;
     case 'intent':
-      line(`  意图=${ev.intent} 轮次=${ev.round}${ev.stop ? ` ｜停止: ${ev.stop}` : ''}`, 'info');
+      line(`  意图=${ev.intent} 轮次=${ev.round}${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}${ev.stop ? ` ｜停止: ${ev.stop}` : ''}`, 'info');
       line(`  回复: ${ev.reply || '(无)'}`, '');
       break;
     case 'dry':
-      line(`  [预览] 不发送 ${ev.name || ''}`, 'warn');
+      line(`  [预览] 不发送 ${ev.name || ''}${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}`, 'warn');
       break;
     case 'send-resume':
       line(`  发简历 ${ev.ok ? 'ok' : 'fail'} ${ev.name || ''}`, ev.ok ? 'ok' : 'err');
@@ -512,6 +517,7 @@ function handleReplyEvent(ev) {
 async function runAutoReply() {
   const platform = $('#replyPlatform').value;
   const unreadOnly = $('#replyUnread').checked;
+  const useAi = $('#replyUseAi').checked;
   const limit = Number($('#replyLimit').value) || 0;
   const realSend = $('#replyMode').value === 'send';
   const params = new URLSearchParams({
@@ -519,13 +525,14 @@ async function runAutoReply() {
     unreadOnly: unreadOnly ? '1' : '0',
     limit: String(limit),
     realSend: realSend ? '1' : '0',
+    useAi: useAi ? '1' : '0',
   });
 
   replyController = new AbortController();
   replyRunning = true;
   $('#btnReplyStart').disabled = true;
   $('#btnReplyStop').disabled = false;
-  line(`开始自动回复：平台=${platform} mode=${realSend ? '真实发送' : '预览'} 仅未读=${unreadOnly} 数量=${limit}`, 'info');
+  line(`开始自动回复：平台=${platform} mode=${realSend ? '真实发送' : '预览'} 仅未读=${unreadOnly} 数量=${limit}${useAi ? ' AI话术' : ' 规则话术'}`, 'info');
 
   try {
     const res = await fetch(API_BASE + '/api/auto-reply/run?' + params.toString(), { signal: replyController.signal });
@@ -572,6 +579,33 @@ $('#btnReplyStop').onclick = () => {
 
 pollStatus();
 setInterval(pollStatus, 5000);
+
+// 拉取 AI 话术能力状态，联动控制台徽标与「AI 生成话术」开关
+async function refreshAiStatus() {
+  try {
+    const res = await fetch(API_BASE + '/api/ai-status');
+    if (!res.ok) throw new Error('http ' + res.status);
+    const d = await res.json();
+    const badge = $('#aiStatusBadge');
+    const cb = $('#replyUseAi');
+    if (d.enabled) {
+      badge.textContent = `AI 话术：已启用（模型 ${d.model || '?'}）`;
+      badge.className = 'badge ok';
+      cb.disabled = false;
+    } else {
+      badge.textContent = 'AI 话术：未配置（请在 .env 设置 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL，将自动回退规则模板）';
+      badge.className = 'badge warn';
+      cb.disabled = false; // 仍允许勾选，但运行时会自动回退规则
+    }
+  } catch (_) {
+    const badge = $('#aiStatusBadge');
+    badge.textContent = 'AI 话术：检测失败';
+    badge.className = 'badge warn';
+  }
+}
+refreshAiStatus();
+setInterval(refreshAiStatus, 15000);
+
 line('控制台就绪。选择平台后点「开始投递」。', 'info');
 if (API_BASE) line('检测到本页不是从 http://127.0.0.1:4400 打开，已自动直连后端；建议以后用桌面「投递Agent」图标打开。', 'warn');
 </script>

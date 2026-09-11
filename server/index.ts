@@ -1,3 +1,4 @@
+import "./env.js"; // 必须最先加载：解析根目录 .env 注入 process.env，使 LLM_*/MAIL_*/CODEBUDDY_* 生效
 import express from "express";
 import { query, unstable_v2_createSession, unstable_v2_authenticate, PermissionResult, CanUseTool } from "@tencent-ai/agent-sdk";
 import { v4 as uuidv4 } from "uuid";
@@ -12,7 +13,7 @@ import { execAction, listSessions, closeAll } from "./services/browser.js";
 import { probePlatformConnections } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
-import { isAiEnabled } from "./services/apply/aiClient.js";
+import { isAiEnabled, getAiConfig } from "./services/apply/aiClient.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
@@ -76,6 +77,12 @@ const defaultModel = "claude-sonnet-4";
 // 健康检查
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
+});
+
+// AI 能力状态（自动回复话术是否走大模型）：enabled=已配置 LLM_*；model=当前模型
+app.get("/api/ai-status", (_req, res) => {
+  const cfg = getAiConfig();
+  res.json({ enabled: cfg !== null, model: cfg?.model || null, baseUrl: cfg?.baseUrl || null });
 });
 
 // 登录方式类型
@@ -623,6 +630,9 @@ app.get("/api/auto-reply/run", async (req, res) => {
   const limit = Number(q.limit || 0) || 0;
   const realSend = q.realSend === '1' || q.realSend === 'true';
   const platform = typeof q.platform === 'string' && ['boss', 'liepin'].includes(q.platform) ? q.platform : 'boss';
+  // useAi：是否用大模型生成话术。默认 true（API 已配置时自动启用，未配置自动回退规则）。
+  // 传 useAi=0/false 可强制走规则模板。
+  const useAi = q.useAi !== '0' && q.useAi !== 'false';
 
   if (autoReplyController) {
     return res.status(409).json({ error: '自动回复正在运行，请先停止' });
@@ -641,7 +651,7 @@ app.get("/api/auto-reply/run", async (req, res) => {
   };
 
   try {
-    await runAutoReply(platform as any, { unreadOnly, limit, realSend, signal }, send);
+    await runAutoReply(platform as any, { unreadOnly, limit, realSend, signal, useAi }, send);
   } catch (e: unknown) {
     send({ type: 'error', message: String((e as Error)?.message || e) });
   } finally {

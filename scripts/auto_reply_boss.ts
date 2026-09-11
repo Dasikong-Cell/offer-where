@@ -6,11 +6,13 @@
  *   tsx scripts/auto_reply_boss.ts --send              真实发送
  *   tsx scripts/auto_reply_boss.ts --unread            仅处理未读会话
  *   tsx scripts/auto_reply_boss.ts --unread --send --limit=10 --name=张三,李四
+ *   tsx scripts/auto_reply_boss.ts --no-ai           强制走规则模板（不用大模型）
  */
 import { runAutoReply, ReplyEvent } from '../server/services/apply/autoReplyRunner.js';
 
 const realSend = process.argv.includes('--send');
 const unreadOnly = process.argv.includes('--unread');
+const useAi = !process.argv.includes('--no-ai');
 const limitArg = process.argv.find((a) => a.startsWith('--limit='));
 const limit = limitArg ? Number(limitArg.split('=')[1]) : 0;
 const nameArg = process.argv.find((a) => a.startsWith('--name='));
@@ -31,11 +33,11 @@ function log(ev: ReplyEvent): void {
       console.log(`   ⊘ 跳过(${ev.reason}) ${ev.name || ''}`);
       break;
     case 'intent':
-      console.log(`   HR 意图=${ev.intent} 轮次=${ev.round}${ev.stop ? ` 停止:${ev.stop}` : ''}`);
+      console.log(`   HR 意图=${ev.intent} 轮次=${ev.round}${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}${ev.stop ? ` 停止:${ev.stop}` : ''}`);
       console.log(`   回复: ${ev.reply || '(无)'}`);
       break;
     case 'dry':
-      console.log('   [DRY] 不发送');
+      console.log(`   [DRY] 不发送${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}`);
       break;
     case 'send-resume':
       console.log(`   → 发简历: ${ev.ok ? 'ok' : 'fail'}`);
@@ -58,7 +60,7 @@ function log(ev: ReplyEvent): void {
   }
 }
 
-runAutoReply('boss', { unreadOnly, limit, realSend, names }, log).catch((e) => {
+runAutoReply('boss', { unreadOnly, limit, realSend, names, useAi }, log).catch((e) => {
   console.error('FATAL', e);
   process.exit(1);
 });

@@ -1,13 +1,15 @@
 /**
- * HR 消息自动回复引擎（规则模板版，无需大模型）
+ * HR 消息自动回复引擎
  *
- * 设计要点：
- *  1. 纯逻辑、不依赖浏览器 —— 可单独单元测试，也便于后续换成大模型生成。
- *  2. 意图识别按「优先级」匹配：先判终态（已约面试 / 婉拒），再判具体问题，最后兜底。
- *     顺序很重要，否则「明天方便面试吗」会被误判成普通打招呼。
- *  3. 护栏：同一条消息不重复回、超过 MAX_ROUNDS 轮无进展则停止（避免和 HR 无限寒暄）、
- *     识别到已约面试或婉拒后立即停止。
+ * 两层设计（安全 + 智能兼得）：
+ *  - 意图识别（detectIntent / decide）：始终保持「规则」实现。分类任务规则更可控，
+ *    且内置终态判定顺序、疑问句规避等护栏，避免误判导致不回 / 乱回。
+ *  - 话术生成（composeReply / composeReplyWithAi）：默认优先用大模型（context-aware，
+ *    自然像真人）；未配置 LLM_* 或模型调用失败，自动回退到规则模板 composeReply。
+ *    即「接入 AI 大模型进行自动回复」，但永远不会因为 AI 抽风而破坏投递护栏。
  */
+
+import { chatText, isAiEnabled } from './aiClient.js';
 
 export type HrIntent =
   | 'interview_scheduled' // 已确定面试安排
@@ -292,4 +294,88 @@ export function decide(hrMessage: string, ctx: ReplyContext = {}, lastRepliedMes
 /** 该阶段是否还需要继续自动回复 */
 export function isActiveStage(stage: string): boolean {
   return stage === 'new' || stage === 'replied';
+}
+
+/** 大模型话术生成结果 */
+export interface AiReply {
+  /** 最终话术（AI 成功则来自模型，否则回退规则模板） */
+  text: string;
+  /** 实际来源：'ai' = 模型生成；'rule' = 规则兜底 */
+  source: 'ai' | 'rule';
+}
+
+/**
+ * 用大模型生成 HR 回复话术（语境感知、自然口语），失败/未配置自动回退规则模板。
+ *
+ * 设计：意图仍由调用方（decide）用规则判定，这里只负责「写出一句话」。
+ *   - 把 HR 原文、规则识别出的意图、求职者档案、最近对话上下文一起喂给模型；
+ *   - 系统提示固化护栏：不编造简历没有的经历、1-3 句、口语化、被动再给隐私；
+ *   - chatText 内部「软失败」返回 null，这里回退 composeReply，绝不抛错中断投递链路。
+ *
+ * @param intent   规则识别出的意图（用于给模型意图提示 + 兜底模板选择）
+ * @param ctx      上下文（公司/岗位/轮次/档案）
+ * @param hrMessage HR 最新一条消息（原文）
+ * @param history  最近若干条对话（HR/我 交替），用于语境
+ */
+export async function composeReplyWithAi(
+  intent: HrIntent,
+  ctx: ReplyContext = {},
+  hrMessage?: string,
+  history?: { side: 'hr' | 'me'; text: string }[],
+): Promise<AiReply> {
+  const fallback = composeReply(intent, ctx);
+
+  if (!isAiEnabled()) {
+    return { text: fallback, source: 'rule' };
+  }
+
+  const n = ctx.profile?.name || '';
+  const edu = ctx.profile?.education || '本科';
+  const major = ctx.profile?.major || '软件工程';
+  const phone = ctx.profile?.phone || '（简历里都有）';
+  const com = ctx.company || '贵公司';
+  const pos = ctx.position || '相关岗位';
+
+  const intentHint: Record<HrIntent, string> = {
+    interview_scheduled: '对方已确定面试安排 —— 礼貌确认会准时参加、提前准备',
+    reject: '对方表示不合适 / 婉拒 —— 得体回应、表达感谢，不要纠缠',
+    ask_interview_time: '对方在问具体面试时间（哪天几点、线上还是线下）',
+    ask_availability: '对方在约面试 / 问是否有空',
+    ask_resume: '对方要简历 —— 引导其查看已发送的简历附件',
+    ask_salary: '对方问期望薪资 —— 建议面议、看岗位匹配度与发展空间',
+    ask_onsite: '对方问到岗时间 —— 表达可较快到岗、时间可协商',
+    ask_experience: '对方问经验 / 项目经历',
+    ask_education: '对方问学历 / 专业 / 学校',
+    ask_phone: '对方要电话 / 微信等联系方式',
+    greeting: '日常打招呼 / 初次接触',
+    other: '一般沟通',
+  };
+
+  const histText = (history || [])
+    .slice(-8)
+    .map((m) => `${m.side === 'hr' ? 'HR' : '我'}：${m.text}`)
+    .join('\n');
+
+  const SYSTEM = `你是正在求职的候选人，在招聘平台（BOSS直聘 / 猎聘等）和 HR 一对一聊天。
+要求：
+- 口语化、自然，1-3 句话，像真人求职者，不堆砌关键词、不套模板、不油腻。
+- 绝不编造简历里没有的公司、经历、数据、证书。
+- 结合「对方意图」和「最近对话上下文」回应，不要答非所问。
+- 被问到薪资/到岗等敏感点，给得体且留有余地的回答，不要过度承诺。
+- 不要主动索要电话等隐私；除非对方先问，否则不写具体电话号码。
+- 不要使用 Markdown 标题，不要用引号包裹整段回复。`;
+
+  const USER = `【目标岗位】${com} ｜ ${pos}
+【我的信息】姓名=${n || '（未提供）'} 学历=${edu} 专业=${major} 电话=${phone}
+【对方意图】${intentHint[intent]}
+【对方刚说的话】${hrMessage || ''}
+【最近对话】
+${histText || '（无）'}
+请直接写一句回复 HR 的话（不要标题、不要用引号包裹整段）。`;
+
+  const ai = await chatText(USER, SYSTEM, { temperature: 0.7, timeoutMs: 20000 });
+  if (ai && ai.trim()) {
+    return { text: ai.trim().replace(/^["'「]|["'」]$/g, ''), source: 'ai' };
+  }
+  return { text: fallback, source: 'rule' };
 }

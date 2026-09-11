@@ -6,6 +6,7 @@
  *   tsx scripts/auto_reply_liepin.ts --send              真实发送
  *   tsx scripts/auto_reply_liepin.ts --unread            仅处理未读会话
  *   tsx scripts/auto_reply_liepin.ts --unread --send --limit=10 --name=张三,李四
+ *   tsx scripts/auto_reply_liepin.ts --no-ai           强制走规则模板（不用大模型）
  *
  * 注意：猎聘 IM 的 DOM 选择器为最佳推断，首次真机运行若列表/消息解析为空，
  * 请查看 server 日志的 [LiepinChat] 提示校准选择器（需 liepin 端口 9224 已登录）。
@@ -14,6 +15,7 @@ import { runAutoReply, ReplyEvent } from '../server/services/apply/autoReplyRunn
 
 const realSend = process.argv.includes('--send');
 const unreadOnly = process.argv.includes('--unread');
+const useAi = !process.argv.includes('--no-ai');
 const limitArg = process.argv.find((a) => a.startsWith('--limit='));
 const limit = limitArg ? Number(limitArg.split('=')[1]) : 0;
 const nameArg = process.argv.find((a) => a.startsWith('--name='));
@@ -34,11 +36,11 @@ function log(ev: ReplyEvent): void {
       console.log(`   ⊘ 跳过(${ev.reason}) ${ev.name || ''}`);
       break;
     case 'intent':
-      console.log(`   HR 意图=${ev.intent} 轮次=${ev.round}${ev.stop ? ` 停止:${ev.stop}` : ''}`);
+      console.log(`   HR 意图=${ev.intent} 轮次=${ev.round}${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}${ev.stop ? ` 停止:${ev.stop}` : ''}`);
       console.log(`   回复: ${ev.reply || '(无)'}`);
       break;
     case 'dry':
-      console.log('   [DRY] 不发送');
+      console.log(`   [DRY] 不发送${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}`);
       break;
     case 'send-resume':
       console.log(`   → 发简历: ${ev.ok ? 'ok' : 'fail'}`);
@@ -61,7 +63,7 @@ function log(ev: ReplyEvent): void {
   }
 }
 
-runAutoReply('liepin', { unreadOnly, limit, realSend, names }, log).catch((e) => {
+runAutoReply('liepin', { unreadOnly, limit, realSend, names, useAi }, log).catch((e) => {
   console.error('FATAL', e);
   process.exit(1);
 });

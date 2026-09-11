@@ -15,8 +15,8 @@ import type { ApplyPlatform } from './types.js';
 import type { ChatDriver } from './chatTypes.js';
 import { bossChatDriver } from './bossChat.js';
 import { liepinChatDriver } from './liepinChat.js';
-import { decide } from './autoReply.js';
-import { getConversation, upsertConversation } from '../../db.js';
+import { decide, composeReplyWithAi } from './autoReply.js';
+import { getConversation, upsertConversation, getProfile } from '../../db.js';
 
 /** 支持自动回复的平台 → 对应聊天驱动 */
 const DRIVERS: Partial<Record<ApplyPlatform, ChatDriver>> = {
@@ -54,6 +54,8 @@ export interface RunAutoReplyOpts {
   realSend?: boolean;
   /** 只处理指定 HR 名（命令行用） */
   names?: string[];
+  /** 是否用大模型生成话术（默认 true；未配置 LLM_* 时自动回退规则） */
+  useAi?: boolean;
   /** 停止信号 */
   signal?: AbortSignal;
 }
@@ -65,7 +67,7 @@ export async function runAutoReply(
   opts: RunAutoReplyOpts,
   emit: (ev: ReplyEvent) => void,
 ): Promise<{ sent: number; skipped: number }> {
-  const { unreadOnly = true, limit = 0, realSend = false, names = [], signal } = opts;
+  const { unreadOnly = true, limit = 0, realSend = false, names = [], signal, useAi = true } = opts;
 
   const driver = getChatDriver(platform);
   if (!driver) {
@@ -110,32 +112,54 @@ export async function runAutoReply(
       skipped++;
       continue;
     }
-    const { lastHr } = await driver.readConversation();
+    const read = await driver.readConversation();
+    const lastHr = read.lastHr;
+    const history = read.messages || [];
     if (!lastHr) {
       emit({ type: 'skipped', reason: 'no-hr', name: c.name });
       skipped++;
       continue;
     }
-    const db = getConversation(c.key);
-    if (db && db.last_hr_message === lastHr) {
+    const conv = getConversation(c.key);
+    if (conv && conv.last_hr_message === lastHr) {
       emit({ type: 'skipped', reason: 'processed', name: c.name });
       skipped++;
       continue;
     }
-    const round = db ? (db.round || 0) + 1 : 1;
-    const decision = decide(lastHr, { hrName: c.name, company: c.company, round });
+    const round = conv ? (conv.round || 0) + 1 : 1;
+    // 求职者档案（用于填充话术，如姓名/电话/学历；来自全局 profile 表）
+    const profRow = getProfile() as Record<string, unknown> | undefined;
+    const profile = profRow
+      ? {
+          name: (profRow.name as string) || null,
+          phone: (profRow.phone as string) || null,
+          education: (profRow.education as string) || null,
+          major: (profRow.major as string) || null,
+        }
+      : undefined;
+    const decision = decide(lastHr, { hrName: c.name, company: c.company, round, profile });
+
+    // 话术生成：默认优先大模型（useAi + 已配置 LLM_*），否则回退规则模板
+    let reply = decision.reply;
+    let aiSource: 'ai' | 'rule' = 'rule';
+    if (useAi && decision.shouldReply && decision.reply) {
+      const r = await composeReplyWithAi(decision.intent, { hrName: c.name, company: c.company, round, profile }, lastHr, history);
+      reply = r.text;
+      aiSource = r.source;
+    }
     emit({
       type: 'intent',
       name: c.name,
       platform,
       intent: decision.intent,
-      reply: decision.reply,
+      reply,
+      ai: aiSource,
       round,
       stop: decision.stopReason || '',
     });
 
     if (!realSend) {
-      emit({ type: 'dry', name: c.name, reply: decision.reply });
+      emit({ type: 'dry', name: c.name, reply, ai: aiSource });
       continue;
     }
 
@@ -145,9 +169,9 @@ export async function runAutoReply(
       emit({ type: 'send-resume', name: c.name, ok: r });
       done = done || r;
     }
-    if (decision.reply) {
-      const s = await driver.sendText(decision.reply);
-      emit({ type: 'send-text', name: c.name, ok: s });
+    if (reply) {
+      const s = await driver.sendText(reply);
+      emit({ type: 'send-text', name: c.name, ok: s, ai: aiSource });
       done = done || s;
     }
 
@@ -159,13 +183,13 @@ export async function runAutoReply(
         company: c.company,
         stage: decision.stopReason ? 'done' : 'active',
         last_hr_message: lastHr,
-        last_reply: decision.reply,
+        last_reply: reply,
         last_hr_message_at: new Date().toISOString(),
         last_replied_at: new Date().toISOString(),
         round,
       });
       sent++;
-      emit({ type: 'sent', name: c.name });
+      emit({ type: 'sent', name: c.name, ai: aiSource });
     } else {
       emit({ type: 'skipped', reason: 'send-failed', name: c.name });
       skipped++;

@@ -94,9 +94,11 @@ offer-where/
 
 ## 接入 AI（可选，对标职得鸭的 AI 内核）
 
-未配置 AI 时，项目以**「规则匹配 + 模板文案」**模式完整运行。配置任意 OpenAI 兼容网关后，自动切换为**「AI 语义匹配 + AI 文案」**。
+未配置 AI 时，项目以**「规则匹配 + 模板文案」**模式完整运行。配置任意 OpenAI 兼容网关后，自动切换为**「AI 语义匹配 + AI 文案 + AI 自动复聊」**。
 
-在 `.env`（参考 `.env.example`）中设置：
+### 配置（`.env`）
+
+根目录 `.env`（参考 `.env.example`）设置以下三项，**三者齐备才启用 AI**，否则所有 AI 调用自动回退规则/模板（软失败，不会中断投递）：
 
 ```bash
 LLM_BASE_URL=https://api.openai.com/v1      # 或 http://127.0.0.1:11434/v1（本地 Ollama）
@@ -105,7 +107,27 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 ```
 
 兼容：OpenAI / DeepSeek / SiliconFlow / 通义 / 智谱 / Groq / 本地 Ollama 等。
-设置后 `/api/health` 返回 `"ai": true`，控制台可据此提示 AI 已启用。
+
+> **加载机制**：后端 `server/env.ts` 在启动时（早于其它模块）解析根目录 `.env` 注入 `process.env`，无需安装 dotenv、也无需在启动命令里手动 `export`。改完 `.env` 重启后端即生效（双击桌面「投递Agent」或 `start_server.bat`）。
+
+### AI 用在哪
+
+| 能力 | 是否用 AI | 说明 |
+|---|---|---|
+| 智能匹配（`/api/jobs/match`、`matchAi.ts`） | ✅ 启用时 | 简历 vs JD 语义打分；无 LLM 回退本地规则 |
+| 文案撰写（`letterWriter.ts`） | ✅ 启用时 | 招呼语 / HR 复聊文案；无 LLM 回退模板 |
+| **自动回复话术（`autoReply.ts` `composeReplyWithAi`）** | ✅ 启用时 | **HR 复聊直接调用大模型生成语境感知话术** |
+| 自动回复**意图识别**（`detectIntent` / `decide`） | ❌ 始终规则 | 分类任务规则更可控；内置终态判定顺序、疑问句规避等护栏，避免误判 |
+
+**自动回复的「AI + 护栏」设计**：意图识别永远走规则（保证不误回/不乱回），话术生成优先走大模型（结合 HR 原文、意图、求职者档案、最近对话上下文写 1-3 句口语化回复）；模型调用失败或超时则自动回退规则模板，**护栏不因 AI 抽风而失效**。
+
+### 控制台与接口
+
+- 控制台「④ 自动回复」面板新增 **AI 状态徽标**（绿=已启用模型 X / 黄=未配置将回退规则）与 **「AI 生成话术」开关**（默认勾选；未配置时运行自动回退规则）。预览日志标注 `[AI]` / `[规则]`。
+- `GET /api/ai-status` → `{ enabled, model, baseUrl }`，供徽标实时刷新。
+- 命令行：`tsx scripts/auto_reply_boss.ts`（猎聘为 `auto_reply_liepin.ts`）支持 `--no-ai` 强制走规则模板；`--send` 真实发送前建议先预览。
+
+> 设置后 `GET /api/health` 返回 `"ai": true`，控制台可据此提示 AI 已启用。
 
 ---
 
