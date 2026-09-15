@@ -94,6 +94,12 @@ export interface ApplyResult {
   foundJobs?: { title: string; url: string; company?: string }[];
   /** 本轮实际投递成功数量（批量投递用） */
   appliedCount?: number;
-  /** offerbiu 邮箱投递预览（dryRun 时返回，供前端确认后正式发送） */
-  preview?: { to: string; subject: string; body: string; attachment?: string };
+  /**
+   * dryRun 预览负载。两种形状二选一：
+   * - 邮箱投递预览：{ to, subject, body, attachment? }
+   * - 官网投递预览：{ jobUrl?, needLogin, entryHits, resumePath? }
+   */
+  preview?:
+    | { to: string; subject: string; body: string; attachment?: string }
+    | { jobUrl?: string; needLogin: boolean; entryHits: string[]; resumePath?: string };
 }
