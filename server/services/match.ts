@@ -23,35 +23,40 @@ export function matchResumeToJob(
   resumeBlob: string,
   resumeSkills: string[],
   jd: string,
-  requirements?: string
+  requirements?: string,
+  title?: string
 ): MatchResult {
   const jdText = `${jd || ''}\n${requirements || ''}`.trim();
-  const jdLower = jdText.toLowerCase();
   const blob = `${(resumeBlob || '').toLowerCase()} ${(resumeSkills || []).join(' ').toLowerCase()}`;
 
-  if (!jdText) {
-    return { score: 0, matched: [], missing: [], suggestions: ['岗位 JD 为空，无法匹配'] };
+  // 主匹配信号用 JD；BOSS 等平台采集的岗位常只有职位名、没有 JD 正文，
+  // 此时降级用「职位名」做粗略匹配，避免直接 0 分（否则整池无法排序/过滤）。
+  const usedTitle = jdText.length < 10 && !!title && String(title).trim().length >= 2;
+  const corpus = usedTitle ? String(title).trim() : jdText;
+  if (!corpus) {
+    return { score: 0, matched: [], missing: [], suggestions: ['岗位 JD 与职位名为空，无法匹配'] };
   }
+  const corpusLower = corpus.toLowerCase();
 
-  // 1) 从 JD 提取技能关键词
+  // 1) 从 corpus 提取技能关键词
   const jdSkills = SKILLS.filter(s => {
     const t = s.toLowerCase().trim();
     if (!t) return false;
     if (['go', 'c#', 'sql', 'ux', 'cv', 'pr'].includes(t)) {
       const re = new RegExp(`(^|[^a-z])${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`, 'i');
-      return re.test(jdLower);
+      return re.test(corpusLower);
     }
-    return jdLower.includes(t);
+    return corpusLower.includes(t);
   });
 
   // 2) 命中 / 缺失
   const matched = jdSkills.filter(s => blob.includes(s.toLowerCase()));
   const missing = jdSkills.filter(s => !blob.includes(s.toLowerCase()));
 
-  // 3) 额外：JD 中出现但不在词典里的关键短语（如具体框架），看简历是否包含
-  //    简单做：提取 JD 中 2-4 字的中文技术词（含·/字母数字）做兜底命中
-  const phraseHits = extractJdPhrases(jdText).filter(p => blob.includes(p.toLowerCase()));
-  const phraseTotal = extractJdPhrases(jdText).length;
+  // 3) 额外：corpus 中出现但不在词典里的关键短语（如具体框架），看简历是否包含
+  const phrases = extractJdPhrases(corpus);
+  const phraseHits = phrases.filter(p => blob.includes(p.toLowerCase()));
+  const phraseTotal = phrases.length;
 
   // 4) 打分：技能重叠为主，短语重叠为辅
   const skillTotal = jdSkills.length || 1;
@@ -59,14 +64,20 @@ export function matchResumeToJob(
   const phraseRatio = phraseTotal ? phraseHits.length / phraseTotal : 0;
   let score = Math.round((skillRatio * 0.8 + phraseRatio * 0.2) * 100);
 
-  // 若 JD 里没有任何已知技能词，退化为短语重叠
+  // 若 corpus 里没有任何已知技能词，退化为短语重叠
   if (jdSkills.length === 0) {
     score = Math.round((phraseTotal ? phraseRatio : 0) * 100);
   }
   score = Math.max(0, Math.min(100, score));
 
+  // 职位名兜底匹配的精度弱于真实 JD，封顶 70，确保「有 JD 的岗位」始终排在「仅职位名」之上
+  if (usedTitle) score = Math.min(score, 70);
+
   // 5) 建议：针对缺失技能给出补充提示（最多 8 条）
   const suggestions = missing.slice(0, 8).map(m => `简历中未见「${m.trim()}」，建议在相关经历中显性补充或针对性学习后再投递`);
+  if (usedTitle) {
+    suggestions.unshift('岗位 JD 为空，已基于职位名做粗略匹配（补全 JD 后重算精度更高）');
+  }
 
   return { score, matched, missing, suggestions };
 }

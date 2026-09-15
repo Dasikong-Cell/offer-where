@@ -5,11 +5,7 @@
  */
 import { upsertJob } from '../server/db.ts';
 
-const B = 'http://127.0.0.1:4400/api/browser/exec';
-const ex = (platform: string, b: any) => fetch(B, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ platform, ...b }),
-}).then((r) => r.json());
+import { ex } from './lib/browser.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const KEYWORDS = ['Java开发', 'Java', '软件开发', '前端开发', '软件工程师', '计算机', 'Web前端', '后端开发'];
@@ -30,7 +26,23 @@ const EXTRACT_COMPANY = `(() => {
 /** 公司页：收岗位直链 + 职位名/公司名/薪资/城市 */
 const EXTRACT_JOBS = `(() => {
   const ABS = (h) => { try { return new URL(h, location.href).href; } catch (e) { return ''; } };
-  const company = ((document.querySelector('h1') || {}).innerText || document.title || '').trim().split(/\\n/)[0].slice(0, 40);
+  // 2026-09-12 修正：旧版只取 h1，在 51job 公司页常把「APP下载」当成公司名入库
+  // （脏数据遍布岗位池，投递记录里公司名全是 APP下载）。
+  // 改为多选择器依次尝试，并排除明显无效值；最后用标题兜底。
+  const INVALID_COMPANY = ['APP下载', '下载APP', '首页', '登录', '注册', '搜索'];
+  let company = '';
+  const cSels = ['h1', '.company-name', '.cname', '.cn', '[class*=company] h1', '[class*=companyName]'];
+  for (const s of cSels) {
+    const el = document.querySelector(s);
+    const t = el ? (el.innerText || el.textContent || '').trim().split(/\\n/)[0].trim() : '';
+    if (t && t.length <= 40 && !INVALID_COMPANY.some(v => t.indexOf(v) >= 0)) { company = t; break; }
+  }
+  if (!company) {
+    const dt = (document.title || '').trim().split(/[-_|]/)[0].trim();
+    if (dt && !INVALID_COMPANY.some(v => dt.indexOf(v) >= 0)) company = dt.slice(0, 40);
+  }
+  // 剥掉「公司全称：」这类标签前缀，避免入库成 "公司全称：xxx"
+  company = (company || '').replace(/^公司全称[：:]\\s*/, '').trim();
   const out = [];
   const seen = new Set();
   document.querySelectorAll('a[href]').forEach(a => {

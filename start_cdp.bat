@@ -46,7 +46,10 @@ echo   Official: %OFFICIAL_PORT%  (%OFFICIAL_PROFILE%)
 echo ============================================
 echo.
 
-set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
+REM 2026-09-12 反检测加固：--disable-blink-features=AutomationControlled 让 navigator.webdriver 返回 false，
+REM 抹掉 CDP 自动化特征，避免 BOSS/猎聘/51job 检测到调试器后强制重新登录或弹风控。
+REM （--disable-infobars 在 Chrome151 已近似空操作，保留无害）
+set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-blink-features=AutomationControlled --disable-infobars"
 
 REM Window layout: 640x700 grid so all 5 windows fit on a 1920x1080 screen
 set "WIN_W=640"

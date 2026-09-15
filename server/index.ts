@@ -18,6 +18,8 @@ import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
 import { runAutoReply } from "./services/apply/autoReplyRunner.js";
+import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
+import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
 import { collectOfferbiu } from "./services/offerbiuCollect.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
@@ -536,7 +538,7 @@ app.post("/api/jobs/match", async (req, res) => {
     const struct = await parseResumeFile(target);
     const jobs = db.listJobs({ source: source as string, status: status as string });
     const ranked = await Promise.all(jobs.map(async (job) => {
-      const r = await matchResumeToJobAi({ resumeBlob: struct.searchBlob, resumeSkills: struct.skills, jd: job.jd || '', requirements: job.requirements || '' });
+      const r = await matchResumeToJobAi({ resumeBlob: struct.searchBlob, resumeSkills: struct.skills, jd: job.jd || '', requirements: job.requirements || '', position: job.position || '' });
       db.updateJob(job.id, { match_score: r.score, match_detail: JSON.stringify({ matched: r.matched, missing: r.missing, suggestions: r.suggestions }) });
       return { ...job, match_score: r.score, match_detail: { matched: r.matched, missing: r.missing, suggestions: r.suggestions } };
     }));
@@ -633,6 +635,14 @@ app.get("/api/auto-reply/run", async (req, res) => {
   // useAi：是否用大模型生成话术。默认 true（API 已配置时自动启用，未配置自动回退规则）。
   // 传 useAi=0/false 可强制走规则模板。
   const useAi = q.useAi !== '0' && q.useAi !== 'false';
+  // name：只处理指定 HR 名，支持逗号分隔或多个同名参数（与 CLI --name 对齐）。
+  const names: string[] = [];
+  const rawName = q.name;
+  if (typeof rawName === 'string' && rawName.trim()) {
+    names.push(...rawName.split(',').map((s) => s.trim()).filter(Boolean));
+  } else if (Array.isArray(rawName)) {
+    names.push(...rawName.map((s) => String(s).trim()).filter(Boolean));
+  }
 
   if (autoReplyController) {
     return res.status(409).json({ error: '自动回复正在运行，请先停止' });
@@ -646,12 +656,17 @@ app.get("/api/auto-reply/run", async (req, res) => {
 
   autoReplyController = new AbortController();
   const signal = autoReplyController.signal;
+
+  // signAi：是否在回复中署名 AI 身份（如「【懒懒】」）。默认由 profile.signAi 决定（缺省 true）；
+  // 仅在显式传 signAi=0/false 时强制不署名（CLI / 调试用）。
+  const opts: Record<string, unknown> = { unreadOnly, limit, realSend, signal, useAi, names };
+  if (q.signAi === '0' || q.signAi === 'false') opts.signAi = false;
   const send = (ev: Record<string, unknown>) => {
     res.write(`data: ${JSON.stringify(ev)}\n\n`);
   };
 
   try {
-    await runAutoReply(platform as any, { unreadOnly, limit, realSend, signal, useAi }, send);
+    await runAutoReply(platform as any, opts as any, send);
   } catch (e: unknown) {
     send({ type: 'error', message: String((e as Error)?.message || e) });
   } finally {
@@ -667,6 +682,87 @@ app.post("/api/auto-reply/stop", (_req, res) => {
     autoReplyController = null;
   }
   res.json({ ok: true });
+});
+
+// ============= 自动回复常驻监视器（按时效自动跟进 HR 消息） =============
+app.post("/api/auto-reply/watch/start", (_req, res) => {
+  startWatcher();
+  res.json({ ok: true, status: watcherStatus() });
+});
+app.post("/api/auto-reply/watch/stop", (_req, res) => {
+  stopWatcher();
+  res.json({ ok: true, status: watcherStatus() });
+});
+app.post("/api/auto-reply/watch/config", (req, res) => {
+  const body = req.body || {};
+  const patch: Record<string, unknown> = {};
+  for (const k of ['enabled', 'platforms', 'intervalSec', 'realSend', 'useAi'] as const) {
+    if (body[k] !== undefined) patch[k] = body[k];
+  }
+  setWatchConfig(patch as any);
+  res.json({ ok: true, status: watcherStatus() });
+});
+app.get("/api/auto-reply/watch/status", (_req, res) => {
+  res.json(watcherStatus());
+});
+// 监视器实时日志（SSE）：订阅 watchEmitter 的 tick 事件推给控制台
+app.get("/api/auto-reply/watch", (_req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  const send = (ev: Record<string, unknown>) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  send({ type: 'status', ...watcherStatus() });
+  const onTick = (payload: unknown) => send({ type: 'tick', ...(payload as Record<string, unknown>) });
+  watchEmitter.on('tick', onTick);
+  const keep = setInterval(() => res.write(': ping\n\n'), 15000);
+  const close = () => {
+    clearInterval(keep);
+    watchEmitter.off('tick', onTick);
+    res.end();
+  };
+  _req.on('close', close);
+});
+
+// ============= 批量投递常驻监视器（后台自动连投，受会话锁约束不与自动回复互抢） =============
+app.post("/api/auto-apply/watch/start", (_req, res) => {
+  startApplyWatch();
+  res.json({ ok: true, status: applyWatchStatus() });
+});
+app.post("/api/auto-apply/watch/stop", (_req, res) => {
+  stopApplyWatch();
+  res.json({ ok: true, status: applyWatchStatus() });
+});
+app.post("/api/auto-apply/watch/config", (req, res) => {
+  const body = req.body || {};
+  const patch: Record<string, unknown> = {};
+  for (const k of ['enabled', 'platforms', 'keyword', 'limit', 'intervalSec', 'intervalMs'] as const) {
+    if (body[k] !== undefined) patch[k] = body[k];
+  }
+  setApplyWatchConfig(patch as any);
+  res.json({ ok: true, status: applyWatchStatus() });
+});
+app.get("/api/auto-apply/watch/status", (_req, res) => {
+  res.json(applyWatchStatus());
+});
+app.get("/api/auto-apply/watch", (_req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  const send = (ev: Record<string, unknown>) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  send({ type: 'status', ...applyWatchStatus() });
+  const onTick = (payload: unknown) => send({ type: 'tick', ...(payload as Record<string, unknown>) });
+  applyWatchEmitter.on('tick', onTick);
+  const keep = setInterval(() => res.write(': ping\n\n'), 15000);
+  const close = () => {
+    clearInterval(keep);
+    applyWatchEmitter.off('tick', onTick);
+    res.end();
+  };
+  _req.on('close', close);
 });
 
 app.post("/api/apply", async (req, res) => {
@@ -1176,6 +1272,13 @@ const server = app.listen(PORT, () => {
 ║                                            ║
 ╚════════════════════════════════════════════╝
   `);
+  // 若配置启用自动回复监视器，则恢复常驻轮询（不立即跑，等首个间隔，避免启动即操作浏览器）
+  try {
+    bootstrapWatcher();
+    bootstrapApplyWatch();
+  } catch (e) {
+    console.error('[watch] bootstrap failed:', e);
+  }
 });
 
 // 退出时关闭所有浏览器，避免残留进程

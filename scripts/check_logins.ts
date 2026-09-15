@@ -1,9 +1,5 @@
 /* 并行检查各平台登录态（各 platform 用独立 tab，互不干扰） */
-const B = 'http://127.0.0.1:4400/api/browser/exec';
-const ex = (platform: string, b: any) => fetch(B, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ platform, ...b }),
-}).then((r) => r.json());
+import { ex } from './lib/browser.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const CFG: Record<string, { home: string; logged: string[]; anon: string[] }> = {

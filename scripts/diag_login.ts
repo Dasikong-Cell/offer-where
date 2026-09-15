@@ -46,14 +46,7 @@ const LOGIN_WALL: RegExp[] = [
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function ex(platform: string, action: string, args: Record<string, any> = {}) {
-  const r = await fetch(`${API}/api/browser/exec`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ platform, action, ...args }),
-  });
-  return r.json() as Promise<Record<string, any>>;
-}
+import { ex } from './lib/browser.ts';
 
 async function pageText(platform: string): Promise<string> {
   const r = await ex(platform, 'eval', {

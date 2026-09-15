@@ -171,6 +171,45 @@ function isQuestion(text: string): boolean {
     || /(好不好|行不行|能不能|有没有|方便吗|可以吗|行吗)/.test(t);
 }
 
+/** 把「软件工程师、前端开发、Java」之类的字符串解析成职位关键词数组 */
+export function parsePositions(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((s) => String(s).trim()).filter(Boolean);
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  return raw
+    .split(/[,，、;；\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** 核心技能 token：用于「目标职位」与「HR 发布的职位」之间的模糊相关判断 */
+const CORE_TOKENS = [
+  'java', '前端', '后端', 'web', '测试', 'python', '开发', '工程师', '全栈', '软件',
+  '数据', '运维', 'go', 'c++', '架构', '算法', '.net', 'net', 'android', 'ios',
+  'php', 'vue', 'react', 'node', '实施', '数据库', '嵌入式', '人工智能', 'ai', '大模型',
+];
+
+/**
+ * HR 发布的职位是否与「目标职位」相关。
+ *  - 未设目标职位 → 全部视为相关（向后兼容，回复所有）。
+ *  - 无法识别 HR 职位 → 保守返回 true（宁可回复，不漏掉真实机会）。
+ *  - 否则：双向子串命中，或核心技能 token 重叠，即视为相关。
+ */
+export function isPositionRelated(
+  hrPosition?: string | null,
+  targets?: string[] | null,
+): boolean {
+  if (!targets || targets.length === 0) return true;
+  if (!hrPosition || !hrPosition.trim()) return true;
+  const hp = hrPosition.toLowerCase();
+  for (const t of targets) {
+    const tl = String(t || '').toLowerCase().trim();
+    if (!tl) continue;
+    if (hp.includes(tl) || tl.includes(hp)) return true;
+    if (CORE_TOKENS.some((tok) => hp.includes(tok) && tl.includes(tok))) return true;
+  }
+  return false;
+}
+
 /** 识别 HR 消息意图 */
 export function detectIntent(text: string): HrIntent {
   const t = (text || '').replace(/\s+/g, '').toLowerCase();
@@ -296,12 +335,36 @@ export function isActiveStage(stage: string): boolean {
   return stage === 'new' || stage === 'replied';
 }
 
+/**
+ * 在话术末尾追加 AI 身份标记（如「【懒懒】」）。
+ * 仅当 opts.sign 为真且提供了 aiName 时追加；已含同名标记则不重复。
+ * 用于「标记这是 AI 助手回复」，AI 名称来自服务端配置（默认「懒懒」）。
+ */
+function signIfNeeded(text: string, opts?: { aiName?: string; sign?: boolean }): string {
+  if (!opts?.sign || !opts.aiName) return text;
+  const sig = `【${opts.aiName.trim()}】`;
+  if (!text || text.includes(sig)) return text;
+  return `${text}${sig}`;
+}
+
 /** 大模型话术生成结果 */
 export interface AiReply {
   /** 最终话术（AI 成功则来自模型，否则回退规则模板） */
   text: string;
   /** 实际来源：'ai' = 模型生成；'rule' = 规则兜底 */
   source: 'ai' | 'rule';
+}
+
+/**
+ * 把会话历史格式化成「HR：… / 我：…」文本，供大模型语境感知。
+ * 只取最近 max 条（默认 16），避免把最早几轮无关内容塞进 prompt，也控制 token。
+ * 纯函数（无副作用），便于单测与复用。
+ */
+export function formatHistory(history?: { side: 'hr' | 'me'; text: string }[], max = 16): string {
+  return (history || [])
+    .slice(-max)
+    .map((m) => `${m.side === 'hr' ? 'HR' : '我'}：${m.text}`)
+    .join('\n');
 }
 
 /**
@@ -322,11 +385,12 @@ export async function composeReplyWithAi(
   ctx: ReplyContext = {},
   hrMessage?: string,
   history?: { side: 'hr' | 'me'; text: string }[],
+  opts?: { aiName?: string; sign?: boolean },
 ): Promise<AiReply> {
   const fallback = composeReply(intent, ctx);
 
   if (!isAiEnabled()) {
-    return { text: fallback, source: 'rule' };
+    return { text: signIfNeeded(fallback, opts), source: 'rule' };
   }
 
   const n = ctx.profile?.name || '';
@@ -351,16 +415,18 @@ export async function composeReplyWithAi(
     other: '一般沟通',
   };
 
-  const histText = (history || [])
-    .slice(-8)
-    .map((m) => `${m.side === 'hr' ? 'HR' : '我'}：${m.text}`)
-    .join('\n');
+  // 2026-09-12：上下文窗口由 8 条放宽到 16 条。
+  // BOSS 上 HR 常分多轮追问（先问学历 → 再问到岗时间 → 再约面试），
+  // 只给 8 条会丢掉前面的约定，导致回复重复或与之前说辞矛盾。
+  const histText = formatHistory(history);
 
   const SYSTEM = `你是正在求职的候选人，在招聘平台（BOSS直聘 / 猎聘等）和 HR 一对一聊天。
 要求：
 - 口语化、自然，1-3 句话，像真人求职者，不堆砌关键词、不套模板、不油腻。
 - 绝不编造简历里没有的公司、经历、数据、证书。
-- 结合「对方意图」和「最近对话上下文」回应，不要答非所问。
+- 必须结合「最近对话上下文」回应：承接上文，不要答非所问。
+- 上下文中已经说过的内容（已报过学历、已约过时间、已发过简历等）**不要重复说**，
+  也不要出现与之前承诺矛盾的表述（例如前面说"明天可以"，后面又说"随时都行"）。
 - 被问到薪资/到岗等敏感点，给得体且留有余地的回答，不要过度承诺。
 - 不要主动索要电话等隐私；除非对方先问，否则不写具体电话号码。
 - 不要使用 Markdown 标题，不要用引号包裹整段回复。`;
@@ -375,7 +441,7 @@ ${histText || '（无）'}
 
   const ai = await chatText(USER, SYSTEM, { temperature: 0.7, timeoutMs: 20000 });
   if (ai && ai.trim()) {
-    return { text: ai.trim().replace(/^["'「]|["'」]$/g, ''), source: 'ai' };
+    return { text: signIfNeeded(ai.trim().replace(/^["'「]|["'」]$/g, ''), opts), source: 'ai' };
   }
-  return { text: fallback, source: 'rule' };
+  return { text: signIfNeeded(fallback, opts), source: 'rule' };
 }

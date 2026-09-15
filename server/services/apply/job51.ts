@@ -150,6 +150,17 @@ export async function runJob51List(input: ApplyInput, keyword: string, maxApply:
     }
 
     for (let i = 0; i < n && applied < maxApply; i++) {
+      // 每次投递前复检滑块：51job 风控常在批量过程中才弹出「访问验证」，
+      // 若等到循环结束才发现，剩余名额会全部空转（rowScript 点不到按钮被计为跳过）。
+      // 命中即中止整批，提示用户手动过滑块后重跑（已成功的不会重复投递）。
+      if (await detectCaptcha(platform)) {
+        const shot = await tryScreenshot(platform);
+        return {
+          platform, status: 'need_captcha',
+          message: '51job 批量投递过程中弹出「访问验证」滑块验证码，已中止整批。请在打开的浏览器中手动完成滑块验证后重新运行本批次（已成功的不会重复投递）。',
+          logs: logs.logs, screenshot: shot, appliedCount: applied,
+        };
+      }
       const c = await bexec(platform, 'eval', { script: rowScript(i, 'click') }, logs, `第${i + 1}个岗位`);
       const cd = (c.data || {}) as any;
       if (!cd.ok) {

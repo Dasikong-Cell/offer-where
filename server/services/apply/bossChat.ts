@@ -62,7 +62,10 @@ export async function listConversations(): Promise<ConvSummary[]> {
           else break;
         }
         const txt=(li.innerText||'').replace(/\\s+/g,' ').trim();
-        const unread=!!li.querySelector('[class*=unread],[class*=red-dot],.badge,[class*=dot]');
+        // 未读红点 class 名不稳定（unread-num / red-dot / badge 等），多兜几类，且认数字角标
+        const unreadBadge=li.querySelector('[class*=unread],[class*=red-dot],.badge,.unread-num,[class*=dot]');
+        const unreadNum=li.querySelector('.unread-num,[class*=unread-count],[class*=badge]');
+        const unread=!!unreadBadge||!!(unreadNum&&/\d/.test((unreadNum.textContent||'').trim()));
         const lastMsg=txt.replace(name,'').replace(/^\\d{1,2}:\\d{2}/,'').replace(/\\[送达\\]|\\[已读\\]/g,'').replace(name,'').trim().slice(0,120);
         out.push({name, company, lastMsg, unread, raw:txt.slice(0,160)});
       }
@@ -81,30 +84,59 @@ export async function listConversations(): Promise<ConvSummary[]> {
 }
 
 export async function openConversation(key: string): Promise<boolean> {
-  const r = await ex('eval', {
-    script: `(()=>{
-      const uls=document.querySelectorAll('.user-list-content ul');
-      let t=null; for(const u of uls){ if(u.children.length>0){ t=u; break; } }
-      if(!t) return 'NO_LIST';
-      const parts=${JSON.stringify(key)}.split('|');
-      const pName=parts[1]||'';
-      const pCompany=parts[2]||'';
-      // 优先：name 与 company 同时命中（避免同名 HR 开错会话）
-      let fallback=null;
-      for(const li of t.children){
-        const name=(li.querySelector('.name-text')||{innerText:''}).innerText.trim();
-        const txt=(li.innerText||'').replace(/\\s+/g,' ');
-        if(name===pName && (!pCompany || txt.includes(pCompany))){
-          const fc=li.querySelector('.friend-content')||li; fc.click(); return 'opened';
+  const parts = key.split('|');
+  const pName = parts[1] || '';
+  const pCompany = parts[2] || '';
+  // BOSS 会话列表是虚拟化列表：连续打开多个后只保留视口附近条目，更深的 li 会被回收出 DOM。
+  // 故在 node 侧循环「查找目标 → 滚入视口并点击 → 校验切换」，找不到就滚动列表容器加载更多后重试。
+  // 校验改用「窗格 HR 姓名」匹配（.chat-conversation .name-text），而非要求 li.message-item>0：
+  //   这样系统/Bot 会话、消息加载慢的会话也能被正确判为「已打开」，再由引擎按 lastHr 决定跳过，
+  //   彻底消除旧逻辑把「已打开但无真人消息」误判 EMPTY 导致的 open-failed（旧版实测 14→7 残留即此因）。
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const r = await ex('eval', {
+      script: `(()=>{
+        const uls=document.querySelectorAll('.user-list-content ul');
+        let t=null; for(const u of uls){ if(u.children.length>0){ t=u; break; } }
+        if(!t) return 'NO_LIST';
+        const pName=${JSON.stringify(pName)};
+        const pCompany=${JSON.stringify(pCompany)};
+        let fallback=null;
+        for(const li of t.children){
+          const name=(li.querySelector('.name-text')||{innerText:''}).innerText.trim();
+          const txt=(li.innerText||'').replace(/\\s+/g,' ');
+          if(name===pName && (!pCompany || txt.includes(pCompany))){
+            const fc=li.querySelector('.friend-content')||li; fc.scrollIntoView({block:'center'}); fc.click(); return 'opened';
+          }
+          if(name===pName && !fallback) fallback=li;
         }
-        if(name===pName && !fallback) fallback=li; // 仅 name 命中作兜底
+        if(fallback){ const fc=fallback.querySelector('.friend-content')||fallback; fc.scrollIntoView({block:'center'}); fc.click(); return 'opened'; }
+        return 'NOT_FOUND';
+      })()`,
+    });
+    if ((r.data as string) === 'opened') {
+      // 校验：窗格已切换到目标 HR（按姓名）。允许包含关系容错（列表名与窗格名可能略有差异）。
+      let ok = false;
+      for (let v = 0; v < 4; v++) {
+        await sleep(1200);
+        const vv = await ex('eval', {
+          script: `(()=>{ const c=document.querySelector('.chat-conversation'); if(!c) return ''; const n=(c.querySelector('.name-text')||{innerText:''}).innerText.trim(); return n; })()`,
+        });
+        const openedName = (vv.data as string) || '';
+        if (openedName && (openedName === pName || openedName.includes(pName) || pName.includes(openedName))) { ok = true; break; }
       }
-      if(fallback){ const fc=fallback.querySelector('.friend-content')||fallback; fc.click(); return 'opened'; }
-      return 'NOT_FOUND';
-    })()`,
-  });
-  await sleep(8000);
-  return (r.data as string) === 'opened';
+      if (ok) return true;
+      // 窗格姓名不匹配（可能切到别的会话 / 切换慢 / 系统会话名不同），继续下一轮重试
+    } else if ((r.data as string) === 'NOT_FOUND') {
+      // 目标未渲染：滚动列表容器（.user-list-content 才是真正滚动容器）触发虚拟化加载更多
+      await ex('eval', {
+        script: `(()=>{ const el=document.querySelector('.user-list-content'); if(el){ try{ el.scrollTop += 500; }catch(e){} } window.scrollBy(0,300); return 'scrolled'; })()`,
+      });
+      await sleep(700);
+    } else {
+      return false; // NO_LIST
+    }
+  }
+  return false;
 }
 
 /**
@@ -117,11 +149,15 @@ export async function openConversation(key: string): Promise<boolean> {
  *  - 系统推送卡片（PK 情况 / 职位推荐等）同样是 item-friend，但内含 .articles-center，
  *    不是真人发的消息，必须跳过，否则会被误当成「HR 说了话」而触发自动回复
  */
-export async function readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string }> {
+export async function readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string; position?: string | null }> {
   const r = await ex('eval', {
     script: `(()=>{
       const conv=document.querySelector('.chat-conversation');
       if(!conv) return JSON.stringify({msgs:[]});
+      // HR 发布的职位：聊天窗头部「.position-name」或「.chat-position-content」（已校准 2026-09-11）
+      let pos=null;
+      const pe=conv.querySelector('.position-name')||conv.querySelector('.chat-position-content');
+      if(pe){ let t=(pe.innerText||'').replace(/\\s+/g,' ').trim(); t=t.replace(/\\s*(查看职位|\\d+-\\d+K|昆明|\\d+K).*$/,'').trim(); pos=t||null; }
       const items=[].slice.call(conv.querySelectorAll('li.message-item'));
       const msgs=[];
       for(const li of items){
@@ -134,13 +170,13 @@ export async function readConversation(): Promise<{ messages: ParsedMessage[]; l
         if(!txt) continue;
         msgs.push({side: isMine?'me':'hr', text:txt});
       }
-      return JSON.stringify({msgs});
+      return JSON.stringify({msgs, pos});
     })()`,
   });
   const d = JSON.parse((r.data as string) || '{"msgs":[]}');
   const messages: ParsedMessage[] = d.msgs || [];
   const hrs = messages.filter((m: ParsedMessage) => m.side === 'hr');
-  return { messages, lastHr: hrs.length ? hrs[hrs.length - 1].text : '' };
+  return { messages, lastHr: hrs.length ? hrs[hrs.length - 1].text : '', position: d.pos || null };
 }
 
 /** 在输入框输入文本（contenteditable + Vue v-model 兼容） */
@@ -160,17 +196,32 @@ export async function typeMessage(text: string): Promise<void> {
 }
 
 export async function sendText(text: string): Promise<boolean> {
-  await typeMessage(text);
-  const r = await ex('eval', {
-    script: `(()=>{
-      const btn=[].slice.call(document.querySelectorAll('button')).find(b=>/发送/.test(b.innerText||'')&&/btn-send/.test(b.className||''));
-      if(!btn) return 'NO_BTN';
-      if(btn.disabled || /disabled/.test(btn.className||'')) return 'DISABLED';
-      btn.click(); return 'sent';
-    })()`,
-  });
-  await sleep(2500);
-  return (r.data as string) === 'sent';
+  // 填文本（最多重试 3 次，确保 contenteditable 真的填进去了）
+  for (let i = 0; i < 3; i++) {
+    await typeMessage(text);
+    const chk = await ex('eval', {
+      script: `(()=>{ const el=document.querySelector('.chat-input'); const t=el?(el.innerText||el.textContent||'').trim():''; return t.length; })()`,
+    });
+    if ((chk.data as number) > 0) break;
+    await sleep(600);
+  }
+  // 点击发送（按钮须 enabled，disabled 时等待重试，最多 3 次）
+  for (let i = 0; i < 3; i++) {
+    const r = await ex('eval', {
+      script: `(()=>{
+        const btn=[].slice.call(document.querySelectorAll('button')).find(b=>/发送/.test(b.innerText||'')&&/btn-send/.test(b.className||''));
+        if(!btn) return 'NO_BTN';
+        if(btn.disabled || /disabled/.test(btn.className||'')) return 'DISABLED';
+        btn.click(); return 'sent';
+      })()`,
+    });
+    if ((r.data as string) === 'sent') {
+      await sleep(2500);
+      return true;
+    }
+    await sleep(1200);
+  }
+  return false;
 }
 
 /** 发简历（发在线简历 = 已导入的本地 PDF） */

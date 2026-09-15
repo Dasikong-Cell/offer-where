@@ -2,7 +2,7 @@
  * 自动回复引擎的规则回归测试（不需要浏览器）
  * 用法: tsx scripts/test_auto_reply.ts
  */
-import { detectIntent, composeReply, decide, type HrIntent } from '../server/services/apply/autoReply.ts';
+import { detectIntent, composeReply, decide, formatHistory, type HrIntent } from '../server/services/apply/autoReply.ts';
 
 // [HR 消息, 期望意图]
 const CASES: Array<[string, HrIntent]> = [
@@ -57,5 +57,25 @@ const same = decide('你好', { ...ctx, round: 1 }, '你好');
 console.log(`重复同一条消息 -> 应回复=${same.shouldReply} (期望 false) 原因=${same.stopReason}`);
 const over = decide('你好', { ...ctx, round: 9 });
 console.log(`超过 ${8} 轮 -> 应回复=${over.shouldReply} (期望 false) 原因=${over.stopReason}`);
+
+console.log('\n=== 上下文(历史)读取能力测试 ===');
+// 自动回复必须能读取最近对话上下文，避免重复/矛盾。核心逻辑抽成纯函数 formatHistory。
+// 造 20 条历史（HR/我 交替），验证：只取最近 16 条、且格式正确接入 prompt。
+const hist = Array.from({ length: 20 }, (_, i) => ({
+  side: (i % 2 === 0 ? 'me' : 'hr') as 'me' | 'hr',
+  text: `第${i + 1}条`,
+}));
+const out = formatHistory(hist);
+const lines = out.split('\n').filter(Boolean);
+if (lines.length === 16 && out.includes('第17条') && !out.includes('第1条')) {
+  pass++; console.log(`PASS | 历史截取最近16条: 末条含「第17条」、不含「第1条」(共 ${lines.length} 行)`);
+} else {
+  fail++; console.log(`FAIL | 历史截取错误: 行数=${lines.length}, 含第1条=${out.includes('第1条')}, 含第17条=${out.includes('第17条')}`);
+}
+// 空历史不应崩
+const empty = formatHistory([]);
+if (empty === '') { pass++; console.log('PASS | 空历史返回空串不崩溃'); } else { fail++; console.log('FAIL | 空历史应返回空串, 实得: ' + JSON.stringify(empty)); }
+
+console.log(`\n结果: 通过 ${pass}/${CASES.length + 2}，失败 ${fail}`);
 
 process.exit(fail > 0 ? 1 : 0);

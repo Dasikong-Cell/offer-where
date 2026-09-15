@@ -8,11 +8,7 @@
 import { upsertJob } from '../server/db.ts';
 import { randomUUID } from 'crypto';
 
-const B = 'http://127.0.0.1:4400/api/browser/exec';
-const ex = (platform: string, b: any) => fetch(B, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ platform, ...b }),
-}).then((r) => r.json());
+import { ex } from './lib/browser.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const platforms = (process.argv[2] || 'job51').split(',').map((s) => s.trim()).filter(Boolean);
@@ -47,7 +43,7 @@ const EXTRACT_LIEPIN = `(() => {
     const a = c.querySelector('a[data-nick="job-detail-job-info"]');
     if (!a) return;
     const href = (a.href || '').split('?')[0];
-    if (!/lptjob|liepin\\.com\\/job\\//.test(href)) return;
+    if (!/lptjob/.test(href)) return;
     const t = a.querySelector('.ellipsis-1');
     const position = t ? ((t.getAttribute('title') || t.innerText || '').trim()) : '';
     const compEl = c.querySelector('[data-nick="job-detail-company-info"]');

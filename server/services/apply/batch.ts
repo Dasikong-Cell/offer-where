@@ -24,6 +24,7 @@ import { toApplyProfile } from './common.js';
 import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
 import type { ApplyPlatform, ApplyResult } from './types.js';
+import { tryAcquire, release } from './sessionLock.js';
 
 export interface BatchCriteria {
   keywords?: string[];      // 任一命中即保留（岗位名/公司/JD）
@@ -112,6 +113,30 @@ function parseSalary(salary: string | null): { min?: number; max?: number } {
   return {};
 }
 
+/** 「目标职位」关键词的核心词后缀（用于把「后端开发工程师」这类词展开成可匹配的核心词） */
+const KW_SUFFIXES = ['高级', '中级', '初级', '资深', '实习', '开发工程师', '研发工程师', '工程师', '开发', '研发', '岗位', '专员', '经理', '主管', '实习生', '师', '岗'];
+/** 过于宽泛、不适合单独作为匹配词的核心词（否则「开发」会命中所有岗位） */
+const KW_GENERIC = new Set(['开发', '工程师', '研发', '岗位', '专员', '经理', '主管', '实习', '实习生', '师', '岗', '高级', '中级', '初级', '资深', '工作']);
+
+/**
+ * 把「目标职位」关键词展开为可匹配的核心词集合。
+ * 例："后端开发工程师" → ["后端开发工程师","后端"]；"软件工程师" → ["软件工程师","软件"]。
+ * 匹配时用「任一核心词被岗位文本包含」判定，避免因岗位标题写法不同
+ * （java开发工程师 vs 后端开发工程师）把整池岗位误过滤成 0。
+ */
+function kwTokens(k: string): string[] {
+  const out = new Set<string>([k]);
+  let cur = k;
+  for (let i = 0; i < 4; i++) {
+    let changed = false;
+    for (const sfx of KW_SUFFIXES) {
+      if (cur.length > sfx.length && cur.endsWith(sfx)) { cur = cur.slice(0, -sfx.length); out.add(cur); changed = true; break; }
+    }
+    if (!changed) break;
+  }
+  return [...out].filter(t => t.length >= 2 && !KW_GENERIC.has(t));
+}
+
 export async function runBatchApply(
   input: BatchInput,
   onEvent?: (e: BatchEvent) => void,
@@ -125,6 +150,16 @@ export async function runBatchApply(
     throw new Error('档案未配置简历路径，无法确定投递附件。请在「我的档案」填写简历文件绝对路径');
   }
 
+  // 会话独占锁：同一平台同一时刻只允许一个投递/回复占用浏览器，避免与自动回复监视器互抢同一 CDP 标签
+  // （否则监视器后台 navigate 聊天页会把投递的职位页冲掉，表现就是「只投了一两份就被监视器抢走」）。
+  const lockKey = String(input.platform || input.source || 'unknown');
+  const lockHolder = 'apply';
+  if (!tryAcquire(lockKey, lockHolder)) {
+    throw new Error(`平台 ${lockKey} 正被自动回复监视器占用，请先停止「自动回复监视」再投递，或稍候自动重试`);
+  }
+
+  try {
+
   // 1) 可选：先采集 Offerbiu 岗位
   if (input.collect === 'offerbiu') {
     const { collectOfferbiu } = await import('../offerbiuCollect.js');
@@ -134,6 +169,9 @@ export async function runBatchApply(
 
   // 2) 取岗位
   let jobs = db.listJobs({ source: input.source });
+  // 永远排除「已下线/不可投」岗位：批量连投的岗位池会被投递消耗，已确认关闭的岗位
+  // 若仍留在候选会反复被选中重试（浪费 CDP 调用、刷 need_manual）。
+  jobs = jobs.filter(j => j.status !== 'unavailable');
   if (input.criteria?.excludeApplied) jobs = jobs.filter(j => j.status !== 'applied');
 
   // 3) 按需解析简历，并以 AI（无 AI 时回退规则）补全缺失的匹配分
@@ -153,6 +191,7 @@ export async function runBatchApply(
           resumeSkills: struct.skills,
           jd: j.jd || '',
           requirements: j.requirements || '',
+          position: j.position || '',
         });
         scoreMap.set(j.id, r.score);
         db.updateJob(j.id, { match_score: r.score });
@@ -163,16 +202,19 @@ export async function runBatchApply(
   }
 
   // 4) 过滤
-  const kw = (input.criteria?.keywords || []).map(k => String(k).toLowerCase());
+  const kw = (input.criteria?.keywords || []).map(k => String(k).toLowerCase()).filter(Boolean);
   const city = input.criteria?.city?.trim().toLowerCase();
-  const filtered = jobs.filter(j => {
-    const blob = `${j.company || ''} ${j.position || ''} ${j.jd || ''} ${j.requirements || ''}`.toLowerCase();
-    if (kw.length && !kw.some(k => blob.includes(k))) return false;
+  const blobOf = (j: any) =>
+    `${j.company || ''} ${j.position || ''} ${j.jd || ''} ${j.requirements || ''}`.toLowerCase();
+
+  // 先做与关键词无关的过滤（城市 / 薪资 / 匹配分）
+  const baseFiltered = jobs.filter(j => {
+    const blob = blobOf(j);
     if (city && !((j.city || '').toLowerCase().includes(city) || blob.includes(city))) return false;
     if (input.criteria?.minSalary != null || input.criteria?.maxSalary != null) {
       const s = parseSalary(j.salary);
-      if (input.criteria.minSalary != null && s.max != null && s.max < input.criteria.minSalary) return false;
-      if (input.criteria.maxSalary != null && s.min != null && s.min > input.criteria.maxSalary) return false;
+      if (input.criteria!.minSalary != null && s.max != null && s.max < input.criteria!.minSalary) return false;
+      if (input.criteria!.maxSalary != null && s.min != null && s.min > input.criteria!.maxSalary) return false;
     }
     if (needScore && struct) {
       const score = scoreMap.get(j.id);
@@ -181,6 +223,11 @@ export async function runBatchApply(
     return true;
   });
 
+  // 关键词匹配：用「核心词」判定，避免「目标职位=后端开发工程师」被标题为
+  // 「java开发工程师」的岗位整池误杀（原实现是严格全词 substring 匹配）。
+  const kwMatch = (j: any) => kw.some(k => kwTokens(k).some(t => blobOf(j).includes(t)));
+  const filtered = kw.length ? baseFiltered.filter(kwMatch) : baseFiltered;
+
   // 5) 排序：匹配分降序
   filtered.sort((a, b) => (b.match_score ?? -1) - (a.match_score ?? -1));
 
@@ -188,7 +235,20 @@ export async function runBatchApply(
   const picked = filtered.slice(0, limit);
   const intervalMs = Math.max(0, Number(input.intervalMs ?? 20000));
 
-  onEvent?.({ type: 'start', total: picked.length, message: `开始批量投递，共 ${picked.length} 个岗位` });
+  // 起始事件：total=0 时明确告知「为什么没有岗位」，不让用户对着「共 0 个岗位」干瞪眼。
+  let startMsg: string;
+  if (picked.length > 0) {
+    startMsg = `开始批量投递，共 ${picked.length} 个岗位`;
+  } else if (jobs.length === 0) {
+    startMsg = `未找到可投岗位：该来源岗位库为空，请先采集岗位后再投`;
+  } else if (jobs.filter(j => j.status !== 'applied').length === 0) {
+    startMsg = `未找到可投岗位：该来源 ${jobs.length} 个岗位都已投递过（已按「跳过已投」过滤），请采集新岗位后再投`;
+  } else if (kw.length && baseFiltered.length > 0 && baseFiltered.filter(kwMatch).length === 0) {
+    startMsg = `未找到可投岗位：${baseFiltered.length} 个未投岗位没有一个匹配「目标职位」（${kw.join('、')}）。可在「我的档案」放宽/清空目标职位，或采集更多岗位后再投`;
+  } else {
+    startMsg = `未找到可投岗位：其余未投岗位被筛选条件（城市/薪资/匹配分）过滤掉了`;
+  }
+  onEvent?.({ type: 'start', total: picked.length, message: startMsg });
 
   // 6) 逐个投递
   const results: BatchItemResult[] = [];
@@ -275,8 +335,10 @@ export async function runBatchApply(
       });
     } else if (res.status === 'unavailable') {
       // 岗位本身不可投（已下线 / 校招需单独简历 / 链接失效重定向），
-      // 不是脚本错误，计入 skipped，避免污染失败数。
+      // 不是脚本错误，计入 skipped，避免污染失败数；并把状态落库，
+      // 这样下次批量连投不会再把它选出来反复重试。
       skipped++;
+      try { db.updateJob(job.id, { status: 'unavailable' }); } catch { /* 落库失败不阻断主流程 */ }
       results.push({
         jobId: job.id,
         company: res.company || job.company,
@@ -308,4 +370,7 @@ export async function runBatchApply(
   };
   onEvent?.({ type: 'done', summary });
   return summary;
+  } finally {
+    release(lockKey, lockHolder);
+  }
 }

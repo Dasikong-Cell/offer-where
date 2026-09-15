@@ -146,6 +146,101 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 
 ---
 
+## 脚本工具速查（scripts/）
+
+所有脚本用 `tsx scripts/<name>.ts [参数]` 运行（项目自带 tsx）。浏览器类脚本统一调用后端 `POST /api/browser/exec`（平台优先的 `ex()` / 平台固定的 `makeEx()`，见下）。
+
+### 统一浏览器执行封装 `scripts/lib/browser.ts`（2026-09-12 新增）
+
+> ⚠️ **踩坑修复**：历史上散落 N 处本地 `ex()` 副本，签名不一致（2 参 `ex(platform, {action})` 与 3 参 `ex(platform, action, args)` 混用）。一旦「定义了 2 参却按 3 参调用」，action 被丢进字符串 spread，后端收不到 action → 400「缺少 action 参数」、`.data` 恒 `undefined`，采集/投递在静默中全失败（offerbiu 扫描曾恒返回 0 条）。
+>
+> 现统一为 `scripts/lib/browser.ts`：
+> - `ex(platform, { action, ... })` 与 `ex(platform, action, args)` **两种写法都支持**；
+> - 平台固定时 `const ex = makeEx('boss')`；
+> - **缺 `action` 直接抛错**（reject），不再静默失败。
+>
+> 新脚本请 `import { ex, makeEx } from './lib/browser.ts'`，不要再本地定义 `ex`。
+
+### 运维 / 体检
+
+| 脚本 | 用途 |
+|---|---|
+| `ensure_chrome.sh` | 一键幂等拉起 5 个 CDP 调试窗口（boss/liepin/job51/zhilian/official），机器休眠/重启后服务端与 CDP 一起掉时首先跑它 |
+| `healthcheck.ts` | 一键体检：后端可达性 / 各平台连接 / 岗位池数量 / 邮箱配置是否就绪 |
+| `check_logins.ts` | 并行检查各平台登录态（各平台独立 tab，互不干扰） |
+| `focus_login.ts <platform> [url]` | 把指定平台调试窗口导航到登录页并置顶，引导用户登录/收验证码 |
+
+### 岗位采集
+
+| 脚本 | 用途 |
+|---|---|
+| `collect_multi.ts <平台,逗号> [每平台目标数]` | 多平台搜索列表页采集（job51/liepin/boss），写库 `status=candidate` |
+| `collect_51job.ts` | 51job 两级采集（列表→公司页→岗位直链，规避 SPA 拿不到直链） |
+| `collect_boss.ts` | BOSS 搜索列表页直采（卡片自带岗位详情链接） |
+| `offerbiu_search.ts [关键词] [页数] [入库1/0]` | offerbiu **免登录**定向采集：按关键词搜 companies，解码「投递入口」得真实官网，入库软件岗 |
+| `offerbiu_scan.ts` | offerbiu 免登录扫 companies 页，按软件相关筛选入库 |
+
+### 投递
+
+| 脚本 | 用途 |
+|---|---|
+| `apply_job51.ts` | 51job 投递，**自动跳过校招/应届生岗**（校招需单独简历、跳应届生求职网必失败） |
+| `apply_one_offerbiu.ts` | offerbiu **一次只投一个**岗位（避免频繁跳站，符合「一次一个」操作约定） |
+| `offerbiu_apply.ts` / `send_offerbiu_one.ts` | offerbiu 投递编排 / 单岗投递（官网网申 + 微信推文→HR 邮箱通道） |
+
+### 自动回复（HR 复聊）
+
+| 脚本 | 用途 |
+|---|---|
+| `auto_reply_boss.ts [--send] [--unread] [--limit=N] [--name=张三,李四] [--no-ai]` | BOSS 自动复聊；默认**预览**（不发送），`--send` 真实发送 |
+| `auto_reply_liepin.ts` | 猎聘版，参数同上 |
+| `test_auto_reply.ts` | 回归测试：意图识别 / 护栏（去重、超 8 轮转人工）/ **历史上下文读取**（formatHistory 截最近 16 条） |
+
+> **自动回复读取上下文**：`readConversation()` 返回完整 HR/我 交替历史 → 运行器把 `history` 传入 `composeReplyWithAi` → 经 `formatHistory()` 取**最近 16 条**注入大模型 prompt，并附「承接上文、不重复、不矛盾」护栏。AI 未配置时回退规则模板（不消费历史）。回归测试见 `test_auto_reply.ts`。
+
+---
+
+## 反检测（绕过风控 / 减少反复登录）
+
+**根因**：裸 CDP 驱动的 Chrome 会暴露 `navigator.webdriver = true` 与 `cdc_*` 调试器变量，
+BOSS直聘 / 猎聘 / 51job 据此判定为自动化 → 强制重新登录、把页面清空为 `about:blank`、或弹风控墙。
+这正是「需要一直登录」的主因（profile 本身是持久化的，cookie 跨启动保留）。
+
+**已落地方案（2026-09-12）**：
+
+1. **启动参数加固**（3 个启动器 `start_cdp.bat` / `start_all.bat` / `ensure_chrome.sh`）：
+   新增 `--disable-blink-features=AutomationControlled --disable-infobars`，
+   让 Chrome 在 CDP 层就不把 `navigator.webdriver` 置真。
+2. **运行时反检测注入**（`server/services/cdpDriver.ts` 的 `STEALTH_SRC`）：
+   经 `Page.addScriptToEvaluateOnNewDocument` 在每个页面 `document_start` 阶段执行（**Page 域命令，
+   不开启 `Runtime.enable`**，因此不会触发 BOSS 对 `Runtime.enable` 的检测）。它：
+   - 抹掉 `cdc_*` 调试器指纹变量；
+   - 强制 `navigator.webdriver = false`（与启动参数双保险）；
+   - 移除 `__nightmare` / `__puppeteer_*` 等自动化全局标记；
+   - 补全 `window.chrome.runtime` 桩，避免站点据此判定非真实浏览器。
+   - 覆盖点：首次接触端点时对**所有已有标签（含「养熟」标签）**注入；新建标签同样注入。
+
+**验证方法**（后端重启后，对任一平台）：
+```bash
+# navigator.webdriver 应返回 false（改造前为 true）
+curl -s -X POST http://127.0.0.1:4400/api/browser/exec -H 'Content-Type: application/json' \
+  -d '{"platform":"boss","action":"navigate","url":"https://www.zhipin.com/"}'
+curl -s -X POST http://127.0.0.1:4400/api/browser/exec -H 'Content-Type: application/json' \
+  -d '{"platform":"boss","action":"eval","script":"navigator.webdriver"}'   # => {"data":false}
+```
+
+**生效条件**：
+- 改了 `cdpDriver.ts` 必须 **重启后端**（停 4400 再 `PORT=4400 tsx server/index.ts`）才会加载注入逻辑；
+- 启动参数只在**重新拉起 Chrome 窗口**时生效。运行时注入本身已足够把 `webdriver` 置否，
+  因此即便窗口是旧参数启动的，重启后端后新开/复用的标签也会拿到反检测。
+
+**已知边界（诚实说明）**：
+- 滑块验证码（如 51job 滑块风控）是**轨迹行为分析**，无法可靠自动绕过；本项目保持「人工介入」兜底，
+  不实现会显著提高封号风险的轨迹伪造。反检测只降低「环境指纹」层面的误判，不解决人为滑块。
+- 会话 token 仍有服务端 TTL，长时间挂机后偶发需重新登录属正常，非缺陷。
+
+---
+
 ## 开发
 
 ```bash

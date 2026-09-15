@@ -58,14 +58,8 @@ const host = new URL(url).host.replace(/^www\./, '');
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function ex(action: string, args: Record<string, any> = {}) {
-  const r = await fetch(`${API}/api/browser/exec`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ platform, action, ...args }),
-  });
-  return r.json() as Promise<Record<string, any>>;
-}
+import { makeEx } from './lib/browser.ts';
+const ex = makeEx(platform);
 
 async function listTargets(): Promise<any[]> {
   try {

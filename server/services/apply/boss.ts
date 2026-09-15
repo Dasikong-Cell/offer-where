@@ -59,6 +59,21 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       logs.step('登录态', true, '已登录');
     }
 
+    // 2.5) 岗位已下线 / 关闭检测：BOSS 关闭的岗位页面不存在「继续沟通」按钮，
+    //      只在正文显示「职位已关闭 / 该职位已暂停」等字样。提前识别直接判 unavailable，
+    //      避免走「找不到按钮 → need_manual」被批量连投反复重试同一岗位。
+    //      （登录流程可能重新导航过页面，故此处重新读取最新文本/URL，确保判断基于岗位页本身）
+    if (jobUrl) {
+      const freshText = await pageText(platform);
+      const freshUrl = await pageUrl(platform);
+      const closedMarkers = /(职位已关闭|该职位已关闭|职位已暂停|该职位已暂停|职位已下线|该职位已下线|该职位不存在|职位已招满|该职位已招满|该职位可能已)/;
+      if (closedMarkers.test(freshText + ' ' + freshUrl)) {
+        logs.step('岗位状态', false, `检测到岗位已下线/关闭，跳过投递：${(freshText || '').slice(0, 120)}`);
+        const shot = await tryScreenshot(platform);
+        return { platform, status: 'unavailable', message: '该岗位已下线/关闭，无法投递', logs: logs.logs, company, position, screenshot: shot };
+      }
+    }
+
     // 3) 发起沟通 / 投递
     if (jobUrl) {
       // 立即沟通（BOSS 投递入口）
@@ -84,12 +99,12 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       await sleep(2500);
 
       // 3.4) 二次确认弹窗：若与该 Boss 此前已沟通过，点「继续沟通」后 BOSS 会弹
-      //      「温馨提示：您与该Boss已沟通过，是否就新职位<岗位名>继续沟通？取消 / 沟通新职位」。
+      //      「温馨提示：是否就新职位<岗位名>继续沟通？取消 / 沟通新职位」。
       //      必须点「沟通新职位」才算就本岗位建立沟通，否则停在弹窗上，什么都没发生。
-      const switchJob = await bexec(platform, 'click', { text: '沟通新职位', timeout: 5000 }, logs, '确认「沟通新职位」');
-      if (switchJob.ok) {
+      //      （原生 JS 对话框由 cdpDriver 统一自动确认；此处专门处理这种 React 弹窗）
+      if (await dismissBossSwitchJobModal(platform, logs)) {
         logs.step('更换沟通职位', true, '该 Boss 此前已沟通过，已确认就本岗位继续沟通');
-        await sleep(2500);
+        await sleep(2000);
       }
 
       // 3.5) 点击后检测页面状态：可能进入聊天，也可能被引导到「完善在线简历 / 开通 VIP」页
@@ -119,9 +134,52 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       }
 
       // 情况 B：已进入聊天（或岗位页可直接沟通）—— 发送招呼语 + 附件简历
-      // 在聊天框发送招呼语（BOSS 需主动发消息才会建立沟通）
       const greeting = `您好，我对「${position || '该岗位'}」很感兴趣，这是我的简历，期待进一步沟通。`;
-      for (const sel of ['.chat-input', '#chat-input', 'textarea[placeholder*="沟通"]', 'div[contenteditable="true"]']) {
+
+      // 检测是否已真正进入聊天：URL 跳到聊天页 或 页面出现聊天输入框/会话列表（同页浮层也算）。
+      // ⚠️ 必须「轮询等待」而不是一次性判断：BOSS 是 SPA，点「继续沟通」后跳聊天页需要时间，
+      //    一次性判断偶尔会在跳转完成前就返回 false，导致明明投递成功却误报 need_manual
+      //    （实测同一岗位重跑即 applied）。waitMs>0 时最多轮询该时长。
+      const chatOpen = async (waitMs = 0): Promise<boolean> => {
+        const deadline = Date.now() + waitMs;
+        for (;;) {
+          const urlNow = await pageUrl(platform);
+          if (/web\/im|geek\/chat|chat\.|im\//.test(urlNow)) return true;
+          const r = await bexec(platform, 'eval', {
+            script: "!!document.querySelector('.chat-input') || !!document.querySelector('div[contenteditable=true]') || !!document.querySelector('.chat-conversation') || !!document.querySelector('.chat-user')",
+          }, undefined, '检测聊天框');
+          if (r.data) return true;
+          if (Date.now() >= deadline) return false;
+          await sleep(1000);
+        }
+      };
+
+      // 首轮「继续沟通」点击可能未被页面接收（页面未就绪 / 首点被吞），
+      // 这里确认聊天是否真正打开，未打开则补点一次「继续沟通 + 沟通新职位」。
+      let opened = await chatOpen(6000);
+      if (!opened) {
+        for (const label of labels) {
+          const rr = await bexec(platform, 'click', { text: label, timeout: 8000 }, logs, `补点「${label}」`);
+          if (rr.ok) break;
+        }
+        await sleep(2500);
+        if (await dismissBossSwitchJobModal(platform, logs)) {
+          logs.step('更换沟通职位', true, '补点后确认就本岗位继续沟通');
+          await sleep(2000);
+        }
+        opened = await chatOpen(6000);
+      }
+      if (!opened) {
+        const shot = await tryScreenshot(platform);
+        const page = await pageText(platform);
+        logs.step('诊断', false, `点击沟通后仍未进入聊天：${page.slice(0, 300)}`);
+        return { platform, status: 'need_manual', message: '点击「继续沟通」后未能进入聊天，可能页面结构变化或需人工过验证', logs: logs.logs, company, position, screenshot: shot };
+      }
+
+      // 在聊天框发送招呼语（BOSS 需主动发消息才会建立沟通）。
+      // 注意：.chat-input 是包着 contenteditable 的容器 div，直接 fill 无效，
+      // 必须优先填内部的 contenteditable 节点，否则招呼语写不进去。
+      for (const sel of ['div[contenteditable="true"]', '.chat-input [contenteditable]', '.chat-input', '#chat-input', 'textarea[placeholder*="沟通"]']) {
         const fr = await bexec(platform, 'fill', { selector: sel, value: greeting, timeout: 5000 }, logs, '填写招呼语');
         if (fr.ok) break;
       }
@@ -138,10 +196,10 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       const finalUrl = await pageUrl(platform);
       const shot = await tryScreenshot(platform);
       logs.step('最终URL', true, finalUrl);
-      // 「继续沟通」成功会跳进聊天页；仍停在 JD 页说明沟通并未建立。
+      // 「继续沟通」成功会跳进聊天页或弹出同页聊天浮层；仍停在 JD 页且无聊天框说明沟通未建立。
       // ⚠️ 不能只用 /沟通/.test(text) 判定成功：JD 页正文天然含「继续沟通」按钮文案，
       //    那样会让「点了按钮但没有任何效果」也被误报成 applied。
-      const enteredChat = /web\/im|geek\/chat|chat\.|im\//.test(finalUrl);
+      const enteredChat = await chatOpen();
       const ok = enteredChat || /(已发送|发送成功|简历已送达|沟通中|附件已|已发送给您)/.test(text);
       if (ok) {
         return { platform, status: 'applied', message: `已在 BOSS 向「${company || position || '该岗位'}」发起沟通并发送附件简历`, logs: logs.logs, company, position, screenshot: shot };
@@ -156,6 +214,30 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
     const shot = await tryScreenshot(platform).catch(() => undefined);
     return { platform, status: 'error', message: e?.message || String(e), logs: logs.logs, company, position, screenshot: shot };
   }
+}
+
+/**
+ * 关闭 BOSS「二次确认」弹窗：与某 Boss 此前已沟通过时点「继续沟通」会弹出
+ * 「温馨提示：是否就新职位<岗位名>继续沟通？取消 / 沟通新职位」。
+ * 必须点「沟通新职位」才就本岗位建立沟通，否则停在弹窗上、什么都没发生。
+ * 该弹窗出现时机不稳定（偶发延迟 1~3s），且按钮文案可能带细微差异，
+ * 故先等弹窗渲染、再用多候选文案各试一次，命中即确认并返回 true。
+ * （注意：原生 JS 对话框不归此函数管，由 cdpDriver 统一自动确认。）
+ */
+async function dismissBossSwitchJobModal(platform: string, logs: ApplyLogger): Promise<boolean> {
+  const labels = ['沟通新职位', '沟通新岗位', '确认沟通新职位', '就新职位沟通'];
+  await sleep(1500); // 等弹窗渲染
+  for (const label of labels) {
+    // 探测性点击：多数岗位不会弹该窗口，失败属正常，故不写日志（否则每次投递都会
+    // 刷出 4 行「未找到可点击元素」的 FAIL，看着像出错、也淹没真正的失败步骤）。
+    const r = await bexec(platform, 'click', { text: label, timeout: 800 }, undefined, undefined);
+    if (r.ok) {
+      logs.step('二次确认弹窗', true, `已点「${label}」确认就本岗位沟通`);
+      await sleep(1500);
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

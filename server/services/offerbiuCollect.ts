@@ -65,8 +65,12 @@ export async function collectOfferbiu(limit = 50): Promise<{ collected: number; 
   if (!home.ok) throw new Error('打开 Offerbiu 失败：' + home.error);
   const loginCheck = await execAction('offerbiu', 'eval', { script: LOGIN_DETECT });
   const needLogin = (loginCheck.data as any)?.needLogin;
+  // 重要修正（2026-09-12）：companies 页的岗位列表对匿名用户可见，
+  // 页面顶部存在「登录/注册」入口**不代表**内容被锁。
+  // 旧版在此直接 throw，导致免登录采集被完全阻断（实测可正常浏览 801 页 / 7203 条）。
+  // 现在仅提示并继续采集；若确实取不到列表再考虑登录。
   if (needLogin) {
-    throw new Error('Offerbiu 尚未登录：请在自动打开的浏览器窗口中登录（或访问 https://offerbiu.com/login 完成登录），登录态会持久化，关闭后再次点击采集即可。');
+    console.warn('[offerbiu] 当前未登录；岗位列表仍可公开浏览，继续采集（若列表为空再考虑登录）');
   }
 
   // 2) 进入校招信息库（推荐岗位）

@@ -1,9 +1,5 @@
 /* 并行探测 51job / 猎聘 搜索列表页 DOM：岗位链接、卡片结构、职位名/公司名选择器 */
-const B = 'http://127.0.0.1:4400/api/browser/exec';
-const ex = (platform: string, b: any) => fetch(B, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ platform, ...b }),
-}).then((r) => r.json());
+import { ex } from './lib/browser.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function probe(p: string, url: string, reSrc: string) {

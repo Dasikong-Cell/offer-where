@@ -153,6 +153,10 @@
         <label>只投最近发布的岗位（分钟，0=不限）</label>
         <input type="number" id="since" value="0" min="0" />
       </div>
+      <div class="field" style="flex-basis:100%">
+        <label>目标职位（逗号分隔，如「Java,前端开发」；留空=不限职位，按这些词筛选投递）</label>
+        <input type="text" id="expectedPositions" placeholder="Java,前端开发,Java开发工程师" />
+      </div>
     </div>
   </div>
 
@@ -203,6 +207,66 @@
       <button class="primary" id="btnReplyStart">开始自动回复</button>
       <button id="btnReplyStop" disabled>停止</button>
     </div>
+    <div class="fields" style="margin-top:12px">
+      <div class="field">
+        <label>AI 助手名称（标记「这是 AI 回复」用）</label>
+        <input type="text" id="aiName" value="懒懒" />
+      </div>
+      <div class="field" style="align-self:end">
+        <label class="checkline"><input type="checkbox" id="signAi" checked /> 在回复中标注 AI 身份（如「【懒懒】」）</label>
+      </div>
+    </div>
+    <div class="sub" style="margin-top:10px">仅回复与「目标职位」相关的 HR（职位设置见上方②）；不相关职位不自动回复。AI 名称与署名会随开始投递/自动回复时自动保存到档案。</div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:8px"><b>自动监视（后台按时效回复）</b>：开启后后端每间隔一段时间自动检查未读/未回的 HR 消息并回复，HR 来消息不必手动点。</div>
+    <div id="watchBadge" class="badge" style="margin-bottom:8px">监视器：检测中…</div>
+    <div class="fields">
+      <div class="field">
+        <label>监视平台（逗号分隔）</label>
+        <input type="text" id="watchPlatforms" value="boss,liepin" />
+      </div>
+      <div class="field">
+        <label>检查间隔（秒）</label>
+        <input type="number" id="watchInterval" value="180" min="30" max="3600" />
+      </div>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <label class="checkline"><input type="checkbox" id="watchRealSend" checked /> 直接真实发送（否则仅记录）</label>
+      <label class="checkline"><input type="checkbox" id="watchUseAi" checked /> AI 生成话术</label>
+      <button class="primary" id="btnWatchStart">开启监视</button>
+      <button id="btnWatchStop" disabled>关闭监视</button>
+      <button id="btnWatchStatus">刷新状态</button>
+    </div>
+    <div id="watchStatusLine" class="sub" style="margin-top:8px"></div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:8px"><b>自动投递监视（后台自动连投）</b>：开启后后端每间隔一段时间自动对该平台投一批岗位（默认每轮 10 个、已投过自动跳过）。与「自动回复监视」互斥占用浏览器，互不打架——一方运行时另一方自动让路。</div>
+    <div id="applyWatchBadge" class="badge" style="margin-bottom:8px">投递监视器：检测中…</div>
+    <div class="fields">
+      <div class="field">
+        <label>投递平台（逗号分隔）</label>
+        <input type="text" id="applyWatchPlatforms" value="boss" />
+      </div>
+      <div class="field">
+        <label>筛选关键词（空=全部）</label>
+        <input type="text" id="applyWatchKeyword" placeholder="如 Java 后端" />
+      </div>
+      <div class="field">
+        <label>每轮投递数</label>
+        <input type="number" id="applyWatchLimit" value="10" min="1" max="100" />
+      </div>
+      <div class="field">
+        <label>检查间隔（秒）</label>
+        <input type="number" id="applyWatchInterval" value="600" min="60" max="7200" />
+      </div>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button class="primary" id="btnApplyWatchStart">开启自动投递</button>
+      <button id="btnApplyWatchStop" disabled>关闭自动投递</button>
+      <button id="btnApplyWatchStatus">刷新状态</button>
+    </div>
+    <div id="applyWatchStatusLine" class="sub" style="margin-top:8px"></div>
   </div>
 </div>
 
@@ -319,8 +383,9 @@ $('#btnStop').onclick = () => {
 function handleEvent(e, pfName) {
   switch (e.type) {
     case 'start':
-      line(`${pfName}：${esc(e.message)}`, 'info');
-      $('#progressText').textContent = `${pfName} 0/${e.total}`;
+      // total=0 时后端会给出「为什么没有岗位」的原因说明，用警示色突出，避免用户以为脚本坏了
+      line(`${pfName}：${esc(e.message)}`, e.total ? 'info' : 'warn');
+      $('#progressText').textContent = e.total ? `${pfName} 0/${e.total}` : `${pfName} 无岗位`;
       break;
     case 'progress':
       $('#progressText').textContent = `${pfName} ${e.index}/${e.total}`;
@@ -337,26 +402,31 @@ function handleEvent(e, pfName) {
       break;
     case 'done': {
       const s = e.summary || {};
-      line(`${pfName} 完成：成功 ${s.applied ?? 0}，跳过 ${s.skipped ?? 0}，失败 ${s.failed ?? 0}`, 'ok');
+      // 批量结果里的失败计数字段是 error（此前误写成 failed，导致「失败」恒显示 0）
+      const failed = s.error ?? s.failed ?? 0;
+      line(`${pfName} 完成：成功 ${s.applied ?? 0}，跳过 ${s.skipped ?? 0}，失败 ${failed}`, 'ok');
       break;
     }
     case 'error':
       line(`✖ ${esc(e.message || '未知错误')}`, 'err');
       break;
     default:
-      line(esc(JSON.stringify(e)), 'dim');
+      // 流尾会收到一个空对象（event: end），忽略以免打印无意义的 "{}"
+      if (e && Object.keys(e).length) line(esc(JSON.stringify(e)), 'dim');
   }
 }
 
 async function runPlatform(pf, limit, intervalMs, sinceMinutes) {
   controller = new AbortController();
+  // 目标职位 → 投递筛选关键词
+  const kwRaw = ($('#expectedPositions').value || '').split(/[,，、;；]+/).map(s => s.trim()).filter(Boolean);
   const res = await fetch(API_BASE + '/api/apply/batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       // source 必须一起传：引擎按 source 过滤岗位库，只传 platform 会串平台
       platform: pf, source: pf, limit, intervalMs, stream: true,
-      criteria: { excludeApplied: true },
+      criteria: { excludeApplied: true, ...(kwRaw.length ? { keywords: kwRaw } : {}) },
       ...(sinceMinutes > 0 ? { sinceMinutes } : {}),
     }),
     signal: controller.signal,
@@ -487,20 +557,20 @@ function handleReplyEvent(ev) {
       line(`  跳过(${ev.reason}) ${ev.name || ''}`, 'warn');
       break;
     case 'intent':
-      line(`  意图=${ev.intent} 轮次=${ev.round}${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}${ev.stop ? ` ｜停止: ${ev.stop}` : ''}`, 'info');
+      line(`  意图=${ev.intent} 轮次=${ev.round}${aiTag(ev)}${ev.stop ? ` ｜停止: ${ev.stop}` : ''}`, 'info');
       line(`  回复: ${ev.reply || '(无)'}`, '');
       break;
     case 'dry':
-      line(`  [预览] 不发送 ${ev.name || ''}${ev.ai === 'ai' ? ' [AI]' : ev.ai === 'rule' ? ' [规则]' : ''}`, 'warn');
+      line(`  [预览] 不发送 ${ev.name || ''}${aiTag(ev)}`, 'warn');
       break;
     case 'send-resume':
       line(`  发简历 ${ev.ok ? 'ok' : 'fail'} ${ev.name || ''}`, ev.ok ? 'ok' : 'err');
       break;
     case 'send-text':
-      line(`  发文本 ${ev.ok ? 'ok' : 'fail'} ${ev.name || ''}`, ev.ok ? 'ok' : 'err');
+      line(`  发文本 ${ev.ok ? 'ok' : 'fail'} ${ev.name || ''}${aiTag(ev)}`, ev.ok ? 'ok' : 'err');
       break;
     case 'sent':
-      line(`  ✓ 已回复 ${ev.name}`, 'ok');
+      line(`  ✓ 已回复 ${ev.name}${aiTag(ev)}`, 'ok');
       break;
     case 'aborted':
       line('已手动停止', 'warn');
@@ -520,12 +590,17 @@ async function runAutoReply() {
   const useAi = $('#replyUseAi').checked;
   const limit = Number($('#replyLimit').value) || 0;
   const realSend = $('#replyMode').value === 'send';
+  const aiName = ($('#aiName').value || '懒懒').trim() || '懒懒';
+  const signAi = $('#signAi').checked;
+  // 把 AI 名称 / 署名开关 / 目标职位持久化到档案，便于后端 runner 读取
+  await saveProfileFields({ aiName, signAi, expectedPositions: ($('#expectedPositions').value || '').trim() }).catch(() => {});
   const params = new URLSearchParams({
     platform,
     unreadOnly: unreadOnly ? '1' : '0',
     limit: String(limit),
     realSend: realSend ? '1' : '0',
     useAi: useAi ? '1' : '0',
+    ...(signAi ? {} : { signAi: '0' }),
   });
 
   replyController = new AbortController();
@@ -577,8 +652,199 @@ $('#btnReplyStop').onclick = () => {
   line('已请求停止自动回复。', 'warn');
 };
 
+// ===== 自动回复常驻监视器 =====
+function renderWatchStatus(s) {
+  const badge = $('#watchBadge');
+  if (!s) { badge.textContent = '监视器：未知'; badge.className = 'badge'; return; }
+  if (s.running) { badge.textContent = '监视器：运行中'; badge.className = 'badge ok'; }
+  else { badge.textContent = '监视器：已关闭'; badge.className = 'badge'; }
+  let txt = `状态=${s.running ? '运行' : '关闭'} 间隔=${s.intervalSec}s 平台=${s.platforms.join(',')} 真实发送=${s.realSend ? '是' : '否'} AI=${s.useAi ? '是' : '否'}`;
+  const lr = s.lastRun || {};
+  const parts = Object.keys(lr).map((p) => `${p}:${lr[p].error ? '错误' : `发${lr[p].sent}/跳${lr[p].skipped}`}`);
+  if (parts.length) txt += ` ｜ 上次[${parts.join('  ')}]`;
+  $('#watchStatusLine').textContent = txt;
+}
+
+async function refreshWatchStatus() {
+  try {
+    const r = await fetch(API_BASE + '/api/auto-reply/watch/status');
+    renderWatchStatus(await r.json());
+  } catch (e) {
+    $('#watchBadge').textContent = '监视器：连接失败';
+    $('#watchBadge').className = 'badge err';
+  }
+}
+
+$('#btnWatchStart').onclick = async () => {
+  const platforms = ($('#watchPlatforms').value || 'boss,liepin').split(',').map((s) => s.trim()).filter(Boolean);
+  const intervalSec = Number($('#watchInterval').value) || 180;
+  const realSend = $('#watchRealSend').checked;
+  const useAi = $('#watchUseAi').checked;
+  try {
+    await fetch(API_BASE + '/api/auto-reply/watch/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platforms, intervalSec, realSend, useAi }),
+    });
+    const r = await fetch(API_BASE + '/api/auto-reply/watch/start', { method: 'POST' });
+    const j = await r.json();
+    renderWatchStatus(j.status);
+    line(`已开启自动监视：平台=${platforms.join(',')} 间隔=${intervalSec}s 真实发送=${realSend}`, 'ok');
+    $('#btnWatchStart').disabled = true;
+    $('#btnWatchStop').disabled = false;
+  } catch (e) {
+    line('开启监视失败：' + esc(e.message), 'err');
+  }
+};
+
+$('#btnWatchStop').onclick = async () => {
+  try {
+    const r = await fetch(API_BASE + '/api/auto-reply/watch/stop', { method: 'POST' });
+    const j = await r.json();
+    renderWatchStatus(j.status);
+    line('已关闭自动监视。', 'warn');
+    $('#btnWatchStart').disabled = false;
+    $('#btnWatchStop').disabled = true;
+  } catch (e) {
+    line('关闭监视失败：' + esc(e.message), 'err');
+  }
+};
+
+$('#btnWatchStatus').onclick = refreshWatchStatus;
+
+// 订阅监视器实时日志（SSE），写入同一日志区
+(function watchSse() {
+  try {
+    const es = new EventSource(API_BASE + '/api/auto-reply/watch');
+    es.onmessage = (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.type === 'status') { renderWatchStatus(d); return; }
+        if (d.type === 'tick') {
+          if (d.kind === 'start') line(`[监视] 开始检查：${d.platforms ? d.platforms.join(',') : ''}`, 'info');
+          else if (d.kind === 'platform-done') line(`[监视] ${d.platform} 完成：发${d.sent}/跳${d.skipped}`, 'ok');
+          else if (d.kind === 'platform-error') line(`[监视] ${d.platform} 出错：${d.error}`, 'err');
+          else if (d.kind === 'end') line('[监视] 本轮检查结束', 'info');
+        }
+      } catch (_) { /* ignore */ }
+    };
+    es.onerror = () => { /* 断线由浏览器自动重连，无需处理 */ };
+  } catch (_) { /* 不支持则忽略 */ }
+})();
+
+// ===== 自动投递常驻监视器 =====
+function renderApplyWatchStatus(s) {
+  const badge = $('#applyWatchBadge');
+  if (!s) { badge.textContent = '投递监视器：未知'; badge.className = 'badge'; return; }
+  if (s.running) { badge.textContent = '投递监视器：运行中'; badge.className = 'badge ok'; }
+  else { badge.textContent = '投递监视器：已关闭'; badge.className = 'badge'; }
+  let txt = `状态=${s.running ? '运行' : '关闭'} 间隔=${s.intervalSec}s 平台=${s.platforms.join(',')} 每轮=${s.limit} 关键词=${s.keyword || '(全部)'}`;
+  const lr = s.lastRun || {};
+  const parts = Object.keys(lr).map((p) => `${p}:${lr[p].error ? '错误' : `投${lr[p].applied}/跳${lr[p].skipped}`}`);
+  if (parts.length) txt += ` ｜ 上次[${parts.join('  ')}]`;
+  $('#applyWatchStatusLine').textContent = txt;
+}
+async function refreshApplyWatchStatus() {
+  try {
+    const r = await fetch(API_BASE + '/api/auto-apply/watch/status');
+    renderApplyWatchStatus(await r.json());
+  } catch (e) {
+    $('#applyWatchBadge').textContent = '投递监视器：连接失败';
+    $('#applyWatchBadge').className = 'badge err';
+  }
+}
+$('#btnApplyWatchStart').onclick = async () => {
+  const platforms = ($('#applyWatchPlatforms').value || 'boss').split(',').map((s) => s.trim()).filter(Boolean);
+  const intervalSec = Number($('#applyWatchInterval').value) || 600;
+  const limit = Number($('#applyWatchLimit').value) || 10;
+  const keyword = ($('#applyWatchKeyword').value || '').trim();
+  try {
+    await fetch(API_BASE + '/api/auto-apply/watch/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platforms, intervalSec, limit, keyword }),
+    });
+    const r = await fetch(API_BASE + '/api/auto-apply/watch/start', { method: 'POST' });
+    const j = await r.json();
+    renderApplyWatchStatus(j.status);
+    line(`已开启自动投递监视：平台=${platforms.join(',')} 间隔=${intervalSec}s 每轮=${limit}`, 'ok');
+    $('#btnApplyWatchStart').disabled = true;
+    $('#btnApplyWatchStop').disabled = false;
+  } catch (e) {
+    line('开启自动投递失败：' + esc(e.message), 'err');
+  }
+};
+$('#btnApplyWatchStop').onclick = async () => {
+  try {
+    const r = await fetch(API_BASE + '/api/auto-apply/watch/stop', { method: 'POST' });
+    const j = await r.json();
+    renderApplyWatchStatus(j.status);
+    line('已关闭自动投递监视。', 'warn');
+    $('#btnApplyWatchStart').disabled = false;
+    $('#btnApplyWatchStop').disabled = true;
+  } catch (e) {
+    line('关闭自动投递失败：' + esc(e.message), 'err');
+  }
+};
+$('#btnApplyWatchStatus').onclick = refreshApplyWatchStatus;
+(function applyWatchSse() {
+  try {
+    const es = new EventSource(API_BASE + '/api/auto-apply/watch');
+    es.onmessage = (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.type === 'status') { renderApplyWatchStatus(d); return; }
+        if (d.type === 'tick') {
+          if (d.kind === 'start') line(`[投递监视] 开始：${d.platforms ? d.platforms.join(',') : ''}`, 'info');
+          else if (d.kind === 'platform-done') line(`[投递监视] ${d.platform} 完成：投${d.applied}/跳${d.skipped}`, 'ok');
+          else if (d.kind === 'platform-error') line(`[投递监视] ${d.platform} 出错：${d.error}`, 'err');
+          else if (d.kind === 'end') line('[投递监视] 本轮投递结束', 'info');
+        }
+      } catch (_) { /* ignore */ }
+    };
+    es.onerror = () => {};
+  } catch (_) { /* ignore */ }
+})();
+refreshApplyWatchStatus();
+
+refreshWatchStatus();
+
 pollStatus();
 setInterval(pollStatus, 5000);
+
+// AI 回复来源标记（如「[AI·懒懒]」），用于日志直观区分 AI / 规则回复与署名身份
+function aiTag(ev) {
+  const base = ev.ai === 'ai' ? 'AI' : ev.ai === 'rule' ? '规则' : '';
+  if (!base) return '';
+  return ev.aiName ? ` [${base}·${ev.aiName}]` : ` [${base}]`;
+}
+
+// 把 AI 名称 / 署名开关 / 目标职位持久化到档案（后端 runner / 批量投递都读档案）
+async function saveProfileFields(patch) {
+  const cur = await (await fetch(API_BASE + '/api/profile')).json().catch(() => ({ profile: {} }));
+  const merged = { ...(cur.profile || {}), ...patch };
+  const r = await fetch(API_BASE + '/api/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile: merged }),
+  });
+  if (!r.ok) throw new Error('保存档案失败 ' + r.status);
+}
+
+// 加载档案，预填「目标职位 / AI 名称 / 署名开关」
+async function loadProfile() {
+  try {
+    const cur = await (await fetch(API_BASE + '/api/profile')).json().catch(() => ({ profile: {} }));
+    const p = cur.profile || {};
+    if (p.expectedPositions != null) $('#expectedPositions').value = p.expectedPositions;
+    if (p.aiName) $('#aiName').value = p.aiName;
+    if (typeof p.signAi === 'boolean') $('#signAi').checked = p.signAi;
+  } catch (_) { /* 忽略，使用默认值 */ }
+}
+loadProfile();
+
+// 开始投递时把目标职位同步进档案，便于后端 runner 做相关性过滤
+$('#btnStart').addEventListener('click', () => {
+  saveProfileFields({ expectedPositions: ($('#expectedPositions').value || '').trim() }).catch(() => {});
+}, true);
 
 // 拉取 AI 话术能力状态，联动控制台徽标与「AI 生成话术」开关
 async function refreshAiStatus() {

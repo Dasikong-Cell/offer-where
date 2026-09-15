@@ -206,7 +206,8 @@ async function getSession(
   }
 
   const page = context.pages()[0] || (await context.newPage());
-  try { await page.bringToFront(); } catch { /* 忽略 */ }
+  // 不再自动置顶：置顶会把用户已最小化的窗口重新弹出（与 cdpDriver 保持一致）。
+  // 需要展示给用户的场景请显式调用 'bringToFront' 动作。
   const session: BrowserSession = { platform: key, context, page, createdAt: Date.now() };
   sessions.set(key, session);
   return session;
@@ -303,7 +304,8 @@ export async function execAction(
           }
         } catch { /* 忽略 */ }
 
-        try { await page.bringToFront(); } catch { /* 忽略 */ }
+        // 导航后不再置顶：与 cdpDriver 保持一致，避免把用户已最小化的窗口反复弹回来
+        // （批量投递每投一个岗位都要导航一次，置顶等于每个岗位都弹一次窗口）。
         return okResult(page);
       }
 

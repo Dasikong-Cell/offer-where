@@ -34,8 +34,8 @@ export interface ChatDriver {
   listConversations(): Promise<ConvSummary[]>;
   /** 按 key 打开某个会话；返回是否打开成功 */
   openConversation(key: string): Promise<boolean>;
-  /** 读取当前会话全部消息，区分 HR / 我，返回最新一条 HR 消息 */
-  readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string }>;
+  /** 读取当前会话全部消息，区分 HR / 我，返回最新一条 HR 消息与 HR 发布的职位 */
+  readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string; position?: string | null }>;
   /** 在输入框输入并发送纯文本 */
   sendText(text: string): Promise<boolean>;
   /** 发送简历附件（在线简历 / 已导入的本地 PDF） */

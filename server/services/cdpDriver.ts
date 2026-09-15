@@ -68,6 +68,16 @@ async function closeStrayBlankTabs(endpoint: string): Promise<void> {
     for (const t of targetInfos || []) {
       if (t.type === 'page' && (t.url === 'about:blank' || t.url === 'chrome://newtab/' || t.url === '')) {
         try { await send(bs, 'Target.closeTarget', { targetId: t.targetId }); } catch { /* 忽略 */ }
+      } else if (t.type === 'page' && t.webSocketDebuggerUrl) {
+        // 2026-09-12 反检测：首次接触端点时，给每个已有页面标签（含「养熟」标签）
+        // 注入 anti-bot 脚本，无需重建标签即可抹掉自动化特征。
+        try {
+          const tws = await connect(t.webSocketDebuggerUrl);
+          const ts = attachSession(tws, '__stealth__');
+          await send(ts, 'Page.enable');
+          await send(ts, 'Page.addScriptToEvaluateOnNewDocument', { source: STEALTH_SRC });
+          try { tws.close(); } catch { /* 忽略 */ }
+        } catch { /* 忽略 */ }
       }
     }
     try { ws.close(); } catch { /* 忽略 */ }
@@ -118,6 +128,62 @@ function __findEl(opts){
 }
 `;
 
+/**
+ * 反检测注入脚本（在页面 document_start 阶段执行，早于站点自身脚本）。
+ * 仅用 Page 域的 addScriptToEvaluateOnNewDocument 注册，不开启 Runtime.enable，
+ * 因此不会触发 BOSS/猎聘对 Runtime.enable 的检测。
+ * 作用：
+ *  - 抹掉 Chrome 调试器注入的 cdc_ 变量（经典自动化指纹）
+ *  - 强制 navigator.webdriver = false（配合启动参数 AutomationControlled 双保险）
+ *  - 移除常见自动化全局标记（__nightmare / __puppeteer_* 等）
+ *  - 补全 window.chrome.runtime 桩，避免部分站点据此判定为非真实浏览器
+ * 注意：刻意不伪造 navigator.plugins / languages（伪造错误结构反而更可疑）。
+ */
+const STEALTH_SRC = `
+(function () {
+  'use strict';
+  try {
+    var keys = Object.getOwnPropertyNames(window);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k.indexOf('cdc_') === 0 || k.indexOf('$cdc_') === 0) { try { delete window[k]; } catch (e) {} }
+    }
+  } catch (e) {}
+  try {
+    var navProto = Object.getPrototypeOf(navigator);
+    Object.defineProperty(navProto || navigator, 'webdriver', { get: function () { return false; }, configurable: true });
+  } catch (e) {
+    try { Object.defineProperty(navigator, 'webdriver', { get: function () { return false; }, configurable: true }); } catch (e2) {}
+  }
+  try {
+    ['__nightmare','__puppeteer_evaluation_script__','__webdriver_evaluate__','__driver_evaluate__','__selenium_evaluate__','__fxdriver_evaluate__','_Selenium_IDE_Recorder'].forEach(function (m) {
+      try { delete window[m]; } catch (e) {}
+    });
+  } catch (e) {}
+  try {
+    if (!window.chrome) { window.chrome = {}; }
+    if (!window.chrome.runtime) {
+      window.chrome.runtime = {
+        connect: function () { return { onDisconnect: { addListener: function () {}, removeListener: function () {} }, onMessage: { addListener: function () {}, removeListener: function () {} }, postMessage: function () {} }; },
+        sendMessage: function () {},
+        onMessage: { addListener: function () {}, removeListener: function () {} },
+        getManifest: function () { return {}; },
+        getURL: function () { return ''; }
+      };
+    }
+  } catch (e) {}
+})();
+`;
+
+/** 给某个已连接的页面会话注入反检测脚本（幂等：重复调用只会多注册一份，无害） */
+async function installStealth(s: PageSession): Promise<void> {
+  try {
+    await send(s, 'Page.addScriptToEvaluateOnNewDocument', { source: STEALTH_SRC });
+  } catch {
+    // 注入失败不影响主流程（极少发生）
+  }
+}
+
 function httpReq(method: string, url: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const req = http.request(url, { method }, res => {
@@ -142,7 +208,7 @@ function connect(wsUrl: string): Promise<WebSocket> {
 
 function attachSession(ws: WebSocket, platform: string): PageSession {
   const s: PageSession = { platform, ws, nextId: 0, pending: new Map(), loadWaiters: [], createdAt: Date.now() };
-  ws.on('message', (data: WebSocket.RawData) => {
+  ws.on('message', async (data: WebSocket.RawData) => {
     let msg: any;
     try { msg = JSON.parse(data.toString()); } catch { return; }
     if (msg.id && s.pending.has(msg.id)) {
@@ -153,6 +219,16 @@ function attachSession(ws: WebSocket, platform: string): PageSession {
     } else if (msg.method === 'Page.loadEventFired') {
       const ws2 = s.loadWaiters.splice(0);
       ws2.forEach(fn => { try { fn(); } catch { /* ignore */ } });
+    } else if (msg.method === 'Page.javascriptDialogOpening') {
+      // BOSS/猎聘 在投递过程中可能弹出原生 JS 对话框（beforeunload 离开确认、
+      // alert 提示、confirm 二次确认等）。这类对话框会阻塞页面、使脚本卡住，
+      // 且用户在屏幕上能看到「弹出窗口」无人点击。这里一律自动确认（accept），
+      // 让自动化不被阻塞；同时打印日志便于排查具体弹了什么。
+      //   accept=true 语义：alert→关闭；confirm→点「确定/是」；
+      //   beforeunload→确认离开（导航放行）；prompt→以空值确认。
+      const dlg = (msg.params || {}) as { type?: string; message?: string; url?: string };
+      console.log(`[CDP ${platform}] 自动处理原生对话框: type=${dlg.type || '?'} message="${(dlg.message || '').slice(0, 200)}" url=${dlg.url || ''}`);
+      try { await send(s, 'Page.handleJavaScriptDialog', { accept: true }); } catch { /* 忽略 */ }
     }
   });
   ws.on('error', (err: Error) => {
@@ -202,8 +278,11 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   if (existing && !existing.dead && existing.ws.readyState === WebSocket.OPEN) {
     try {
       await send(existing, 'Runtime.evaluate', { expression: '1', returnByValue: true });
-      // 复用已有标签时，把当前平台的标签置顶，确保用户看到的是正在跑的这个平台
-      try { await send(existing, 'Page.bringToFront'); } catch { /* 忽略 */ }
+      // ⚠️ 这里**绝不能**调用 Page.bringToFront：本函数是每一次浏览器动作（click/fill/
+      // eval/screenshot…）的公共入口，一旦置顶，用户刚最小化的窗口会在下一个动作被立刻
+      // 弹回来，表现为「点了最小化没用、窗口又自己弹出来」。
+      // 自动化在后台标签同样能正常执行（Runtime.evaluate / 点击 / 截图 均不受前台与否影响），
+      // 确实需要展示给用户的场景（如登录页要人工过验证），由调用方显式使用 'bringToFront' 动作。
       return existing;
     }
     catch { sessions.delete(platform); }
@@ -227,8 +306,10 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   // 因此所有 JS 交互（click/fill/eval/screenshot 等）照常通过 Runtime.evaluate 完成，
   // 页面保持正常渲染。Page 域用于导航与 loadEventFired 等待。
   await send(s, 'Page.enable');
-  // 新标签创建后立刻置顶，让当前平台的标签成为窗口前台页
-  try { await send(s, 'Page.bringToFront'); } catch { /* 忽略 */ }
+  // 2026-09-12 反检测：新标签注入 anti-bot 脚本（Page 域，不触发 Runtime.enable 检测）
+  await installStealth(s);
+  // 新标签不再自动置顶：置顶会把用户已最小化的窗口重新弹出（同上）。
+  // 需要展示给用户的场景请显式调用 'bringToFront' 动作。
   sessions.set(platform, s);
   return s;
 }
@@ -329,8 +410,8 @@ export async function execCdpAction(
           if (check.url && check.url !== 'about:blank' && (check.title || '').trim() !== '') break;
           await new Promise(r => setTimeout(r, 800));
         }
-        // 导航完成后把当前平台标签置顶，确保它显示在前台而非藏在别的标签后面
-        try { await send(s, 'Page.bringToFront'); } catch { /* 忽略 */ }
+        // 导航后不再置顶（同上：避免把用户最小化的窗口弹回来）。
+        // 批量投递每投一个岗位都要导航一次，若在此置顶等于每个岗位都弹一次窗口。
         return last;
       }
       case 'click': {
@@ -388,8 +469,27 @@ export async function execCdpAction(
         const found = await waitForElement(s, args, args.timeout || 15000).catch(() => false);
         if (!found) return { ok: false, error: `未找到复选框：${args.selector || args.text || ''}` };
         const want = action === 'check' ? 'true' : 'false';
-        const expr = `(function(){ ${FIND_EL_SRC} const el = __findEl(${JSON.stringify(args)}); if(!el) return JSON.stringify({found:false}); el.checked = ${want}; el.dispatchEvent(new Event('change',{bubbles:true})); return JSON.stringify({found:true}); })()`;
-        await send(s, 'Runtime.evaluate', { expression: expr, returnByValue: true });
+        // 2026-09-12 修正：直接 `el.checked = x` 对 Vue/React 受控组件无效——
+        // 实测出现「驱动返回 ok 但复选框实际未勾选」，导致后续「获取验证码」不触发。
+        // 改为：优先真实 click（触发框架响应式更新），仍未生效再兜底赋值 + 派发 input/change，
+        // 最后校验真实状态；不一致就如实返回失败，避免调用方误以为成功继续往下跑。
+        const expr = `(function(){ ${FIND_EL_SRC}
+          const el = __findEl(${JSON.stringify(args)});
+          if (!el) return JSON.stringify({ found:false });
+          const want = ${want};
+          if (el.checked !== want) { try { el.click(); } catch (e) {} }
+          if (el.checked !== want) {
+            el.checked = want;
+            try { el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); } catch (e) {}
+          }
+          return JSON.stringify({ found:true, checked: !!el.checked });
+        })()`;
+        const r = await send(s, 'Runtime.evaluate', { expression: expr, returnByValue: true });
+        let parsed: any = null;
+        try { parsed = JSON.parse(r?.result?.value ?? '{}'); } catch { /* 解析失败则跳过校验，保持原行为 */ }
+        if (parsed && typeof parsed.checked === 'boolean' && parsed.checked !== (action === 'check')) {
+          return { ok: false, error: `复选框未能${action === 'check' ? '勾选' : '取消勾选'}（可能是自定义控件，需人工点击）` };
+        }
         return await okResult(s);
       }
       case 'upload': {
@@ -480,8 +580,11 @@ export async function execCdpAction(
         return await okResult(s);
       }
       /** 把当前标签页切到窗口前台。
-       *  用途：需要用户人工介入（扫码 / 短信验证）时，把登录页弹到最前面，
-       *  用户无需在多个 Chrome 窗口里猜哪个才是投递用的调试浏览器。 */
+       *  ⚠️ 这是**唯一**允许激活窗口的地方（其余常规动作一律不置顶，
+       *  否则用户最小化的窗口会被自动化反复弹回来）。
+       *  用途：仅在需要用户人工介入时调用 —— 如登录页要扫码 / 短信验证，
+       *  把登录页弹到最前面，用户无需在多个 Chrome 窗口里猜哪个才是投递用的调试浏览器。
+       *  对应脚本：scripts/focus_login.ts。 */
       case 'bringToFront': {
         await send(s, 'Page.bringToFront', {});
         return await okResult(s);
@@ -492,7 +595,9 @@ export async function execCdpAction(
         const ns = attachSession(nws, platform);
         // 仅开 Page 域（同 ensureSession 原则：绝不开 Runtime.enable，否则被反爬清空）
         await send(ns, 'Page.enable');
-        try { await send(ns, 'Page.bringToFront'); } catch { /* 忽略 */ }
+        // 2026-09-12 反检测：新标签同样注入 anti-bot 脚本
+        await installStealth(ns);
+        // 不自动置顶（同上：避免把用户最小化的窗口弹回来）
         sessions.set(platform, ns);
         return await okResult(ns);
       }

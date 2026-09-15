@@ -44,7 +44,8 @@ set "OFFICIAL_POS=660,720"
 REM 1) Start one isolated Chrome window per platform (Zhideya-style)
 REM    Pre-check each debug port: if already listening, reuse it instead of
 REM    starting a second instance (which would silently fail on port conflict).
-set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding"
+REM 2026-09-12 反检测加固：--disable-blink-features=AutomationControlled 抹掉 navigator.webdriver 自动化特征
+set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-blink-features=AutomationControlled --disable-infobars"
 
 REM BOSS: prefer the shared profile (keeps login state); if it fails to start
 REM (e.g. profile locked by a leftover Chrome), fall back to an isolated profile

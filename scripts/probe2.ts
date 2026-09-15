@@ -1,9 +1,5 @@
 /* 精确探测：51job 用平台内置规则(排除 /all/)；猎聘查卡片真实链接格式 */
-const B = 'http://127.0.0.1:4400/api/browser/exec';
-const ex = (platform: string, b: any) => fetch(B, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ platform, ...b }),
-}).then((r) => r.json());
+import { ex } from './lib/browser.ts';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function scroll(p: string, times = 5) {

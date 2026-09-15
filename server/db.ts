@@ -143,6 +143,22 @@ try {
   // 忽略错误（列可能已存在）
 }
 
+// 数据库迁移：hr_conversations 增加 ai_name / ai_source（标记 AI 回复身份）
+try {
+  const ti = db.prepare("PRAGMA table_info(hr_conversations)").all() as Array<{ name: string }>;
+  const cols = ti.map((c) => c.name);
+  if (!cols.includes('ai_name')) {
+    db.exec("ALTER TABLE hr_conversations ADD COLUMN ai_name TEXT");
+    console.log("[DB] Added ai_name column to hr_conversations");
+  }
+  if (!cols.includes('ai_source')) {
+    db.exec("ALTER TABLE hr_conversations ADD COLUMN ai_source TEXT");
+    console.log("[DB] Added ai_source column to hr_conversations");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
 // 类型定义
 export interface DbSession {
   id: string;
@@ -565,6 +581,10 @@ export interface HrConversationRow {
   last_hr_message_at: string | null;
   last_replied_at: string | null;
   round: number;
+  /** AI 回复身份标记：发出回复的 AI 助手名（如「懒懒」） */
+  ai_name: string | null;
+  /** 回复来源：'ai' = 大模型生成；'rule' = 规则模板；null = 未回复 */
+  ai_source: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -598,6 +618,8 @@ export function upsertConversation(c: {
   last_hr_message_at?: string | null;
   last_replied_at?: string | null;
   round?: number | null;
+  ai_name?: string | null;
+  ai_source?: string | null;
 }): HrConversationRow {
   // 已存在：只覆盖「显式传入」的字段。
   // 不用 ON CONFLICT DO UPDATE + COALESCE —— round 是 NOT NULL 列，
@@ -614,6 +636,8 @@ export function upsertConversation(c: {
     if (c.last_hr_message_at != null) patch.last_hr_message_at = c.last_hr_message_at;
     if (c.last_replied_at != null) patch.last_replied_at = c.last_replied_at;
     if (c.round != null) patch.round = c.round;
+    if (c.ai_name != null) patch.ai_name = c.ai_name;
+    if (c.ai_source != null) patch.ai_source = c.ai_source;
     updateConversation(c.conv_key, patch as any);
     return getConversation(c.conv_key)!;
   }
@@ -623,10 +647,10 @@ export function upsertConversation(c: {
   db.prepare(`
     INSERT INTO hr_conversations
       (id, conv_key, platform, hr_name, company, position, job_url, stage,
-       last_hr_message, last_reply, last_hr_message_at, last_replied_at, round, created_at, updated_at)
+       last_hr_message, last_reply, last_hr_message_at, last_replied_at, round, ai_name, ai_source, created_at, updated_at)
     VALUES
       (@id, @conv_key, @platform, @hr_name, @company, @position, @job_url, @stage,
-       @last_hr_message, @last_reply, @last_hr_message_at, @last_replied_at, @round, @now, @now)
+       @last_hr_message, @last_reply, @last_hr_message_at, @last_replied_at, @round, @ai_name, @ai_source, @now, @now)
   `).run({
     id: randomUUID(),
     conv_key: c.conv_key,
@@ -641,6 +665,8 @@ export function upsertConversation(c: {
     last_hr_message_at: c.last_hr_message_at ?? null,
     last_replied_at: c.last_replied_at ?? null,
     round: c.round ?? 1,
+    ai_name: c.ai_name ?? null,
+    ai_source: c.ai_source ?? null,
     now,
   });
   return getConversation(c.conv_key)!;
@@ -650,10 +676,10 @@ export function updateConversation(
   key: string,
   patch: Partial<Pick<HrConversationRow,
     'stage' | 'last_hr_message' | 'last_reply' | 'last_hr_message_at' | 'last_replied_at' | 'round'
-    | 'hr_name' | 'company' | 'position' | 'job_url'>>,
+    | 'hr_name' | 'company' | 'position' | 'job_url' | 'ai_name' | 'ai_source'>>,
 ): boolean {
   const allowed = ['stage', 'last_hr_message', 'last_reply', 'last_hr_message_at', 'last_replied_at', 'round',
-    'hr_name', 'company', 'position', 'job_url'];
+    'hr_name', 'company', 'position', 'job_url', 'ai_name', 'ai_source'];
   const fields: string[] = [];
   const values: any[] = [];
   for (const k of allowed) {

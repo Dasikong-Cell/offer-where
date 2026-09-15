@@ -234,9 +234,18 @@ async function runOneClick(input: ApplyInput): Promise<ApplyResult> {
       let host = landed;
       try { host = new URL(landed).hostname; } catch { /* ignore */ }
       logs.step('岗位失效', false, `链接已重定向到 ${landed}`);
+      // 2026-09-13 精准提示：跳转成因分三类，给出不同排查方向，避免误导。
+      let redirectHint: string;
+      if (/safe\.liepin\.com/.test(host)) {
+        redirectHint = '（猎聘安全验证中转 safe.liepin.com/verifysms：当前账号会话被要求真人短信验证，自动化无法绕过；请在猎聘调试窗口(9224)完成短信验证后重跑本批次）';
+      } else if (/wow\.liepin\.com/.test(host)) {
+        redirectHint = '（猎聘中转活动页 wow.liepin.com；未登录时也会被拦，请先确认登录态）';
+      } else {
+        redirectHint = '（注意：未登录时也会被拦到这类中转页，请先确认该平台在调试窗口已登录）';
+      }
       return {
         platform, status: 'unavailable', logs: logs.logs, company, position, screenshot: shot,
-        message: `岗位链接已失效/重定向到「${host}」，页面上没有投递入口，无法自动投递`,
+        message: `岗位链接重定向到「${host}」，页面没有投递入口，无法自动投递${redirectHint}`,
       };
     }
 
@@ -310,6 +319,30 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
           if (applied + skipped >= maxApply) break;
           await bexec(platform, 'navigate', { url: href, waitUntil: 'domcontentloaded' }, logs, '打开岗位');
           await sleep(2500);
+
+          // 岗位失效检测：链接可能被风控中转页拦截（如猎聘跳 safe.liepin.com 要求真人短信验证），
+          // 这类页面没有投递按钮，继续跑只会把整批 N 个全判「跳过」，且真人验证通过前重跑必再失败。
+          // 命中即中止整批，立刻给出精准排查方向，避免无谓消耗。
+          const landed = await currentUrl(platform).catch(() => '');
+          if (landed && !isJobPage(platform, landed)) {
+            let host = landed;
+            try { host = new URL(landed).hostname; } catch { /* ignore */ }
+            let redirectHint: string;
+            if (/safe\.liepin\.com/.test(host)) {
+              redirectHint = '（猎聘安全验证中转 safe.liepin.com/verifysms：当前账号会话被要求真人短信验证，自动化无法绕过；请在猎聘调试窗口(9224)完成短信验证后重跑本批次）';
+            } else if (/wow\.liepin\.com/.test(host)) {
+              redirectHint = '（猎聘中转活动页 wow.liepin.com；未登录时也会被拦，请先确认登录态）';
+            } else {
+              redirectHint = '（注意：未登录时也会被拦到这类中转页，请先确认该平台在调试窗口已登录）';
+            }
+            logs.step('岗位失效', false, `链接已重定向到 ${landed}`);
+            const shot = await tryScreenshot(platform).catch(() => undefined);
+            return {
+              platform, status: 'unavailable', logs: logs.logs, screenshot: shot,
+              message: `岗位链接重定向到「${host}」，页面没有投递入口，已中止整批投递${redirectHint}`,
+            };
+          }
+
           // 注：job51 已在函数顶部（if (platform === 'job51') return runJob51List(...)）整体走列表页直投，
           // 不会进入本循环；此处一律走通用 oneClickApply。
           const oc: OneClickResult = await oneClickApply(platform, cfg, logs);

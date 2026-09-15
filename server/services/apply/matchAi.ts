@@ -14,6 +14,8 @@ export interface JobMatchInput {
   resumeSkills: string[];
   jd: string;
   requirements?: string;
+  /** 职位名（JD 为空时作为匹配兜底信号） */
+  position?: string;
 }
 
 const SYSTEM = `你是资深 HR 与技术招聘专家。请根据候选人简历与目标岗位 JD，给出客观匹配评估。
@@ -26,9 +28,9 @@ export async function matchResumeToJobAi(input: JobMatchInput): Promise<MatchRes
   const { resumeBlob, resumeSkills, jd, requirements } = input;
   const jdText = `${jd || ''}\n${requirements || ''}`.trim();
 
-  // JD 过短无法语义评估 → 直接规则匹配
+  // JD 过短无法语义评估 → 直接规则匹配（规则匹配内部会用职位名兜底，避免 0 分）
   if (!jdText || jdText.length < 10) {
-    return matchResumeToJob(resumeBlob, resumeSkills, jd, requirements);
+    return matchResumeToJob(resumeBlob, resumeSkills, jd, requirements, input.position);
   }
 
   const prompt = `【候选人简历】

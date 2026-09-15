@@ -210,11 +210,12 @@ export const PLATFORMS: Record<PlatformKey, PlatformCfg> = {
       kw
         ? `https://www.liepin.com/zhaopin/?key=${(kw)}&curPage=0`
         : 'https://www.liepin.com/zhaopin',
-    // 猎聘现行岗位链接是 /lptjob/<id>（旧版 /job/<id> 已不再产出），两者都要匹配，
-    // 否则列表页一个岗位链接都收不到（实测：只匹配 /job/ 时 count=0）。
+    // 猎聘现行岗位链接是 /lptjob/<id>；旧版 /job/<id>.shtml 已被废弃，
+    // 访问即跳 safe.liepin.com 安全验证中转页（需短信验证，自动化无法绕过）。
+    // 只收 /lptjob/ 新版，避免把失效旧链接再混进岗位池（实测 2026-09-13：旧链接 100% 落 safe 页）。
     collectLinksScript: `(() => {
       const set = new Set();
-      document.querySelectorAll('a[href*="liepin.com/job/"], a[href*="liepin.com/lptjob/"]').forEach(a => { const h = a.href; if (h) set.add(h.split('?')[0]); });
+      document.querySelectorAll('a[href*="liepin.com/lptjob/"]').forEach(a => { const h = a.href; if (h) set.add(h.split('?')[0]); });
       return Array.from(set);
     })()`,
     applyScript: `(() => {

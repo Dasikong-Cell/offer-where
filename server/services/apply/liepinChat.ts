@@ -66,7 +66,8 @@ export async function listConversations(): Promise<ConvSummary[]> {
       for(const li of items){
         const name=((li.querySelector('.im-ui-contact-title-name')||{innerText:''}).innerText||'').trim();
         const msg=((li.querySelector('.im-ui-last-message')||li.querySelector('.im-ui-contact-item-message')||{innerText:''}).innerText||'').replace(/\\s+/g,' ').trim();
-        const unread=/未读/.test(msg) || !!li.querySelector('[class*=unread]');
+        // 猎聘未读：末条带「未读」字样、或红点 class（unread 子串已覆盖 im-ui-unread-count）、或数字角标 im-ui-badge
+        const unread=/未读/.test(msg) || !!li.querySelector('[class*=unread]') || !!li.querySelector('.im-ui-badge,.im-ui-unread-count');
         out.push({name, raw:msg, unread});
       }
       return JSON.stringify({items:out});
