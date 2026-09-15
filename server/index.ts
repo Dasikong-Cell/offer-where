@@ -696,7 +696,7 @@ app.post("/api/auto-reply/watch/stop", (_req, res) => {
 app.post("/api/auto-reply/watch/config", (req, res) => {
   const body = req.body || {};
   const patch: Record<string, unknown> = {};
-  for (const k of ['enabled', 'platforms', 'intervalSec', 'realSend', 'useAi'] as const) {
+  for (const k of ['enabled', 'platforms', 'intervalSec', 'realSend', 'useAi', 'throttleSec', 'maxPerRun', 'hrCooldownSec'] as const) {
     if (body[k] !== undefined) patch[k] = body[k];
   }
   setWatchConfig(patch as any);

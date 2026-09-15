@@ -84,6 +84,12 @@ export interface RunAutoReplyOpts {
   signAi?: boolean;
   /** 目标职位（逗号分隔）；非空时 HR 发布的职位不相关则不回复 */
   targetPositions?: string[];
+  /** 两次发送之间的最小间隔（秒），防风控；默认 45 */
+  throttleSec?: number;
+  /** 单轮最多发送条数，0 = 不限制；默认 20 */
+  maxPerRun?: number;
+  /** 同一 HR 两次自动回复的最小冷却（秒）；其对话 last_replied_at 在冷却内则跳过；默认 3600 */
+  hrCooldownSec?: number;
   /** 停止信号 */
   signal?: AbortSignal;
 }
@@ -95,7 +101,17 @@ export async function runAutoReply(
   opts: RunAutoReplyOpts,
   emit: (ev: ReplyEvent) => void,
 ): Promise<{ sent: number; skipped: number }> {
-  const { unreadOnly = true, limit = 0, realSend = false, names = [], signal, useAi = true } = opts;
+  const {
+    unreadOnly = true,
+    limit = 0,
+    realSend = false,
+    names = [],
+    signal,
+    useAi = true,
+    throttleSec = 45,
+    maxPerRun = 20,
+    hrCooldownSec = 3600,
+  } = opts;
 
   // 档案中的 AI 身份与职位偏好（CLI 未显式传时从全局 profile 取）
   const profRow = getProfile() as Record<string, unknown> | undefined;
@@ -143,8 +159,8 @@ export async function runAutoReply(
         if (c.unread) return true;
         const rec = getConversation(c.key);
         if (!rec) return true;
-        const lastHr = String((rec as Record<string, unknown>).last_hr_message || '');
-        const lastReply = String((rec as Record<string, unknown>).last_reply || '');
+        const lastHr = String(rec.last_hr_message || '');
+        const lastReply = String(rec.last_reply || '');
         return (
           !!c.lastMsg &&
           !lastHr.startsWith(c.lastMsg) &&
@@ -174,6 +190,20 @@ export async function runAutoReply(
       break;
     }
     emit({ type: 'conv', name: c.name, company: c.company, lastMsg: c.lastMsg });
+
+    // 节流：同一 HR 在冷却期内（默认 1h）不重复自动回复，避免被平台判营销/骚扰
+    if (hrCooldownSec > 0) {
+      const early = getConversation(c.key);
+      const lastReplied = early ? early.last_replied_at : undefined;
+      if (lastReplied) {
+        const sinceMs = Date.now() - new Date(String(lastReplied)).getTime();
+        if (sinceMs < hrCooldownSec * 1000) {
+          emit({ type: 'skipped', reason: 'hr-cooldown', name: c.name, sec: Math.round(sinceMs / 1000) });
+          skipped++;
+          continue;
+        }
+      }
+    }
 
     const ok = await driver.openConversation(c.key);
     if (!ok) {
@@ -279,11 +309,17 @@ export async function runAutoReply(
       });
       sent++;
       emit({ type: 'sent', name: c.name, ai: aiSource, aiName });
+      // 每轮上限：达到即收尾，避免单轮刷太多触发风控
+      if (maxPerRun > 0 && sent >= maxPerRun) {
+        emit({ type: 'done', platform, sent, skipped, reason: 'cap-reached' });
+        return { sent, skipped };
+      }
     } else {
       emit({ type: 'skipped', reason: 'send-failed', name: c.name });
       skipped++;
     }
-    await sleep(500);
+    // 发送间隔节流：上一条真实发送后至少等 throttleSec 秒再处理下一条
+    await sleep(Math.max(1, throttleSec) * 1000);
   }
 
   emit({ type: 'done', platform, sent, skipped });

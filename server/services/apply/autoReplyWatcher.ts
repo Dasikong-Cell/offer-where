@@ -29,6 +29,12 @@ export interface WatchConfig {
   intervalSec: number;
   realSend: boolean;
   useAi: boolean;
+  /** 两次发送最小间隔（秒），防风控 */
+  throttleSec: number;
+  /** 单轮最多发送条数，0 = 不限制 */
+  maxPerRun: number;
+  /** 同一 HR 两次自动回复冷却（秒） */
+  hrCooldownSec: number;
 }
 
 const DEFAULT_CONFIG: WatchConfig = {
@@ -37,6 +43,9 @@ const DEFAULT_CONFIG: WatchConfig = {
   intervalSec: 180,
   realSend: true,
   useAi: true,
+  throttleSec: 45,
+  maxPerRun: 20,
+  hrCooldownSec: 3600,
 };
 
 let config: WatchConfig = { ...DEFAULT_CONFIG };
@@ -95,7 +104,15 @@ async function tick(): Promise<void> {
     try {
       const r = await runAutoReply(
         p as ApplyPlatform,
-        { unreadOnly: true, realSend: config.realSend, useAi: config.useAi, signal: abort.signal },
+        {
+          unreadOnly: true,
+          realSend: config.realSend,
+          useAi: config.useAi,
+          throttleSec: config.throttleSec,
+          maxPerRun: config.maxPerRun,
+          hrCooldownSec: config.hrCooldownSec,
+          signal: abort.signal,
+        },
         (ev) => watchEmitter.emit('tick', { kind: 'event', platform: p, ev }),
       );
       lastRun[p] = { at: new Date().toISOString(), sent: r.sent, skipped: r.skipped };
@@ -148,6 +165,9 @@ export function watcherStatus(): {
   intervalSec: number;
   realSend: boolean;
   useAi: boolean;
+  throttleSec: number;
+  maxPerRun: number;
+  hrCooldownSec: number;
   lastRun: Record<string, { at: string; sent: number; skipped: number; error?: string }>;
 } {
   return {
@@ -157,6 +177,9 @@ export function watcherStatus(): {
     intervalSec: config.intervalSec,
     realSend: config.realSend,
     useAi: config.useAi,
+    throttleSec: config.throttleSec,
+    maxPerRun: config.maxPerRun,
+    hrCooldownSec: config.hrCooldownSec,
     lastRun,
   };
 }

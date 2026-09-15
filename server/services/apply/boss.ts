@@ -9,6 +9,7 @@
  */
 import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode, resolveResumePath } from './common.js';
 import type { ApplyInput, ApplyResult } from './types.js';
+import * as db from '../../db.js';
 
 const LOGIN_URL = 'https://www.zhipin.com/web/user/?ka=header-login';
 const HOME_URL = 'https://www.zhipin.com/';
@@ -16,6 +17,32 @@ const HOME_URL = 'https://www.zhipin.com/';
 function needsLogin(url: string, text: string): boolean {
   if (/web\/user|login\.zhipin|passport\.zhipin/.test(url)) return true;
   return /(邮箱登录|短信登录|账号密码登录|扫码登录|验证码登录)/.test(text);
+}
+
+/**
+ * 从 BOSS 岗位详情页抓取 JD 文本（职位描述）。
+ * BOSS 搜索卡片不含 JD，只有进到 JD 页才有完整职位描述；多选择器兜底 + 正文「职位描述」截取，
+ * 失败返回空串（调用方忽略即可，不影响投递）。
+ */
+async function extractBossJd(platform: string, logs: ApplyLogger): Promise<string> {
+  const script = `(() => {
+    const pick = (sels) => { for (const s of sels) { const el = document.querySelector(s); if (el && el.innerText && el.innerText.trim().length > 20) return el.innerText.trim(); } return ''; };
+    const sel = ['#job-description', '.job-description', '.job-detail .text', '.job-sec .text', '.job-detail', 'div[class*="job-description"]', 'div[class*="description"]', '.text'];
+    let jd = pick(sel);
+    if (!jd) {
+      const body = document.body ? (document.body.innerText || '') : '';
+      const i = body.indexOf('职位描述');
+      jd = i >= 0 ? body.slice(i + 4) : body.slice(0, 2000);
+    }
+    return (jd || '').replace(/\\s+/g, ' ').slice(0, 4000);
+  })()`;
+  try {
+    const r = await bexec(platform, 'eval', { script }, logs, '提取 JD 文本');
+    return typeof r.data === 'string' ? r.data : '';
+  } catch (e: any) {
+    logs.step('JD 补全', false, `抓取失败（忽略）：${e?.message}`);
+    return '';
+  }
 }
 
 export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
@@ -71,6 +98,16 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
         logs.step('岗位状态', false, `检测到岗位已下线/关闭，跳过投递：${(freshText || '').slice(0, 120)}`);
         const shot = await tryScreenshot(platform);
         return { platform, status: 'unavailable', message: '该岗位已下线/关闭，无法投递', logs: logs.logs, company, position, screenshot: shot };
+      }
+    }
+
+    // 2.6) 补全 JD 文本：岗位详情页读取职位描述入库，使后续 AI 匹配基于真实 JD
+    //      （而非仅靠职位名），匹配分更高更准。投递前抓取，不影响投递主流程。
+    if (jobUrl && input.job?.id) {
+      const jdText = await extractBossJd(platform, logs);
+      if (jdText && jdText.length >= 20) {
+        db.upsertJob({ id: input.job.id, jd: jdText, requirements: '' });
+        logs.step('JD 补全', true, `已抓取 JD（${jdText.length} 字）`);
       }
     }
 

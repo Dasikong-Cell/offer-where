@@ -230,6 +230,18 @@
         <label>检查间隔（秒）</label>
         <input type="number" id="watchInterval" value="180" min="30" max="3600" />
       </div>
+      <div class="field">
+        <label>发送间隔（秒·防风控）</label>
+        <input type="number" id="watchThrottle" value="45" min="3" max="600" />
+      </div>
+      <div class="field">
+        <label>单轮上限（0=不限）</label>
+        <input type="number" id="watchMaxPerRun" value="20" min="0" max="200" />
+      </div>
+      <div class="field">
+        <label>同HR冷却（秒）</label>
+        <input type="number" id="watchHrCooldown" value="3600" min="0" max="86400" />
+      </div>
     </div>
     <div class="actions" style="margin-top:10px">
       <label class="checkline"><input type="checkbox" id="watchRealSend" checked /> 直接真实发送（否则仅记录）</label>
@@ -658,7 +670,7 @@ function renderWatchStatus(s) {
   if (!s) { badge.textContent = '监视器：未知'; badge.className = 'badge'; return; }
   if (s.running) { badge.textContent = '监视器：运行中'; badge.className = 'badge ok'; }
   else { badge.textContent = '监视器：已关闭'; badge.className = 'badge'; }
-  let txt = `状态=${s.running ? '运行' : '关闭'} 间隔=${s.intervalSec}s 平台=${s.platforms.join(',')} 真实发送=${s.realSend ? '是' : '否'} AI=${s.useAi ? '是' : '否'}`;
+  let txt = `状态=${s.running ? '运行' : '关闭'} 间隔=${s.intervalSec}s 平台=${s.platforms.join(',')} 真实发送=${s.realSend ? '是' : '否'} AI=${s.useAi ? '是' : '否'} 间隔=${s.throttleSec ?? 45}s 上限=${s.maxPerRun ?? 20} 冷却=${s.hrCooldownSec ?? 3600}s`;
   const lr = s.lastRun || {};
   const parts = Object.keys(lr).map((p) => `${p}:${lr[p].error ? '错误' : `发${lr[p].sent}/跳${lr[p].skipped}`}`);
   if (parts.length) txt += ` ｜ 上次[${parts.join('  ')}]`;
@@ -680,15 +692,18 @@ $('#btnWatchStart').onclick = async () => {
   const intervalSec = Number($('#watchInterval').value) || 180;
   const realSend = $('#watchRealSend').checked;
   const useAi = $('#watchUseAi').checked;
+  const throttleSec = Number($('#watchThrottle').value) || 45;
+  const maxPerRun = Number($('#watchMaxPerRun').value) || 0;
+  const hrCooldownSec = Number($('#watchHrCooldown').value) || 3600;
   try {
     await fetch(API_BASE + '/api/auto-reply/watch/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platforms, intervalSec, realSend, useAi }),
+      body: JSON.stringify({ platforms, intervalSec, realSend, useAi, throttleSec, maxPerRun, hrCooldownSec }),
     });
     const r = await fetch(API_BASE + '/api/auto-reply/watch/start', { method: 'POST' });
     const j = await r.json();
     renderWatchStatus(j.status);
-    line(`已开启自动监视：平台=${platforms.join(',')} 间隔=${intervalSec}s 真实发送=${realSend}`, 'ok');
+    line(`已开启自动监视：平台=${platforms.join(',')} 间隔=${intervalSec}s 发送间隔=${throttleSec}s 单轮上限=${maxPerRun} 同HR冷却=${hrCooldownSec}s 真实发送=${realSend}`, 'ok');
     $('#btnWatchStart').disabled = true;
     $('#btnWatchStop').disabled = false;
   } catch (e) {

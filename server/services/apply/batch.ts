@@ -20,6 +20,7 @@
 import { randomUUID } from 'crypto';
 import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
+import { collectBossToDb } from './engine.js';
 import { toApplyProfile } from './common.js';
 import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
@@ -40,6 +41,7 @@ export interface BatchInput {
   source?: string;                  // 仅投递该来源岗位（如 'offerbiu'）；留空=全部
   criteria?: BatchCriteria;
   collect?: 'offerbiu' | false;     // 投递前先采集 Offerbiu 岗位池
+  autoRefill?: boolean;             // 候选池耗尽时自动重采 BOSS 岗位（默认 true）
   limit?: number;                   // 最多投递数（默认 10，上限 100）
   headless?: boolean;               // 默认非无头（便于人工过滑块）
   sinceMinutes?: number;            // 验证码邮件时间窗
@@ -92,10 +94,13 @@ export function platformFromUrl(url?: string | null): ApplyPlatform | null {
   if (!url) return null;
   try {
     const host = new URL(url).hostname;
-    for (const d of PLATFORM_DOMAINS) if (d.re.test(host)) return d.platform;
+    for (const d of PLATFORM_DOMAINS)     if (d.re.test(host)) return d.platform;
   } catch { /* 非法 URL */ }
   return null;
 }
+
+/** 候选池低于该数量时触发自动补充（仅 BOSS） */
+const MIN_POOL = 3;
 
 /** 岗位来源 → 投递平台（offerbiu/manual/official 等默认走官网投递脚本） */
 function sourceToPlatform(source: string): ApplyPlatform {
@@ -173,6 +178,22 @@ export async function runBatchApply(
   // 若仍留在候选会反复被选中重试（浪费 CDP 调用、刷 need_manual）。
   jobs = jobs.filter(j => j.status !== 'unavailable');
   if (input.criteria?.excludeApplied) jobs = jobs.filter(j => j.status !== 'applied');
+
+  // 2.5) 岗位池自动补充：候选不足时按档案目标职位重新采集 BOSS 岗位，避免「共 0 个岗位」
+  // 仅 BOSS 支持服务端采集；其余平台需先人工登录，此处不触发。
+  const refillPlatform = input.platform && input.platform !== 'auto' ? input.platform : (input.source as ApplyPlatform) || 'boss';
+  if (jobs.length < MIN_POOL && input.autoRefill !== false && (refillPlatform === 'boss' || input.source === 'boss')) {
+    try {
+      const added = await collectBossToDb(MIN_POOL * 4);
+      if (added > 0) {
+        jobs = db.listJobs({ source: input.source }).filter(j => j.status !== 'unavailable');
+        if (input.criteria?.excludeApplied) jobs = jobs.filter(j => j.status !== 'applied');
+        console.log(`[Batch] 自动补充后候选池 ${jobs.length} 个`);
+      }
+    } catch (e: any) {
+      console.warn('[Batch] 岗位池自动补充失败（已忽略，继续用现有岗位）：', e?.message);
+    }
+  }
 
   // 3) 按需解析简历，并以 AI（无 AI 时回退规则）补全缺失的匹配分
   const needScore = input.criteria?.minScore != null;

@@ -15,6 +15,8 @@ import { getPlatform, type PlatformCfg, type PlatformKey } from './platforms.js'
 import { writeLetter } from './letterWriter.js';
 import { runJob51List } from './job51.js';
 import type { ApplyInput, ApplyResult, ApplyPlatform } from './types.js';
+import * as db from '../../db.js';
+import { parsePositions } from './autoReply.js';
 
 async function currentUrl(platform: string): Promise<string> {
   const r = await bexec(platform, 'eval', { script: 'location.href' });
@@ -60,7 +62,7 @@ function isJobPage(platform: string, url: string): boolean {
 }
 
 /** 检测/处理登录态；已登录返回 true，未登录尝试邮箱验证码登录；失败返回 false */
-async function ensureLoggedIn(
+export async function ensureLoggedIn(
   platform: string,
   cfg: PlatformCfg,
   input: ApplyInput,
@@ -410,6 +412,70 @@ async function runSearch(input: ApplyInput): Promise<ApplyResult> {
     const shot = await tryScreenshot(platform).catch(() => undefined);
     return { platform, status: 'error', message: e?.message || String(e), logs: logs.logs, screenshot: shot };
   }
+}
+
+/**
+ * 服务端 BOSS 采集并入库（复用正在运行的 CDP 会话）。
+ * 用于「岗位池自动补充」：当批量连投候选池耗尽时，按档案目标职位关键词重新搜索 BOSS、
+ * 抽取卡片（职位/公司/薪资/链接）入库为 candidate。需 BOSS CDP 在线且已登录；
+ * 否则 ensureLoggedIn 走验证码登录或返回 false，由调用方 catch 吞掉、绝不阻断投递。
+ * 返回新入库岗位数。
+ */
+export async function collectBossToDb(limit = 40): Promise<number> {
+  const cfg = getPlatform('boss');
+  if (!cfg) return 0;
+  const logs = new ApplyLogger();
+  const profile = db.getProfile() as Record<string, unknown> | undefined;
+  const targets = parsePositions(profile?.expectedPositions).filter(Boolean);
+  const kwList = (targets.length ? targets : ['Java开发', '软件开发', '前端开发', '测试工程师']).slice(0, 5);
+
+  // 与 scripts/collect_boss.ts 同款抽取：从搜索卡片取 职位/公司/薪资/直链
+  const EXTRACT = `(() => {
+    const ABS = (h) => { try { return new URL(h, location.href).href; } catch (e) { return ''; } };
+    const PUA = /[\\uE000-\\uF8FF]/;
+    const out = []; const seen = new Set();
+    document.querySelectorAll('.job-card-wrap').forEach(card => {
+      const a = card.querySelector('a[href*="job_detail"]'); if (!a) return;
+      const url = ABS(a.getAttribute('href')).split('?')[0]; if (!url || seen.has(url)) return;
+      seen.add(url);
+      const position = ((card.querySelector('.job-name') || {}).innerText || a.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 50);
+      const company = ((card.querySelector('.boss-name') || {}).innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40);
+      let salary = ((card.querySelector('.job-salary') || {}).innerText || '').trim();
+      if (PUA.test(salary)) salary = '';
+      out.push({ url, position, company, salary });
+    });
+    return out;
+  })()`;
+  const EXCLUDE = ['销售','顾问','运营','客服','人事','财务','行政','文员','护士','老师','教师','导购','司机','普工','商务','中介','主播','兼职'];
+  const KEEP = ['开发','java','前端','软件','程序','技术','工程师','web','后端','全栈','api','算法','测试','运维','数据','python','go','c++','计算机','net','架构'];
+
+  let inserted = 0;
+  const searchUrl = (kw: string) =>
+    `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(kw)}&city=100010000`;
+  for (const kw of kwList) {
+    if (inserted >= limit) break;
+    try {
+      await bexec('boss', 'navigate', { url: searchUrl(kw), waitUntil: 'domcontentloaded' }, logs, `采集搜索「${kw}」`);
+      await sleep(3500);
+      const logged = await ensureLoggedIn('boss', cfg, { platform: 'boss', profile: db.getProfile() as any, sinceMinutes: 10 } as ApplyInput, logs);
+      if (!logged) { console.warn('[Refill] BOSS 未登录，跳过自动补充'); break; }
+      for (let i = 0; i < 6; i++) { await bexec('boss', 'eval', { script: 'window.scrollBy(0,1000);"ok"' }, logs, '滚动加载'); await sleep(600); }
+      const r = await bexec('boss', 'eval', { script: EXTRACT }, logs, '抽取岗位');
+      const items = Array.isArray(r.data) ? r.data : [];
+      for (const it of items) {
+        const pos = String(it.position || '').toLowerCase();
+        if (EXCLUDE.some((e) => pos.includes(e))) continue;
+        if (!KEEP.some((k) => pos.includes(k))) continue;
+        db.upsertJob({ source: 'boss', company: it.company || null, position: it.position || null, city: null, salary: it.salary || null, apply_url: it.url });
+        inserted++;
+      }
+    } catch (e: any) {
+      console.warn('[Refill] BOSS 采集失败：', e?.message);
+      break;
+    }
+  }
+  console.log(`[Refill] BOSS 自动补充入库 ${inserted} 个`);
+  return inserted;
 }
 
 /** again：对 HR 会话复聊（发送回复） */
