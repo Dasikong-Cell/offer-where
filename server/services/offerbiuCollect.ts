@@ -69,6 +69,85 @@ const EXTRACT = `(() => {
  * @param pages 最多翻多少页（默认 1；设为 0 或负数按 1 处理）
  * @returns 采集数量与岗位行
  */
+/**
+ * 按关键词采集 offerbiu 岗位（利用列表页的搜索框精准筛选）。
+ *
+ * 背景：/companies/ 共 8201 条，但**匿名访问在翻到第 3 页后停止**，
+ * 顺序翻页收益很低（每页仅 9 条）。而搜索框可把结果集按关键词收窄
+ * （实测「软件」1812 条/202 页、「Java」155 条/18 页），
+ * 于是「逐关键词 × 前几页」能高效拿到大量**对口**岗位，且不依赖登录。
+ *
+ * @param keywords 关键词数组（如 ['软件','Java','前端','算法']）
+ * @param pagesPerKeyword 每个关键词最多翻几页（默认 3，匿名可用）
+ * @param perKeyword 每个关键词最多入库多少条（默认 27）
+ */
+export async function collectOfferbiuByKeywords(
+  keywords: string[],
+  opts: { pagesPerKeyword?: number; perKeyword?: number } = {},
+): Promise<{ collected: number; jobs: any[]; perKeyword: Record<string, number> }> {
+  const pagesPerKeyword = Math.max(1, Number(opts.pagesPerKeyword) || 3);
+  const perKeyword = Math.max(1, Number(opts.perKeyword) || 27);
+  const kws = (keywords || []).map((k) => String(k).trim()).filter(Boolean);
+  if (!kws.length) return { collected: 0, jobs: [], perKeyword: {} };
+
+  await execAction('offerbiu', 'navigate', { url: 'https://offerbiu.com/companies/', headless: false });
+  await execAction('offerbiu', 'wait', { timeout: 3000 });
+
+  const collected: any[] = [];
+  const seen = new Set<string>();
+  const counts: Record<string, number> = {};
+  const searchSel = 'input[placeholder*="搜索"]';
+  const readPage = async (): Promise<number | null> => {
+    const r = await execAction('offerbiu', 'eval', { script: PAGE_INDICATOR });
+    try { return (JSON.parse(String(r.data)) as any)?.page ?? null; } catch { return null; }
+  };
+
+  for (const kw of kws) {
+    // 填入关键词即触发筛选（实测无需回车）
+    const f = await execAction('offerbiu', 'fill', { selector: searchSel, value: kw, timeout: 6000 });
+    if (!f.ok) { console.warn(`[offerbiu] 搜索「${kw}」失败：${f.error}`); continue; }
+    await execAction('offerbiu', 'wait', { timeout: 2600 });
+    let pageNum = (await readPage()) ?? 1;
+    let got = 0;
+    for (let p = 0; p < pagesPerKeyword; p++) {
+      await execAction('offerbiu', 'eval', { script: SCROLL });
+      await execAction('offerbiu', 'wait', { timeout: 1800 });
+      const evalRes = await execAction('offerbiu', 'eval', { script: EXTRACT });
+      const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; jd: string }>) || [];
+      for (const c of raw) {
+        if (!c.apply_url || seen.has(c.apply_url)) continue;
+        seen.add(c.apply_url);
+        const job = db.upsertJob({
+          source: 'offerbiu',
+          company: c.company,
+          position: c.position,
+          city: c.city,
+          jd: c.jd,
+          apply_url: c.apply_url,
+        });
+        collected.push(job);
+        got++;
+        counts[kw] = (counts[kw] || 0) + 1;
+        if (got >= perKeyword) break;
+      }
+      if (got >= perKeyword) break;
+      if (p < pagesPerKeyword - 1) {
+        let moved = false;
+        for (let attempt = 0; attempt < 3 && !moved; attempt++) {
+          let nx = await execAction('offerbiu', 'realClick', { text: '下一页', timeout: 4000 });
+          if (!nx.ok) nx = await execAction('offerbiu', 'click', { text: '下一页', timeout: 5000 });
+          if (!nx.ok) break;
+          await execAction('offerbiu', 'wait', { timeout: 2600 });
+          const cur = await readPage();
+          if (cur && cur > pageNum) { pageNum = cur; moved = true; }
+        }
+        if (!moved) break; // 该关键词翻到头（或匿名 3 页上限）
+      }
+    }
+  }
+  return { collected: collected.length, jobs: collected, perKeyword: counts };
+}
+
 export async function collectOfferbiu(limit = 50, pages = 1): Promise<{ collected: number; jobs: any[]; needLogin?: boolean }> {
   // 1) 打开首页，判断登录态（存在指向 /login 的登录入口 => 未登录）
   const home = await execAction('offerbiu', 'navigate', { url: 'https://offerbiu.com/home', headless: false });

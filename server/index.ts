@@ -22,7 +22,7 @@ import { scanOfferbiuEmails } from "./services/offerbiuEmailScan.js";
 import { runAutoReply } from "./services/apply/autoReplyRunner.js";
 import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
-import { collectOfferbiu } from "./services/offerbiuCollect.js";
+import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuCollect.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
@@ -576,6 +576,24 @@ app.post("/api/offerbiu/remember-form", async (_req, res) => {
     res.json({ ok: true, site: r.site, saved: r.saved, fields: r.fields, logs: r.logs });
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error?.message || '记录失败' });
+  }
+});
+
+// 按关键词采集 offerbiu 岗位（利用列表页搜索框精准筛选：匿名也能拿到大量对口岗位）
+app.post("/api/offerbiu/collect-keywords", async (req, res) => {
+  try {
+    const { keywords, pagesPerKeyword = 3, perKeyword = 27 } = req.body || {};
+    const kws: string[] = Array.isArray(keywords)
+      ? keywords.map((k: unknown) => String(k)).filter(Boolean)
+      : String(keywords || '').split(/[,，、;；\s]+/).map((s) => s.trim()).filter(Boolean);
+    if (!kws.length) return res.status(400).json({ error: 'keywords 不能为空' });
+    const r = await collectOfferbiuByKeywords(kws, {
+      pagesPerKeyword: Number(pagesPerKeyword) || 3,
+      perKeyword: Number(perKeyword) || 27,
+    });
+    res.json({ collected: r.collected, perKeyword: r.perKeyword });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '关键词采集失败' });
   }
 });
 

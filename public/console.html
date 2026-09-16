@@ -218,10 +218,20 @@
 
   <div class="card accent">
     <h2>📧 邮箱直投（无需登录）</h2>
-    <div class="usage">👉 offerbiu 岗位里写着招聘邮箱的，可直接把简历发到 HR 邮箱 —— <b>无需任何登录</b>。这是 offerbiu 上唯一能全自动跑通的投递方式（官网表单通道多被手机/微信登录挡住）。先「扫描」筛出有招聘邮箱的岗位，勾选后批量投递。</div>
+    <div class="usage">👉 offerbiu 岗位里写着招聘邮箱的，可直接把简历发到 HR 邮箱 —— <b>无需任何登录</b>。这是 offerbiu 上唯一能全自动跑通的投递方式（官网表单通道多被手机/微信登录挡住）。三步：①「采集关键词岗位」扩池 → ②「扫描招聘邮箱」筛选 → ③ 勾选后「批量邮箱直投」。</div>
+    <div class="fields" style="margin-bottom:10px">
+      <div class="field" style="flex-basis:100%">
+        <label>① 采集关键词岗位（逗号分隔。offerbiu 匿名只能翻 3 页，用搜索框按关键词精准扩池）</label>
+        <input type="text" id="collectKeywords" value="软件,Java,前端,后端,测试,算法,数据,AI,全栈,运维,Python" />
+      </div>
+    </div>
+    <div class="actions" style="margin-bottom:14px">
+      <button id="btnCollectKeywords">采集关键词岗位</button>
+      <span class="sub" id="collectTip" style="margin-left:8px"></span>
+    </div>
     <div class="fields">
       <div class="field">
-        <label>扫描数量（个岗位）</label>
+        <label>② 扫描数量（个岗位）</label>
         <input type="number" id="scanLimit" value="20" min="1" max="100" />
       </div>
       <div class="field">
@@ -1019,7 +1029,36 @@ $('#btnRememberForm').addEventListener('click', async () => {
   setTimeout(() => { tip.textContent = ''; }, 5000);
 });
 
-// ============ 邮箱直投：扫描 offerbiu 招聘邮箱 → 勾选 → 批量投递 ============
+// ============ 邮箱直投：采集关键词岗位 → 扫描招聘邮箱 → 勾选 → 批量投递 ============
+
+// ① 按关键词采集 offerbiu 岗位（利用列表页搜索框精准扩池）
+$('#btnCollectKeywords').onclick = async () => {
+  const tip = $('#collectTip');
+  const kws = ($('#collectKeywords').value || '').split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
+  if (!kws.length) { tip.textContent = '❌ 请填写关键词'; tip.style.color = 'var(--err)'; return; }
+  tip.textContent = '采集中…';
+  tip.style.color = 'var(--muted)';
+  $('#btnCollectKeywords').disabled = true;
+  line(`开始按关键词采集 offerbiu 岗位：${kws.join('、')} …`, 'info');
+  try {
+    const r = await (await fetch(API_BASE + '/api/offerbiu/collect-keywords', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: kws, pagesPerKeyword: 3, perKeyword: 25 }),
+    })).json();
+    if (r.error) throw new Error(r.error);
+    const detail = Object.entries(r.perKeyword || {}).map(([k, v]) => `${k}:${v}`).join(' ');
+    tip.textContent = `✅ 新增 ${r.collected} 个岗位`;
+    tip.style.color = 'var(--ok)';
+    line(`关键词采集完成：新增 ${r.collected} 个岗位（${detail}）`, 'ok');
+  } catch (e) {
+    tip.textContent = '❌ ' + (e.message || e);
+    tip.style.color = 'var(--err)';
+    line('关键词采集失败：' + (e.message || e), 'err');
+  }
+  $('#btnCollectKeywords').disabled = false;
+  setTimeout(() => { tip.textContent = ''; }, 6000);
+};
+
 let emailHits = []; // { jobId, company, position, email, applyUrl }
 
 function selectedEmailHits() {
