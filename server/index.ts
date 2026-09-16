@@ -571,7 +571,7 @@ app.post("/api/offerbiu/collect", async (req, res) => {
 app.post("/api/apply/batch", async (req, res) => {
   try {
     const {
-      platform, source, criteria, collect, limit, headless, sinceMinutes, intervalMs, stream,
+      platform, source, criteria, collect, limit, headless, sinceMinutes, intervalMs, stream, realSend,
     } = req.body || {};
 
     if (platform && platform !== 'auto' && !isSupported(platform)) {
@@ -588,6 +588,7 @@ app.post("/api/apply/batch", async (req, res) => {
       source: effectiveSource,
       criteria,
       collect: (collect === 'offerbiu' ? 'offerbiu' : false) as false | 'offerbiu',
+      realSend: realSend === true,
       limit: limit ? Number(limit) : 10,
       headless: headless === true,
       sinceMinutes: sinceMinutes ? Number(sinceMinutes) : 10,
@@ -797,6 +798,7 @@ app.post("/api/apply", async (req, res) => {
       jdText: jdText ? String(jdText) : undefined,
       channel: channel === 'email' ? 'email' : 'auto',
       dryRun: req.body?.dryRun === true,
+      realSend: req.body?.realSend === true,
     });
 
     // 投递成功 -> 写投递记录 + 更新岗位状态

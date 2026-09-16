@@ -74,6 +74,9 @@ export interface ApplyInput {
   channel?: 'auto' | 'email';
   /** 预览模式：只解析收件人/标题/正文并写入日志，不真正发信 */
   dryRun?: boolean;
+  /** 真实投递开关（官网/offerbiu 通道专用）：只有显式 true 才真正提交；
+   *  其余情况（含 dryRun 或 realSend 缺省）一律只做只读预览，防止批量误投 */
+  realSend?: boolean;
 }
 
 export interface ApplyLog {

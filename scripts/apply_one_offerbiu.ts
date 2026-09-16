@@ -39,7 +39,7 @@ const API = 'http://127.0.0.1:4400';
   const res = await fetch(`${API}/api/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ platform: 'offerbiu', jobId: j.id, channel }),
+    body: JSON.stringify({ platform: 'offerbiu', jobId: j.id, channel, realSend: true }),
   });
   const out: any = await res.json();
   console.log(`结果：${out.status}`);

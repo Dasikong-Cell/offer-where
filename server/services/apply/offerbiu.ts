@@ -301,23 +301,24 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
     const needLogin = /(登录|注册|账号|请先登录|登录后|sign in|log in)/i.test(text)
       && !/(投递成功|已投递|申请成功|网申完成)/.test(text);
 
-    // 预览模式（2026-09-12 新增）：官网通道原本没有 dryRun，一调用就真投，
-    // 无法在提交前确认「是否需登录 / 有没有投递入口 / 简历在不在」。
+    // 闸门（2026-09-16 新增，仿邮箱通道）：官网通道只有显式 realSend=true 才真正提交；
+    // dryRun 或 realSend 缺省一律只做只读预览，绝不自动提交（防批量误投）。
     // 必须放在「尝试登录」之前：否则需登录的站点会先走 tryEmailLogin 并在失败处 return，
     // 永远到不了预览分支（首版就踩了这个坑，实测 dryRun 无效）。
     // 预览只做只读探测：不点登录、不点投递、不提交。
-    if (input.dryRun) {
+    if (input.dryRun || !input.realSend) {
       const probe = await bexec(CTX, 'eval', {
         script: "JSON.stringify((function(){var t=(document.body?document.body.innerText:'');var keys=['投递简历','我要投递','投递','网申','申请职位','立即申请','在线投递','投个简历'];var hit=[];for(var i=0;i<keys.length;i++){if(t.indexOf(keys[i])>=0)hit.push(keys[i]);}return {entryHits:hit,textLen:t.length};})())",
       }, logs, '预览：只读探测投递入口').catch(() => undefined);
       let entryHits: string[] = [];
       try { entryHits = ((probe?.data && JSON.parse(String(probe.data))) || {}).entryHits || []; } catch { entryHits = []; }
-      logs.step('预览（未提交）', true,
-        `登录态=${needLogin ? '需登录' : '已登录/无需登录'}；投递入口=${entryHits.length ? entryHits.join('/') : '未发现'}；简历=${resumePath || '无'}`);
+      const resumeNote = resumePath ? '已就绪' : '缺失⚠️（提交后将无附件）';
+      logs.step('预览（未提交/待确认）', true,
+        `登录态=${needLogin ? '需登录' : '已登录/无需登录'}；投递入口=${entryHits.length ? entryHits.join('/') : '未发现'}；简历=${resumeNote}`);
       return {
         platform, status: 'need_manual', logs: logs.logs, company, position,
         preview: { jobUrl, needLogin, entryHits, resumePath },
-        message: `预览完成（未提交）：${needLogin ? '该官网需登录' : '无需登录或已登录'}；投递入口${entryHits.length ? '发现「' + entryHits.join('/') + '」' : '未发现'}；简历${resumePath ? '已就绪' : '缺失'}`,
+        message: `预览完成（未提交，需确认后真实投递）：${needLogin ? '该官网需登录' : '无需登录或已登录'}；投递入口${entryHits.length ? '发现「' + entryHits.join('/') + '」' : '未发现'}；简历${resumeNote}`,
       };
     }
 

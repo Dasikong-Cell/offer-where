@@ -34,6 +34,7 @@ async function main() {
         jobUrl: j.apply_url,
         job: { id: j.id, company: j.company, position: j.position, apply_url: j.apply_url },
         profile: { ...(profile as any), resume_path: (profile as any).resume_path },
+        realSend: true,
         sinceMinutes: 10,
       });
       console.log(`  结果: ${r.status} | ${r.message || ''}`);

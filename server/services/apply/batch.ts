@@ -41,6 +41,7 @@ export interface BatchInput {
   source?: string;                  // 仅投递该来源岗位（如 'offerbiu'）；留空=全部
   criteria?: BatchCriteria;
   collect?: 'offerbiu' | false;     // 投递前先采集 Offerbiu 岗位池
+  realSend?: boolean;               // 官网(offerbiu)通道真实投递开关；缺省=false→仅预览不提交
   autoRefill?: boolean;             // 候选池耗尽时自动重采 BOSS 岗位（默认 true）
   limit?: number;                   // 最多投递数（默认 10，上限 100）
   headless?: boolean;               // 默认非无头（便于人工过滑块）
@@ -316,6 +317,7 @@ export async function runBatchApply(
         jobUrl: job.apply_url || undefined,
         autofill: (profile.autofill as Record<string, string>) || undefined,
         headless: input.headless !== false ? false : true,
+        realSend: input.realSend === true,
         sinceMinutes: input.sinceMinutes ? Number(input.sinceMinutes) : 10,
       });
     } catch (e: any) {

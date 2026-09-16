@@ -56,7 +56,7 @@ function isSoftwareRelated(position: string): boolean {
       const res = await fetch(`${API}/api/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: 'offerbiu', jobId: j.id, channel: 'auto' }),
+        body: JSON.stringify({ platform: 'offerbiu', jobId: j.id, channel: 'auto', realSend: true }),
       });
       const out: any = await res.json();
       console.log(`    => ${out.status} | ${out.message || ''}`);
