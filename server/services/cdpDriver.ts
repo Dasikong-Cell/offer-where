@@ -44,6 +44,8 @@ interface PageSession {
   loadWaiters: Array<() => void>;
   createdAt: number;
   dead?: boolean;
+  /** 该会话绑定的 CDP 目标 id：用于 adoptPopup 识别「新弹出的标签」 */
+  targetId?: string;
 }
 
 const sessions = new Map<string, PageSession>();
@@ -299,6 +301,7 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   }
   const ws = await connect(target.webSocketDebuggerUrl);
   const s = attachSession(ws, platform);
+  s.targetId = target.id;
   // 关键：只开 Page 域，绝不开 Runtime.enable。
   // 实测证据：BOSS直聘/猎聘 会检测 `Runtime.enable`（启用 Runtime 事件通知），
   // 命中后数秒内把页面 navigate 回 about:blank（表现为空白页）。
@@ -593,11 +596,35 @@ export async function execCdpAction(
         const t = await httpReq('PUT', `${ep}/json/new?${args.url || 'about:blank'}`);
         const nws = await connect(t.webSocketDebuggerUrl);
         const ns = attachSession(nws, platform);
+        ns.targetId = t.id;
         // 仅开 Page 域（同 ensureSession 原则：绝不开 Runtime.enable，否则被反爬清空）
         await send(ns, 'Page.enable');
         // 2026-09-12 反检测：新标签同样注入 anti-bot 脚本
         await installStealth(ns);
         // 不自动置顶（同上：避免把用户最小化的窗口弹回来）
+        sessions.set(platform, ns);
+        return await okResult(ns);
+      }
+      /** 接管「最新弹出的标签页」。
+       *  场景：企业官网点「投递 / 立即投递」常以 target=_blank 打开申请表，
+       *  此时会话仍绑定在旧标签，后续探测/填表/上传简历会全部落空（旧标签只剩弹窗）。
+       *  做法：枚举 page 目标，挑一个「id ≠ 当前会话 targetId」且非空白/chrome 页的接管。
+       *  注意：不能靠 URL 区分 —— 新标签与原标签 URL 常常完全相同。 */
+      case 'adoptPopup': {
+        const list = await httpReq('GET', `${ep}/json/list`).catch(() => [] as any[]);
+        const arr: any[] = Array.isArray(list) ? list : [];
+        const curId = s.targetId;
+        const cands = arr.filter((t: any) => t.type === 'page' && t.webSocketDebuggerUrl && t.id
+          && t.id !== curId && t.url && t.url !== 'about:blank' && !/^chrome/i.test(t.url));
+        if (!cands.length) return { ok: false, error: 'adoptPopup: 未发现新弹窗标签' };
+        const t = cands[cands.length - 1];
+        try { sessions.delete(platform); } catch { /* ignore */ }
+        try { s.ws.close(); } catch { /* ignore */ }
+        const nws = await connect(t.webSocketDebuggerUrl);
+        const ns = attachSession(nws, platform);
+        ns.targetId = t.id;
+        await send(ns, 'Page.enable');
+        await installStealth(ns);
         sessions.set(platform, ns);
         return await okResult(ns);
       }

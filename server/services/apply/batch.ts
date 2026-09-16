@@ -318,6 +318,9 @@ export async function runBatchApply(
         autofill: (profile.autofill as Record<string, string>) || undefined,
         headless: input.headless !== false ? false : true,
         realSend: input.realSend === true,
+        // 双通道闸门一致性：realSend 非 true 时同时置 dryRun，
+        // 否则官网通道(读 realSend)会预览、而邮箱通道(读 dryRun)仍会真实发信 —— 「仅预览」形同虚设。
+        dryRun: input.realSend !== true,
         sinceMinutes: input.sinceMinutes ? Number(input.sinceMinutes) : 10,
       });
     } catch (e: any) {

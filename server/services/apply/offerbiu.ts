@@ -412,7 +412,7 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
       const site = siteOf(jobUrl);
       let formFields: { label: string; type: string; value?: string }[] = [];
       if (entryHits.length) {
-        for (const label of ['投递简历', '投递', '网申', '申请职位', '立即申请', '在线投递', '投个简历']) {
+        for (const label of ['投递简历', '立即投递', '投递', '网申', '申请职位', '立即申请', '在线投递', '投个简历']) {
           const rr = await bexec(CTX, 'click', { text: label, timeout: 3000 }, logs, `预览：只读进入表单页「${label}」`);
           if (rr.ok) break;
         }
@@ -456,7 +456,7 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
 
     // 找投递入口（官网可能是列表页，先尝试进入第一个投递项）
     let applied = false;
-    for (const label of ['投递简历', '投递', '网申', '申请职位', '立即申请', '在线投递', '投个简历']) {
+    for (const label of ['投递简历', '立即投递', '投递', '网申', '申请职位', '立即申请', '在线投递', '投个简历']) {
       const rr = await bexec(CTX, 'click', { text: label, timeout: 6000 }, logs, `点击「${label}」`);
       if (rr.ok) { applied = true; break; }
     }
@@ -465,6 +465,17 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
       return { platform, status: 'need_manual', message: '未识别到官网「投递/网申」入口，请在打开的浏览器中手动完成投递', logs: logs.logs, company, position, screenshot: shot };
     }
     await sleep(2500);
+
+    // 二次钻取：不少官网先弹「社招职位 / 校招职位」选择框，需再点一次「立即投递」才进入投递表单。
+    // 逐个尝试、命中即点（元素不存在时动作失败无害），避免卡在选择弹窗上。
+    for (const label of ['校招职位', '立即投递', '立即申请', '继续投递']) {
+      const dr = await bexec(CTX, 'click', { text: label, timeout: 2500 }, logs, `深入「${label}」`).catch(() => undefined);
+      if (dr?.ok) await sleep(1800);
+    }
+    // 若投递入口以新标签打开（target=_blank），必须接管新标签：
+    // 否则后续探测表单 / 填表 / 上传简历都落在旧标签上，全部落空。
+    const adopted = await bexec(CTX, 'adoptPopup', {}, logs, '接管新弹窗标签（如有）').catch(() => undefined);
+    if (adopted?.ok) { logs.step('新标签', true, `已接管弹窗标签：${String(adopted.url || '').slice(0, 80)}`); await sleep(2500); }
 
     // 表单自动填写（档案 + 历史记忆 + 本次人工补填），提交成功分支会记忆保存
     const site = siteOf(jobUrl);
