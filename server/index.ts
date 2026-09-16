@@ -18,6 +18,7 @@ import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
 import { rememberCurrentForm } from "./services/apply/offerbiu.js";
+import { scanOfferbiuEmails } from "./services/offerbiuEmailScan.js";
 import { runAutoReply } from "./services/apply/autoReplyRunner.js";
 import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
@@ -574,6 +575,106 @@ app.post("/api/offerbiu/remember-form", async (_req, res) => {
     res.json({ ok: true, site: r.site, saved: r.saved, fields: r.fields, logs: r.logs });
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error?.message || '记录失败' });
+  }
+});
+
+// ============= Offerbiu 邮箱直投（无需登录；offerbiu 上真正可规模化的自动投递路径） =============
+
+/** 扫描 offerbiu 岗位中的招聘邮箱（SSE 进度 + 末尾 found 事件） */
+app.post("/api/offerbiu/scan-emails", async (req, res) => {
+  const { limit, offset, hrLikeOnly } = req.body || {};
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (e: unknown) => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
+  try {
+    const r = await scanOfferbiuEmails({
+      limit: Number(limit) || 20,
+      offset: Number(offset) || 0,
+      hrLikeOnly: hrLikeOnly !== false,
+      onProgress: (ev) => send(ev),
+    });
+    send({ type: 'found', scanned: r.scanned, found: r.found });
+    res.write('event: end\ndata: {}\n\n');
+  } catch (error: any) {
+    send({ type: 'error', message: error?.message || '扫描失败' });
+  } finally {
+    res.end();
+  }
+});
+
+/** 对指定岗位批量「邮箱直投」（channel=email + realSend，SSE 进度） */
+app.post("/api/offerbiu/email-apply", async (req, res) => {
+  const jobIds: string[] = Array.isArray(req.body?.jobIds) ? req.body.jobIds.map((x: unknown) => String(x)) : [];
+  const intervalMs = Math.max(0, Number(req.body?.intervalMs ?? 8000));
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (e: unknown) => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
+  const profile = db.getProfile() as Record<string, unknown> | undefined;
+  let ok = 0, fail = 0;
+  try {
+    if (!jobIds.length) {
+      send({ type: 'error', message: '未选择任何岗位' });
+      return;
+    }
+    if (!profile?.email) {
+      send({ type: 'error', message: '档案未配置邮箱，无法发信。请先在「我的档案」填写邮箱与授权码' });
+      return;
+    }
+    for (let i = 0; i < jobIds.length; i++) {
+      const job = db.getJob(jobIds[i]);
+      if (!job) { fail++; send({ type: 'result', jobId: jobIds[i], status: 'error', message: '岗位不存在' }); continue; }
+      send({ type: 'progress', index: i, total: jobIds.length, jobId: job.id, company: job.company, position: job.position });
+      try {
+        const r = await runApply({
+          platform: 'offerbiu',
+          jobUrl: job.apply_url || undefined,
+          job: { id: job.id, company: job.company, position: job.position, apply_url: job.apply_url },
+          profile: toApplyProfile(profile),
+          autofill: (profile.autofill as Record<string, string>) || undefined,
+          channel: 'email',
+          realSend: true,
+        });
+        if (r.status === 'applied') {
+          ok++;
+          try {
+            db.createApplication({
+              id: uuidv4(),
+              platform: 'offerbiu',
+              company: r.company || job.company || '',
+              position: r.position || job.position || '',
+              salary: job.salary || '',
+              city: job.city || '',
+              job_url: job.apply_url || '',
+              status: 'applied',
+              login_method: 'email',
+              message: '邮箱直投（Offerbiu 招聘邮箱）',
+            });
+            db.updateJob(job.id, { status: 'applied' });
+          } catch { /* 记录失败不阻断 */ }
+        } else {
+          fail++;
+        }
+        send({ type: 'result', jobId: job.id, status: r.status, company: r.company || job.company, message: r.message });
+      } catch (e: any) {
+        fail++;
+        send({ type: 'result', jobId: job.id, status: 'error', company: job.company, message: e?.message || String(e) });
+      }
+      if (i < jobIds.length - 1 && intervalMs > 0) await new Promise((rr) => setTimeout(rr, intervalMs));
+    }
+    send({ type: 'done', ok, fail, total: jobIds.length });
+    res.write('event: end\ndata: {}\n\n');
+  } catch (error: any) {
+    send({ type: 'error', message: error?.message || '邮箱直投失败' });
+  } finally {
+    res.end();
   }
 });
 

@@ -216,6 +216,27 @@
     </div>
   </div>
 
+  <div class="card accent">
+    <h2>📧 邮箱直投（无需登录）</h2>
+    <div class="usage">👉 offerbiu 岗位里写着招聘邮箱的，可直接把简历发到 HR 邮箱 —— <b>无需任何登录</b>。这是 offerbiu 上唯一能全自动跑通的投递方式（官网表单通道多被手机/微信登录挡住）。先「扫描」筛出有招聘邮箱的岗位，勾选后批量投递。</div>
+    <div class="fields">
+      <div class="field">
+        <label>扫描数量（个岗位）</label>
+        <input type="number" id="scanLimit" value="20" min="1" max="100" />
+      </div>
+      <div class="field">
+        <label>起始偏移（跳过前 N 个）</label>
+        <input type="number" id="scanOffset" value="0" min="0" />
+      </div>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button id="btnScanEmails">扫描招聘邮箱</button>
+      <button class="primary" id="btnEmailApply" disabled>批量邮箱直投（选中 0 个）</button>
+      <span class="sub" id="scanTip" style="margin-left:8px"></span>
+    </div>
+    <div id="emailResults" style="margin-top:12px"><div class="sub">尚未扫描。点「扫描招聘邮箱」开始。</div></div>
+  </div>
+
   <div class="card">
     <div class="actions">
       <button class="primary" id="btnStart">开始投递</button>
@@ -997,6 +1018,123 @@ $('#btnRememberForm').addEventListener('click', async () => {
   }
   setTimeout(() => { tip.textContent = ''; }, 5000);
 });
+
+// ============ 邮箱直投：扫描 offerbiu 招聘邮箱 → 勾选 → 批量投递 ============
+let emailHits = []; // { jobId, company, position, email, applyUrl }
+
+function selectedEmailHits() {
+  return Array.from(document.querySelectorAll('.emailChk')).filter(el => el.checked)
+    .map(el => emailHits[Number(el.dataset.i)]).filter(Boolean);
+}
+function updateEmailApplyBtn() {
+  const n = selectedEmailHits().length;
+  const b = $('#btnEmailApply');
+  b.disabled = n === 0;
+  b.textContent = `批量邮箱直投（选中 ${n} 个）`;
+}
+function renderEmailHits() {
+  const box = $('#emailResults');
+  if (!emailHits.length) {
+    box.innerHTML = '<div class="sub">未发现带招聘邮箱的岗位。可加大扫描数量或换起始偏移再试。</div>';
+    updateEmailApplyBtn();
+    return;
+  }
+  box.innerHTML = `<div class="sub" style="margin-bottom:6px">发现 ${emailHits.length} 个可邮箱直投的岗位（默认全选）：</div>`
+    + emailHits.map((h, i) => `
+      <label class="checkline" style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)">
+        <input type="checkbox" class="emailChk" data-i="${i}" checked />
+        <span style="flex:1">
+          <b>${esc(h.company)}</b> <span class="sub">· ${esc(h.position || '')}</span><br/>
+          <span class="sub">📧 ${esc(h.email)}</span>
+        </span>
+      </label>`).join('');
+  box.querySelectorAll('.emailChk').forEach(el => el.addEventListener('change', updateEmailApplyBtn));
+  updateEmailApplyBtn();
+}
+
+/** 通用：读取 SSE 流并逐事件回调 */
+async function readSse(res, onEvent) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() || '';
+    for (const p of parts) {
+      for (const l of p.split('\n')) {
+        if (!l.startsWith('data: ')) continue;
+        try { onEvent(JSON.parse(l.slice(6))); } catch (_) { /* ignore */ }
+      }
+    }
+  }
+}
+
+$('#btnScanEmails').onclick = async () => {
+  const tip = $('#scanTip');
+  const limit = Number($('#scanLimit').value) || 20;
+  const offset = Number($('#scanOffset').value) || 0;
+  tip.textContent = '扫描中…';
+  tip.style.color = 'var(--muted)';
+  $('#btnScanEmails').disabled = true;
+  line(`开始扫描 offerbiu 招聘邮箱（数量 ${limit}，偏移 ${offset}）…`, 'info');
+  try {
+    const res = await fetch(API_BASE + '/api/offerbiu/scan-emails', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit, offset }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    await readSse(res, (ev) => {
+      if (ev.type === 'progress') line(`[扫描 ${ev.index + 1}/${ev.total}] ${ev.message}`, 'dim');
+      else if (ev.type === 'found') {
+        emailHits = ev.found || [];
+        renderEmailHits();
+        line(`扫描完成：共 ${ev.scanned} 个岗位，发现 ${emailHits.length} 个可邮箱直投。`, 'ok');
+        tip.textContent = `✅ 发现 ${emailHits.length} 个`;
+        tip.style.color = 'var(--ok)';
+      } else if (ev.type === 'error') {
+        line('扫描失败：' + ev.message, 'err');
+        tip.textContent = '❌ ' + ev.message;
+        tip.style.color = 'var(--err)';
+      }
+    });
+  } catch (e) {
+    line('扫描失败：' + (e.message || e), 'err');
+    tip.textContent = '❌ ' + (e.message || e);
+    tip.style.color = 'var(--err)';
+  }
+  $('#btnScanEmails').disabled = false;
+  setTimeout(() => { tip.textContent = ''; }, 5000);
+};
+
+$('#btnEmailApply').onclick = async () => {
+  const sel = selectedEmailHits();
+  if (!sel.length) return;
+  if (!window.confirm(
+    `即将对 ${sel.length} 个岗位发起「邮箱直投」：会把你的简历（PDF 附件）真实发送到对方 HR 邮箱，不可撤回。\n\n`
+    + '点「确定」= 真实投递；点「取消」= 放弃。')) return;
+  const ids = sel.map(h => h.jobId);
+  $('#btnEmailApply').disabled = true;
+  line(`开始邮箱直投 ${ids.length} 个岗位…`, 'info');
+  try {
+    const res = await fetch(API_BASE + '/api/offerbiu/email-apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobIds: ids, intervalMs: 8000 }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    await readSse(res, (ev) => {
+      if (ev.type === 'progress') line(`[${ev.index + 1}/${ev.total}] ${ev.company || ''} ${ev.position || ''}`, 'info');
+      else if (ev.type === 'result') line(`  ${ev.status === 'applied' ? '✓ 已投递' : '✗ ' + ev.status}：${ev.company || ''} — ${String(ev.message || '').slice(0, 120)}`, ev.status === 'applied' ? 'ok' : 'warn');
+      else if (ev.type === 'done') line(`邮箱直投完成：成功 ${ev.ok} / 失败 ${ev.fail}（共 ${ev.total}）`, ev.fail ? 'warn' : 'ok');
+      else if (ev.type === 'error') line('邮箱直投失败：' + ev.message, 'err');
+    });
+  } catch (e) {
+    line('邮箱直投失败：' + (e.message || e), 'err');
+  }
+  updateEmailApplyBtn();
+};
 
 // 开始投递时把「我的档案」同步进后端档案，确保官网自动填表 / 邮箱投递 / 简历匹配能拿到真实值
 $('#btnStart').addEventListener('click', () => {
