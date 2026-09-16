@@ -104,5 +104,12 @@ export interface ApplyResult {
    */
   preview?:
     | { to: string; subject: string; body: string; attachment?: string }
-    | { jobUrl?: string; needLogin: boolean; entryHits: string[]; resumePath?: string };
+    | {
+        jobUrl?: string;
+        needLogin: boolean;
+        entryHits: string[];
+        resumePath?: string;
+        /** 官网表单探测到的字段（含建议值）：人工补填一次后由服务端记忆复用 */
+        formFields?: { label: string; type: string; value?: string }[];
+      };
 }

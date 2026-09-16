@@ -129,6 +129,14 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_hrconv_platform ON hr_conversations(platform);
   CREATE INDEX IF NOT EXISTS idx_hrconv_stage ON hr_conversations(stage);
+
+  -- 官网投递表单记忆（按域名存 {字段标签: 值}；人工填一次后自动复用）
+  CREATE TABLE IF NOT EXISTS form_memory (
+    id TEXT PRIMARY KEY,
+    site TEXT NOT NULL UNIQUE,
+    fields TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 // 数据库迁移：添加 sdk_session_id 列（如果不存在）
@@ -557,6 +565,38 @@ export function deleteJobsBySource(source: string): number {
 
 export function clearJobs(): void {
   db.exec('DELETE FROM jobs');
+}
+
+/* ─────────────── 官网投递表单记忆（按域名自动填表） ─────────────── */
+
+export interface FormMemoryRow {
+  id: string;
+  site: string;
+  fields: string; // JSON: { "字段标签": "值" }
+  updated_at: string;
+}
+
+/** 读取某域名的表单记忆（{ 字段标签: 值 }），无则返回空对象 */
+export function getFormMemory(site: string): Record<string, string> {
+  const row = db.prepare('SELECT fields FROM form_memory WHERE site = ?').get(site) as FormMemoryRow | undefined;
+  if (!row) return {};
+  try {
+    const o = JSON.parse(row.fields);
+    return o && typeof o === 'object' ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 写入/覆盖某域名的表单记忆（人工填一次后下次自动复用） */
+export function saveFormMemory(site: string, fields: Record<string, string>): void {
+  if (!site || !Object.keys(fields).length) return;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO form_memory (id, site, fields, updated_at)
+    VALUES (@id, @site, @fields, @now)
+    ON CONFLICT(site) DO UPDATE SET fields = excluded.fields, updated_at = excluded.updated_at
+  `).run({ id: randomUUID(), site, fields: JSON.stringify(fields), now });
 }
 
 // 清空所有数据

@@ -15,6 +15,7 @@
  */
 import fs from 'node:fs';
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, pollEmailCode, resolveResumePath } from './common.js';
+import * as db from '../../db.js';
 import { sendMail } from '../mail.js';
 import type { ApplyInput, ApplyResult } from './types.js';
 
@@ -278,6 +279,100 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
   }
 }
 
+/** 从完整 URL 取域名（用于表单记忆的 site 键） */
+function siteOf(url?: string): string | null {
+  if (!url) return null;
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return null; }
+}
+
+/** 中文表单标签 → 档案字段建议值（profile 已填则预填，减少人工） */
+function profileValueForLabel(label: string, profile: ApplyInput['profile']): string | undefined {
+  if (/(姓名|名字)/.test(label)) return profile.name || undefined;
+  if (/(手机|电话|联系)/.test(label)) return profile.phone || undefined;
+  if (/(邮箱|email|mail)/i.test(label)) return profile.email || undefined;
+  if (/(学校|院校|毕业)/.test(label)) return profile.school || undefined;
+  if (/(专业)/.test(label)) return profile.major || undefined;
+  if (/(学历|学位)/.test(label)) return profile.education || undefined;
+  if (/(城市|地点|所(在|在)|意向)/.test(label)) return profile.city || undefined;
+  if (/(技能|特长|掌握|精通)/.test(label)) return profile.skills || undefined;
+  if (/(岗位|职位|应聘|意向)/.test(label)) return profile.expectedPositions || undefined;
+  return undefined;
+}
+
+/** 页面脚本：探测所有可见表单字段（input/textarea/select），返回 [{label,type,value}] */
+const PROBE_FORM_SCRIPT = `(function(){
+  function nearestLabel(el){
+    try{
+      if(el.id){var l=document.querySelector('label[for="'+el.id+'"]');if(l&&l.textContent)return l.textContent.replace(/[:：*\\s]/g,'').trim();}
+      var p=el.closest('label');if(p)return p.textContent.replace(/[:：*\\s]/g,'').trim();
+      var gp=el.closest('.form-item,.field,.item,.el-form-item,.control-group,.form-group');
+      if(gp){var t=gp.querySelector('label,.label,.form-label');if(t)return t.textContent.replace(/[:：*\\s]/g,'').trim();
+        var parts=gp.textContent.replace(/[:：*]/g,'').split(/[\\n\\r]/);return (parts[0]||'').trim();}
+      if(el.placeholder)return el.placeholder.replace(/[:：*\\s]/g,'').trim();
+      if(el.getAttribute('name'))return el.getAttribute('name').trim();
+      if(el.getAttribute('aria-label'))return el.getAttribute('aria-label').trim();
+    }catch(e){}
+    return '';
+  }
+  var els=document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]),textarea,select');
+  var out=[];
+  els.forEach(function(el){var lab=nearestLabel(el);if(lab)out.push({label:lab,type:(el.tagName.toLowerCase()==='select'?'select':(el.type||'text')),value:el.value||''});});
+  return JSON.stringify(out);
+})()`;
+
+async function probeFormFields(logs: ApplyLogger): Promise<{ label: string; type: string; value: string }[]> {
+  const r = await bexec(CTX, 'eval', { script: PROBE_FORM_SCRIPT }, logs, '探测表单字段').catch(() => undefined);
+  try {
+    const data = r?.data ? JSON.parse(String(r.data)) : [];
+    return Array.isArray(data) ? data : [];
+  } catch { return []; }
+}
+
+/** 页面脚本：按 {label: value} 填表（兼容 input/textarea/select，触发 input/change 事件） */
+function fillFormScript(fields: Record<string, string>): string {
+  const json = JSON.stringify(fields).replace(/</g, '\\u003c');
+  return `(function(fields){
+    function nearestLabel(el){
+      try{
+        if(el.id){var l=document.querySelector('label[for="'+el.id+'"]');if(l&&l.textContent)return l.textContent.replace(/[:：*\\s]/g,'').trim();}
+        var p=el.closest('label');if(p)return p.textContent.replace(/[:：*\\s]/g,'').trim();
+        var gp=el.closest('.form-item,.field,.item,.el-form-item,.control-group,.form-group');
+        if(gp){var t=gp.querySelector('label,.label,.form-label');if(t)return t.textContent.replace(/[:：*\\s]/g,'').trim();
+          var parts=gp.textContent.replace(/[:：*]/g,'').split(/[\\n\\r]/);return (parts[0]||'').trim();}
+        if(el.placeholder)return el.placeholder.replace(/[:：*\\s]/g,'').trim();
+        if(el.getAttribute('name'))return el.getAttribute('name').trim();
+        if(el.getAttribute('aria-label'))return el.getAttribute('aria-label').trim();
+      }catch(e){}
+      return '';
+    }
+    function setVal(el,v){
+      try{
+        if(el.tagName.toLowerCase()==='select'){
+          for(var i=0;i<el.options.length;i++){if(el.options[i].text.indexOf(v)>=0||el.options[i].value===v){el.selectedIndex=i;break;}}
+        }else{
+          var proto=Object.getPrototypeOf(el);var setter=Object.getOwnPropertyDescriptor(proto,'value').set;
+          setter.call(el,v);
+        }
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+      }catch(e){}
+    }
+    var els=document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]),textarea,select');
+    var filled=0;
+    els.forEach(function(el){var lab=nearestLabel(el);if(lab&&(lab in fields)){setVal(el,fields[lab]);filled++;}});
+    return JSON.stringify({filled:filled});
+  })(${json})`;
+}
+
+async function autofillForm(fields: Record<string, string>, logs: ApplyLogger): Promise<{ ok: boolean; filled: number }> {
+  if (!Object.keys(fields).length) return { ok: true, filled: 0 };
+  const r = await bexec(CTX, 'eval', { script: fillFormScript(fields) }, logs, '自动填写表单').catch(() => undefined);
+  try {
+    const data = r?.data ? JSON.parse(String(r.data)) : null;
+    return { ok: !!r?.ok, filled: data?.filled || 0 };
+  } catch { return { ok: !!r?.ok, filled: 0 }; }
+}
+
 export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
   const logs = new ApplyLogger();
   const platform = 'offerbiu';
@@ -312,13 +407,31 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
       }, logs, '预览：只读探测投递入口').catch(() => undefined);
       let entryHits: string[] = [];
       try { entryHits = ((probe?.data && JSON.parse(String(probe.data))) || {}).entryHits || []; } catch { entryHits = []; }
+
+      // 若有投递入口，只读进入表单页探测字段（不登录/不填/不提交），供用户预览与人工补填
+      const site = siteOf(jobUrl);
+      let formFields: { label: string; type: string; value?: string }[] = [];
+      if (entryHits.length) {
+        for (const label of ['投递简历', '投递', '网申', '申请职位', '立即申请', '在线投递', '投个简历']) {
+          const rr = await bexec(CTX, 'click', { text: label, timeout: 3000 }, logs, `预览：只读进入表单页「${label}」`);
+          if (rr.ok) break;
+        }
+        await sleep(1500);
+        const probed = await probeFormFields(logs);
+        const mem = site ? db.getFormMemory(site) : {};
+        formFields = probed.map((f) => ({
+          label: f.label,
+          type: f.type,
+          value: mem[f.label] ?? profileValueForLabel(f.label, input.profile) ?? (f.value || undefined),
+        }));
+      }
       const resumeNote = resumePath ? '已就绪' : '缺失⚠️（提交后将无附件）';
       logs.step('预览（未提交/待确认）', true,
-        `登录态=${needLogin ? '需登录' : '已登录/无需登录'}；投递入口=${entryHits.length ? entryHits.join('/') : '未发现'}；简历=${resumeNote}`);
+        `登录态=${needLogin ? '需登录' : '已登录/无需登录'}；入口=${entryHits.length ? entryHits.join('/') : '未发现'}；表单字段=${formFields.length}；简历=${resumeNote}`);
       return {
         platform, status: 'need_manual', logs: logs.logs, company, position,
-        preview: { jobUrl, needLogin, entryHits, resumePath },
-        message: `预览完成（未提交，需确认后真实投递）：${needLogin ? '该官网需登录' : '无需登录或已登录'}；投递入口${entryHits.length ? '发现「' + entryHits.join('/') + '」' : '未发现'}；简历${resumeNote}`,
+        preview: { jobUrl, needLogin, entryHits, resumePath, formFields },
+        message: `预览完成（未提交，需确认后真实投递）：${needLogin ? '该官网需登录' : '无需登录或已登录'}；入口${entryHits.length ? '发现「' + entryHits.join('/') + '」' : '未发现'}；表单${formFields.length ? '探测到 ' + formFields.length + ' 个字段（已按档案/记忆预填，可改）' : '无在线表单（仅上传简历）'}；简历${resumeNote}`,
       };
     }
 
@@ -353,6 +466,24 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
     }
     await sleep(2500);
 
+    // 表单自动填写（档案 + 历史记忆 + 本次人工补填），提交成功分支会记忆保存
+    const site = siteOf(jobUrl);
+    const formFieldsNow = await probeFormFields(logs);
+    const finalFields: Record<string, string> = {};
+    const memNow = site ? db.getFormMemory(site) : {};
+    for (const f of formFieldsNow) {
+      const v =
+        (input.autofill && input.autofill[f.label]) ??
+        memNow[f.label] ??
+        profileValueForLabel(f.label, input.profile) ??
+        (f.value || undefined);
+      if (v) finalFields[f.label] = v;
+    }
+    if (Object.keys(finalFields).length) {
+      const fr = await autofillForm(finalFields, logs);
+      logs.step('表单自动填写', fr.ok, `已自动填写 ${fr.filled} 个字段（档案+记忆${input.autofill ? '+人工补填' : ''}）`);
+    }
+
     // 上传附件简历
     if (resumePath) {
       for (const sel of ['input[type=file]', '.resume-upload input', 'input[accept*="pdf"]', 'input[accept*="doc"]']) {
@@ -370,6 +501,9 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
     const shot = await tryScreenshot(CTX);
     const ok = /(投递成功|投递完成|已投递|网申成功|申请成功|简历已送达|提交成功)/.test(text);
     if (ok) {
+      if (site && Object.keys(finalFields).length) {
+        try { db.saveFormMemory(site, finalFields); logs.step('表单记忆', true, `已记忆 ${Object.keys(finalFields).length} 个字段，下次同站自动填写`); } catch {}
+      }
       return { platform, status: 'applied', message: `已在官网向「${company || position || '该岗位'}」完成投递`, logs: logs.logs, company, position, screenshot: shot };
     }
     return { platform, status: 'need_manual', message: '已点击投递但未能确认成功，请检查打开的浏览器（可能需补填必填项）', logs: logs.logs, company, position, screenshot: shot };

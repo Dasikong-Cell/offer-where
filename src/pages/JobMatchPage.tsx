@@ -49,6 +49,9 @@ export function JobMatchPage() {
   const [showResult, setShowResult] = useState(false);
   // offerbiu 邮箱投递「预览确认」弹窗（发信不可逆，发送前先让用户确认收件人/标题/正文）
   const [emailPreview, setEmailPreview] = useState<{ jobId: string; platform: string; action: string; data: any } | null>(null);
+  // offerbiu 官网投递「预览 + 表单填写」弹窗（真实投递不可逆；表单字段按档案/记忆预填，人工填一次后自动记忆）
+  const [officialPreview, setOfficialPreview] = useState<{ jobId: string; platform: string; action: string; data: any } | null>(null);
+  const [officialFields, setOfficialFields] = useState<Record<string, string>>({});
 
   // 自动连投向导状态
   const [showBatch, setShowBatch] = useState(false);
@@ -201,7 +204,8 @@ export function JobMatchPage() {
     const key = channel === 'email' ? `${job.id}:${platform}:email` : (action === 'hello' ? `${job.id}:${platform}` : `${job.id}:${platform}:${action}`);
     setApplying(key);
     try {
-      // 第一遍：email 通道先 dryRun 预览（不真正发信）
+      // 官网通道（offerbiu 非邮箱）与邮箱通道都先 dryRun 预览；官网无 realSend 不会真正提交
+      const isOfficial = platform === 'offerbiu' && channel !== 'email';
       const d = await api('/apply', {
         method: 'POST',
         body: JSON.stringify({
@@ -211,9 +215,17 @@ export function JobMatchPage() {
           jobUrl: job.apply_url || undefined,
           jdText: job.jd || undefined,
           channel,
-          dryRun: channel === 'email',
+          dryRun: channel === 'email' || isOfficial,
         }),
       });
+      // 官网通道：展示表单字段（按档案/记忆预填，可编辑）→ 确认后真实投递
+      if (isOfficial && d?.preview) {
+        const init: Record<string, string> = {};
+        (d.preview.formFields || []).forEach((f: any) => { if (f.value) init[f.label] = f.value; });
+        setOfficialFields(init);
+        setOfficialPreview({ jobId: job.id, platform, action, data: d });
+        return;
+      }
       // 邮箱通道且有预览数据 → 弹确认框，等用户确认再正式发送
       if (channel === 'email' && d.preview) {
         setEmailPreview({ jobId: job.id, platform, action, data: d });
@@ -247,6 +259,38 @@ export function JobMatchPage() {
           jdText: job?.jd || undefined,
           channel: 'email',
           dryRun: false,
+        }),
+      });
+      setResult(d);
+      setShowResult(true);
+      handleApplyResult(platform, d);
+    } catch (e: any) {
+      MessagePlugin.error(e.message || '投递请求失败');
+    } finally {
+      setApplying(null);
+    }
+  };
+
+  // 官网投递确认：带人工补填的表单字段 + realSend 真实提交（提交成功后服务端自动记忆，下次同站免填）
+  const confirmOfficialApply = async (fields: Record<string, string>) => {
+    if (!officialPreview) return;
+    const { jobId, platform, action } = officialPreview;
+    const job = jobs.find(j => j.id === jobId);
+    setOfficialPreview(null);
+    setApplying(`${jobId}:${platform}`);
+    try {
+      const d = await api('/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          platform,
+          action,
+          jobId,
+          jobUrl: job?.apply_url || undefined,
+          jdText: job?.jd || undefined,
+          channel: 'auto',
+          dryRun: false,
+          realSend: true,
+          autofill: fields,
         }),
       });
       setResult(d);
@@ -664,6 +708,47 @@ export function JobMatchPage() {
             </div>
             <div style={{ marginTop: 10, fontSize: 12, maxHeight: 240, overflowY: 'auto', background: 'var(--td-bg-color-component)', padding: 10, borderRadius: 6, whiteSpace: 'pre-wrap' }}>
               {emailPreview.data.preview?.body}
+            </div>
+          </div>
+        )}
+      </Dialog>
+
+      {/* 官网投递「预览 + 表单填写」弹窗（真实投递不可逆；字段按档案/记忆预填，人工补填一次后自动记忆） */}
+      <Dialog
+        header="确认官网投递 · 表单填写"
+        visible={!!officialPreview}
+        onClose={() => setOfficialPreview(null)}
+        onConfirm={() => confirmOfficialApply(officialFields)}
+        confirmBtn="确认真实投递"
+        cancelBtn="取消"
+        width={560}
+      >
+        {officialPreview && (
+          <div>
+            <p style={{ fontSize: 12, color: 'var(--td-warning-color)', margin: '0 0 10px' }}>
+              即将在官网真实投递（不可逆）。以下表单字段已按你的档案与历史记忆自动预填，请核对或补充后确认；你补全的字段会被记住，下次同站自动填写。
+            </p>
+            {officialPreview.data.preview?.formFields?.length ? (
+              <div style={{ maxHeight: 320, overflowY: 'auto', marginBottom: 10 }}>
+                {officialPreview.data.preview.formFields.map((f: any, i: number) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ width: 130, fontSize: 12, flexShrink: 0 }}>{f.label}</span>
+                    <Input
+                      value={(officialFields[f.label] ?? f.value ?? '') as string}
+                      onChange={(v) => setOfficialFields({ ...officialFields, [f.label]: v as string })}
+                      placeholder={f.value ? '' : '请补全（将记忆）'}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontSize: 12, color: 'var(--td-text-color-secondary)', margin: '0 0 10px' }}>
+                该官网无在线表单（仅上传简历附件），确认即直接投递。
+              </p>
+            )}
+            <div style={{ fontSize: 12, color: 'var(--td-text-color-secondary)' }}>
+              登录态：{officialPreview.data.preview?.needLogin ? '需登录（将尝试邮箱验证码自动登录，失败需手动）' : '已登录 / 无需登录'}；
+              简历：{officialPreview.data.preview?.resumePath ? '已就绪' : '缺失 ⚠️'}
             </div>
           </div>
         )}
