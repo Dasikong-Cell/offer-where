@@ -17,6 +17,7 @@ import { isAiEnabled, getAiConfig } from "./services/apply/aiClient.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
+import { rememberCurrentForm } from "./services/apply/offerbiu.js";
 import { runAutoReply } from "./services/apply/autoReplyRunner.js";
 import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
@@ -563,6 +564,16 @@ app.post("/api/offerbiu/collect", async (req, res) => {
   } catch (error: any) {
     const status = /尚未登录/.test(error?.message || '') ? 401 : 500;
     res.status(status).json({ error: error?.message || '采集失败' });
+  }
+});
+
+// 记录「当前官网页面」的表单字段到记忆（按域名）：人工补填后调用，下次同站自动填写
+app.post("/api/offerbiu/remember-form", async (_req, res) => {
+  try {
+    const r = await rememberCurrentForm();
+    res.json({ ok: true, site: r.site, saved: r.saved, fields: r.fields, logs: r.logs });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message || '记录失败' });
   }
 });
 

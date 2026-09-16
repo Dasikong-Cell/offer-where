@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, pollEmailCode, resolveResumePath } from './common.js';
 import * as db from '../../db.js';
 import { sendMail } from '../mail.js';
-import type { ApplyInput, ApplyResult } from './types.js';
+import type { ApplyInput, ApplyResult, ApplyLog } from './types.js';
 
 const CTX = 'official'; // 企业官网专用浏览器上下文
 
@@ -511,4 +511,35 @@ export async function runOfferbiu(input: ApplyInput): Promise<ApplyResult> {
     const shot = await tryScreenshot(CTX).catch(() => undefined);
     return { platform, status: 'error', message: e?.message || String(e), logs: logs.logs, company, position, screenshot: shot };
   }
+}
+
+/**
+ * 记录「当前官网页面」的表单字段到记忆（按域名）。
+ *
+ * 用途：官网投递遇到简历/档案中没有的字段（如籍贯 / 政治面貌 / 身高）会留空，
+ * 用户在 9227 官网窗口人工补填后调用本函数，把当前页面**所有已填字段**存入 form_memory，
+ * 下次同一域名自动填写。补齐「人工填写 → 记录 → 下次自动填写」闭环。
+ *
+ * 前置：official 上下文(9227)当前标签停留在目标官网表单页（人工补填后不要关页）。
+ */
+export async function rememberCurrentForm(): Promise<{ site: string | null; saved: number; fields: Record<string, string>; logs: ApplyLog[] }> {
+  const logs = new ApplyLogger();
+  const urlRes = await bexec(CTX, 'eval', { script: 'location.href' }, logs, '读取当前官网地址').catch(() => undefined);
+  const url = urlRes?.data ? String(urlRes.data) : '';
+  const site = siteOf(url);
+  const probed = await probeFormFields(logs);
+  const fields: Record<string, string> = {};
+  for (const f of probed) {
+    const v = (f.value || '').trim();
+    if (f.label && v) fields[f.label] = v;
+  }
+  const n = Object.keys(fields).length;
+  if (site && n) {
+    try { db.saveFormMemory(site, fields); logs.step('表单记忆', true, `已记录 ${n} 个字段（${site}），下次同站自动填写`); } catch (e: any) { logs.step('表单记忆', false, e?.message || '写入失败'); }
+  } else if (!site) {
+    logs.step('表单记忆', false, '无法识别当前官网域名（请确认 9227 窗口停在目标官网表单页）');
+  } else {
+    logs.step('表单记忆', false, '当前页面没有可记录的表单字段');
+  }
+  return { site, saved: n, fields, logs: logs.logs };
 }

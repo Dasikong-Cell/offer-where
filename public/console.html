@@ -208,6 +208,15 @@
   </div>
 
   <div class="card">
+    <h2>🖊 官网表单记忆（人工补填后记录）</h2>
+    <div class="sub" style="margin-bottom:12px">官网投递时，简历 / 档案里没有的字段（如籍贯、政治面貌、身高）会留空。你在官网窗口手填完并停留在该表单页后，点下面按钮把当前页面字段按域名记录到记忆，下次同一网站自动填写。</div>
+    <div class="actions">
+      <button id="btnRememberForm">记录当前官网表单</button>
+      <span class="sub" id="rememberTip" style="margin-left:8px"></span>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="actions">
       <button class="primary" id="btnStart">开始投递</button>
       <button id="btnStop" disabled>停止</button>
@@ -961,6 +970,31 @@ $('#btnSaveProfile').addEventListener('click', async () => {
     tip.style.color = 'var(--err, #d23)';
   }
   setTimeout(() => { tip.textContent = ''; }, 3000);
+});
+
+// 记录当前官网表单字段到记忆（人工补填后调用，下次同站自动填写）
+$('#btnRememberForm').addEventListener('click', async () => {
+  const tip = $('#rememberTip');
+  tip.textContent = '记录中…';
+  tip.style.color = 'var(--muted)';
+  try {
+    const r = await (await fetch(API_BASE + '/api/offerbiu/remember-form', { method: 'POST' })).json();
+    if (r.ok && r.saved > 0) {
+      tip.textContent = `✅ 已记录 ${r.saved} 个字段${r.site ? '（' + r.site + '）' : ''}`;
+      tip.style.color = 'var(--ok)';
+      line(`官网表单记忆：已记录 ${r.saved} 个字段${r.site ? '（' + r.site + '）' : ''}，下次同站自动填写`, 'ok');
+    } else if (r.ok) {
+      tip.textContent = '⚠ 当前页面没有可记录的字段（请确认 9227 窗口停在填好的官网表单页）';
+      tip.style.color = 'var(--warn)';
+    } else {
+      tip.textContent = '❌ ' + (r.error || '记录失败');
+      tip.style.color = 'var(--err)';
+    }
+  } catch (e) {
+    tip.textContent = '❌ ' + (e.message || e);
+    tip.style.color = 'var(--err)';
+  }
+  setTimeout(() => { tip.textContent = ''; }, 5000);
 });
 
 // 开始投递时把「我的档案」同步进后端档案，确保官网自动填表 / 邮箱投递 / 简历匹配能拿到真实值
