@@ -28,6 +28,9 @@ const SCROLL = `(() => {
 const CITY = ['北京','上海','广州','深圳','杭州','成都','南京','武汉','西安','重庆','苏州','天津','长沙','青岛','宁波','东莞','无锡','佛山','合肥','厦门','福州','济南','郑州','大连','珠海','常州','沈阳','长春','哈尔滨','石家庄','昆明','贵阳','南宁','南昌','太原','兰州','海口','新乡','汉中','安顺','鞍山','吉林','烟台','潍坊','温州','金华','台州','绍兴','嘉兴','泉州','惠州','中山','江门','湛江','保定','唐山','徐州','扬州','镇江','芜湖','蚌埠','洛阳','襄阳','宜昌','株洲','柳州','绵阳','宜宾','廊坊','威海','临沂'];
 const TAGS_RE = /(制造业|央国企|国企|民企|外企|IT|互联网|游戏|电商|金融|政府|事业单位|社会组织|医疗|教育|汽车|通信|能源|消费|地产|物流|传媒|人工智能|大数据|芯片|半导体|航空|航天|船舶|电子|化工|机械|生物|制药|届|秋招|实习|补录|提前批|尽快投递|需要笔试|免笔试|投递入口|加入投递)/;
 
+/** 读取当前页码（用于翻页后校验是否真的翻过去了） */
+const PAGE_INDICATOR = `JSON.stringify((function(){var t=document.body?document.body.innerText:'';var m=t.match(/当前第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/);return {page:m?Number(m[1]):null,total:m?Number(m[2]):null};})())`;
+
 const EXTRACT = `(() => {
   const CITY = ${JSON.stringify(CITY)};
   const TAGS_RE = ${TAGS_RE.toString()};
@@ -57,9 +60,16 @@ const EXTRACT = `(() => {
 /**
  * 从 Offerbiu 校招信息库采集岗位卡片入库为岗位池。
  * 前置：本机浏览器上下文已登录 Offerbiu（登录态持久化）。
+ *
+ * 2026-09-16 增强：支持**翻页**采集。实测 /companies/ 共 912 页 / 8201 条，
+ * 旧实现只取第 1 页（约 50 条）。传 pages>1 会点「下一页」逐页抓取，
+ * 用 apply_url 去重后 upsert 入库，直到收满 limit 或翻到末页。
+ *
+ * @param limit 最多入库多少条（默认 50）
+ * @param pages 最多翻多少页（默认 1；设为 0 或负数按 1 处理）
  * @returns 采集数量与岗位行
  */
-export async function collectOfferbiu(limit = 50): Promise<{ collected: number; jobs: any[]; needLogin?: boolean }> {
+export async function collectOfferbiu(limit = 50, pages = 1): Promise<{ collected: number; jobs: any[]; needLogin?: boolean }> {
   // 1) 打开首页，判断登录态（存在指向 /login 的登录入口 => 未登录）
   const home = await execAction('offerbiu', 'navigate', { url: 'https://offerbiu.com/home', headless: false });
   if (!home.ok) throw new Error('打开 Offerbiu 失败：' + home.error);
@@ -75,24 +85,52 @@ export async function collectOfferbiu(limit = 50): Promise<{ collected: number; 
 
   // 2) 进入校招信息库（推荐岗位）
   await execAction('offerbiu', 'navigate', { url: 'https://offerbiu.com/companies/', headless: false });
-  // 3) 循环滚动触发懒加载
-  await execAction('offerbiu', 'eval', { script: SCROLL });
-  await execAction('offerbiu', 'wait', { timeout: 2000 });
-  // 4) 抽取真实岗位卡片（公司 / 岗位 / 城市 / 官网投递入口）
-  const evalRes = await execAction('offerbiu', 'eval', { script: EXTRACT });
-  const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; jd: string }>) || [];
 
+  const maxTotal = Math.max(1, Number(limit) || 50);
+  const maxPages = Math.max(1, Number(pages) || 1);
   const collected: any[] = [];
-  for (const c of raw.slice(0, Number(limit) || 50)) {
-    const job = db.upsertJob({
-      source: 'offerbiu',
-      company: c.company,
-      position: c.position,
-      city: c.city,
-      jd: c.jd,
-      apply_url: c.apply_url,
-    });
-    collected.push(job);
+  const seen = new Set<string>();
+  const readPage = async (): Promise<number | null> => {
+    const r = await execAction('offerbiu', 'eval', { script: PAGE_INDICATOR });
+    try { return (JSON.parse(String(r.data)) as any)?.page ?? null; } catch { return null; }
+  };
+  let pageNum = (await readPage()) ?? 1;
+
+  // 3) 逐页：滚动触发懒加载 → 抽取卡片 → 入库（apply_url 去重）→ 点「下一页」（带页码校验 + 重试）
+  //    实测：/companies/ 每页仅 9 个「投递入口」，SPA 翻页会重建分页控件导致偶发点击失效。
+  for (let p = 0; p < maxPages; p++) {
+    await execAction('offerbiu', 'eval', { script: SCROLL });
+    await execAction('offerbiu', 'wait', { timeout: 2000 });
+    const evalRes = await execAction('offerbiu', 'eval', { script: EXTRACT });
+    const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; jd: string }>) || [];
+    for (const c of raw) {
+      if (!c.apply_url || seen.has(c.apply_url)) continue;
+      seen.add(c.apply_url);
+      const job = db.upsertJob({
+        source: 'offerbiu',
+        company: c.company,
+        position: c.position,
+        city: c.city,
+        jd: c.jd,
+        apply_url: c.apply_url,
+      });
+      collected.push(job);
+      if (collected.length >= maxTotal) break;
+    }
+    if (collected.length >= maxTotal) break;
+    if (p < maxPages - 1) {
+      let moved = false;
+      for (let attempt = 0; attempt < 4 && !moved; attempt++) {
+        // 先真实鼠标点击（SPA 分页控件对合成点击常失效），失败再退回普通 click
+        let nx = await execAction('offerbiu', 'realClick', { text: '下一页', timeout: 4000 });
+        if (!nx.ok) nx = await execAction('offerbiu', 'click', { text: '下一页', timeout: 5000 });
+        if (!nx.ok) { console.warn('[offerbiu] 未找到「下一页」，停止翻页'); break; }
+        await execAction('offerbiu', 'wait', { timeout: 2800 });
+        const cur = await readPage();
+        if (cur && cur > pageNum) { pageNum = cur; moved = true; }
+      }
+      if (!moved) { console.warn(`[offerbiu] 翻页未生效（停在第 ${pageNum} 页），结束采集`); break; }
+    }
   }
   return { collected: collected.length, jobs: collected };
 }

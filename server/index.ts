@@ -559,8 +559,9 @@ app.post("/api/jobs/match", async (req, res) => {
 // 从 Offerbiu 校招信息库采集岗位（需用户已在该浏览器上下文登录；采集结果入库为岗位池）
 app.post("/api/offerbiu/collect", async (req, res) => {
   try {
-    const { limit = 50 } = req.body || {};
-    const result = await collectOfferbiu(Number(limit) || 50);
+    // pages：翻页数（实测 /companies/ 共 912 页 / 8201 条；默认只采第 1 页）
+    const { limit = 50, pages = 1 } = req.body || {};
+    const result = await collectOfferbiu(Number(limit) || 50, Number(pages) || 1);
     res.json({ collected: result.collected, jobs: result.jobs });
   } catch (error: any) {
     const status = /尚未登录/.test(error?.message || '') ? 401 : 500;
