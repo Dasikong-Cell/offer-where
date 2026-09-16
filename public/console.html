@@ -161,6 +161,53 @@
   </div>
 
   <div class="card">
+    <h2>📇 我的档案（官网自动填表 / 邮箱投递 / 简历匹配共用）</h2>
+    <div class="sub" style="margin-bottom:12px">这些字段会作为官网投递「自动填表」的建议值、邮箱投递的【基本信息】、简历匹配的个人背景。填一次即持久化到后端档案。除简历路径外，官网遇自定义字段（如籍贯、政治面貌）留空时你补填一次后会按域名记忆。</div>
+    <div class="fields">
+      <div class="field">
+        <label>姓名</label>
+        <input type="text" id="pfName" placeholder="张三" />
+      </div>
+      <div class="field">
+        <label>手机号</label>
+        <input type="text" id="pfPhone" placeholder="13800000000" />
+      </div>
+      <div class="field">
+        <label>邮箱</label>
+        <input type="text" id="pfEmail" placeholder="name@example.com（也用于读取登录验证码）" />
+      </div>
+      <div class="field">
+        <label>学校</label>
+        <input type="text" id="pfSchool" placeholder="XX 大学" />
+      </div>
+      <div class="field">
+        <label>专业</label>
+        <input type="text" id="pfMajor" placeholder="计算机科学与技术" />
+      </div>
+      <div class="field">
+        <label>学历</label>
+        <input type="text" id="pfEducation" placeholder="本科 / 硕士" />
+      </div>
+      <div class="field">
+        <label>意向城市</label>
+        <input type="text" id="pfCity" placeholder="北京 / 上海" />
+      </div>
+      <div class="field">
+        <label>技能（逗号分隔）</label>
+        <input type="text" id="pfSkills" placeholder="Java,Spring,MySQL" />
+      </div>
+      <div class="field" style="flex-basis:100%">
+        <label>简历文件路径（绝对路径，PDF；官网/邮箱投递附件用）</label>
+        <input type="text" id="pfResume" placeholder="C:/Users/xxx/Desktop/简历.pdf" />
+      </div>
+    </div>
+    <div class="actions" style="margin-top:6px">
+      <button id="btnSaveProfile">保存档案</button>
+      <span class="sub" id="pfSavedTip" style="margin-left:8px"></span>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="actions">
       <button class="primary" id="btnStart">开始投递</button>
       <button id="btnStop" disabled>停止</button>
@@ -860,7 +907,7 @@ async function saveProfileFields(patch) {
   if (!r.ok) throw new Error('保存档案失败 ' + r.status);
 }
 
-// 加载档案，预填「目标职位 / AI 名称 / 署名开关」
+// 加载档案，预填「目标职位 / AI 名称 / 署名开关 / 我的档案字段」
 async function loadProfile() {
   try {
     const cur = await (await fetch(API_BASE + '/api/profile')).json().catch(() => ({ profile: {} }));
@@ -868,13 +915,55 @@ async function loadProfile() {
     if (p.expectedPositions != null) $('#expectedPositions').value = p.expectedPositions;
     if (p.aiName) $('#aiName').value = p.aiName;
     if (typeof p.signAi === 'boolean') $('#signAi').checked = p.signAi;
+    // 我的档案字段预填
+    const pf = {
+      pfName: p.name, pfPhone: p.phone, pfEmail: p.email, pfSchool: p.school,
+      pfMajor: p.major, pfEducation: p.education, pfCity: p.city, pfSkills: p.skills, pfResume: p.resume_path,
+    };
+    for (const id in pf) {
+      const v = pf[id];
+      if (v != null && v !== '') { const el = document.getElementById(id); if (el) el.value = v; }
+    }
   } catch (_) { /* 忽略，使用默认值 */ }
 }
 loadProfile();
 
-// 开始投递时把目标职位同步进档案，便于后端 runner 做相关性过滤
+// 收集「我的档案」字段 → 后端档案补丁（自动清空为空的字段，避免覆盖已有值）
+function gatherProfilePatch() {
+  const get = (id) => (document.getElementById(id)?.value || '').trim();
+  const patch = {
+    name: get('pfName'),
+    phone: get('pfPhone'),
+    email: get('pfEmail'),
+    school: get('pfSchool'),
+    major: get('pfMajor'),
+    education: get('pfEducation'),
+    city: get('pfCity'),
+    skills: get('pfSkills'),
+    resume_path: get('pfResume'),
+    expectedPositions: get('expectedPositions'),
+  };
+  for (const k of Object.keys(patch)) if (patch[k] === '') delete patch[k];
+  return patch;
+}
+
+// 保存「我的档案」：合并到后端档案（自动填表 / 邮箱投递 / 简历匹配共用）
+$('#btnSaveProfile').addEventListener('click', async () => {
+  const tip = $('#pfSavedTip');
+  try {
+    await saveProfileFields(gatherProfilePatch());
+    tip.textContent = '✅ 已保存';
+    tip.style.color = 'var(--ok, #2e9e5b)';
+  } catch (e) {
+    tip.textContent = '❌ 保存失败：' + (e.message || e);
+    tip.style.color = 'var(--err, #d23)';
+  }
+  setTimeout(() => { tip.textContent = ''; }, 3000);
+});
+
+// 开始投递时把「我的档案」同步进后端档案，确保官网自动填表 / 邮箱投递 / 简历匹配能拿到真实值
 $('#btnStart').addEventListener('click', () => {
-  saveProfileFields({ expectedPositions: ($('#expectedPositions').value || '').trim() }).catch(() => {});
+  saveProfileFields(gatherProfilePatch()).catch(() => {});
 }, true);
 
 // 拉取 AI 话术能力状态，联动控制台徽标与「AI 生成话术」开关
