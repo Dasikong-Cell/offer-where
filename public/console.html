@@ -340,10 +340,11 @@
 
 <script>
 const PLATFORMS = [
-  { id: 'boss',    name: 'BOSS 直聘', hint: '沟通效率高' },
-  { id: 'job51',   name: '51job',     hint: '岗位库大' },
-  { id: 'liepin',  name: '猎聘',       hint: '中高端' },
-  { id: 'zhilian', name: '智联招聘',   hint: '综合' },
+  { id: 'boss',     name: 'BOSS 直聘', hint: '沟通效率高' },
+  { id: 'job51',    name: '51job',     hint: '岗位库大' },
+  { id: 'liepin',   name: '猎聘',       hint: '中高端' },
+  { id: 'zhilian',  name: '智联招聘',   hint: '综合' },
+  { id: 'offerbiu', name: '企业官网',   hint: 'Offerbiu·校招' },
 ];
 const NAME = Object.fromEntries(PLATFORMS.map(p => [p.id, p.name]));
 const selected = new Set(['boss']);

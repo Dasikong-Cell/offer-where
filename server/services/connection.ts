@@ -21,8 +21,9 @@ const __dirname = path.dirname(__filename);
 const DATA_ROOT = path.join(__dirname, '..', '..', 'data', 'browser');
 const CDP_CONFIG_PATH = path.join(DATA_ROOT, 'cdp.json');
 
-/** 控制台可投递平台（与 public/console.html 的 PLATFORMS 保持一致） */
-export const DELIVERY_PLATFORMS = ['boss', 'job51', 'liepin', 'zhilian'];
+/** 控制台可投递平台（与 public/console.html 的 PLATFORMS 保持一致）
+ *  offerbiu = 企业官网通道（offerbiu.com 采集 + 企业官网表单投递），与 official 共用 9227 窗口。 */
+export const DELIVERY_PLATFORMS = ['boss', 'job51', 'liepin', 'zhilian', 'offerbiu'];
 
 function getCdpEndpoint(key: string): string | null {
   try {
