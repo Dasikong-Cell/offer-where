@@ -18,8 +18,10 @@ const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const BAD_MAIL = /(example\.|sentry|w3\.org|qcloud|tencent\.com$|noreply|no-reply)/i;
 /** 已知平台域名：其 apply_url 不是企业页面（会走对应平台引擎），扫描时跳过 */
 export const PLATFORM_DOMAIN = /(zhipin\.com|zhaopin\.com|51job\.com|nowcoder\.com)/i;
-/** 「像招聘邮箱」的前缀/关键词（默认只收这类） */
+/** 「像招聘邮箱」的前缀/关键词 */
 const HR_LIKE = /(hr|job|zhaopin|recruit|campus|xyzp|zp|career|talent|apply|offer|resume)/i;
+/** 常见企业/个人邮箱主机：前缀不显眼但确实是招聘联系方式（如 aerospaceservo@163.com、hhsyzhp@126.com） */
+const COMMON_MAIL_HOST = /@(126|163|qq|gmail|outlook|hotmail|foxmail|sina|sohu|139|aliyun|yeah|21cn|vip)\.[a-z]/i;
 
 /** 从文本提取邮箱（去重、去噪、小写） */
 export function extractEmails(text: string): string[] {
@@ -76,7 +78,8 @@ export async function scanOfferbiuEmails(opts: ScanOpts = {}): Promise<{ scanned
       await sleep(settleMs);
       const text = await pageText('official').catch(() => '');
       let mails = extractEmails(String(text || ''));
-      if (hrLikeOnly) mails = mails.filter((m) => HR_LIKE.test(m));
+      // 保留「像招聘邮箱」的：前缀含 hr/job/campus… 或落在常见邮箱主机上
+      if (hrLikeOnly) mails = mails.filter((m) => HR_LIKE.test(m) || COMMON_MAIL_HOST.test(m));
       if (mails.length) {
         found.push({
           jobId: j.id,
