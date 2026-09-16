@@ -67,10 +67,16 @@ async function closeStrayBlankTabs(endpoint: string): Promise<void> {
     const ws = await connect(ver.webSocketDebuggerUrl);
     const bs = attachSession(ws, '__browser__');
     const { targetInfos } = await send(bs, 'Target.getTargets');
-    for (const t of targetInfos || []) {
-      if (t.type === 'page' && (t.url === 'about:blank' || t.url === 'chrome://newtab/' || t.url === '')) {
-        try { await send(bs, 'Target.closeTarget', { targetId: t.targetId }); } catch { /* 忽略 */ }
-      } else if (t.type === 'page' && t.webSocketDebuggerUrl) {
+    // ⚠️ 关键保护：绝不能把窗口的页面标签清空 —— 关掉最后一个标签会让整个 Chrome 进程退出，
+    // 后续所有 CDP 调用都会 ECONNREFUSED（实测踩过：只剩空白标签时清理直接杀了 Chrome）。
+    const pages: any[] = (targetInfos || []).filter((t: any) => t.type === 'page');
+    let remaining = pages.length;
+    const isBlank = (t: any) => t.url === 'about:blank' || t.url === 'chrome://newtab/' || t.url === '';
+    for (const t of pages) {
+      if (isBlank(t)) {
+        if (remaining <= 1) continue; // 保留最后一个（哪怕是空白）
+        try { await send(bs, 'Target.closeTarget', { targetId: t.targetId }); remaining--; } catch { /* 忽略 */ }
+      } else if (t.webSocketDebuggerUrl) {
         // 2026-09-12 反检测：首次接触端点时，给每个已有页面标签（含「养熟」标签）
         // 注入 anti-bot 脚本，无需重建标签即可抹掉自动化特征。
         try {
