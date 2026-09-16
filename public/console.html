@@ -486,8 +486,8 @@ async function runPlatform(pf, limit, intervalMs, sinceMinutes) {
     body: JSON.stringify({
       // source 必须一起传：引擎按 source 过滤岗位库，只传 platform 会串平台
       platform: pf, source: pf, limit, intervalMs, stream: true,
-      // 官网(offerbiu)真实投递开关：仅在用户确认后传 true；其余平台忽略此字段
-      ...(pf === 'offerbiu' ? { realSend: officialRealSend === true } : {}),
+      // 官网(offerbiu)：投递前先自动采集 offerbiu.com 岗位池并按匹配筛选；真实投递开关仅在用户确认后传 true；其余平台忽略此字段
+      ...(pf === 'offerbiu' ? { collect: 'offerbiu', realSend: officialRealSend === true } : {}),
       criteria: { excludeApplied: true, ...(kwRaw.length ? { keywords: kwRaw } : {}) },
       ...(sinceMinutes > 0 ? { sinceMinutes } : {}),
     }),
@@ -540,10 +540,12 @@ $('#btnStart').onclick = async () => {
   // 官网(Offerbiu)真实投递闸门：开始批量前必须显式确认，否则仅预览不提交（防批量误投）
   if (runSet.includes('offerbiu')) {
     officialRealSend = window.confirm(
-      '⚠️ 即将对「企业官网(Offerbiu)」真实投递：会在企业官网自动填表 + 上传简历并真实提交，可能触发自动登录。\n\n'
+      '⚠️ 即将对「企业官网(Offerbiu)」真实投递，流程为：\n'
+      + '① 自动采集 offerbiu.com 岗位 → ② 按你的目标职位筛选匹配岗位 → ③ 逐条打开官网投递入口；\n'
+      + '④ 需登录的官网用邮箱验证码自动登录 → ⑤ 按档案/记忆自动填表 + 上传简历并提交。\n\n'
       + '• 表单字段会按你的档案与历史记忆自动填写；\n'
       + '• 首次遇到未记忆的字段会标 need_manual，你在官网窗口手填一次后，下次同站自动复用；\n'
-      + '• 点「确定」= 真实投递；点「取消」= 仅预览不提交。'
+      + '• 点「确定」= 真实投递；点「取消」= 仅采集+筛选预览，不真实提交。'
     );
     line(officialRealSend ? '已确认官网真实投递（将真实提交并附简历）。' : '官网投递未确认：将仅预览，不真实提交。', officialRealSend ? 'warn' : 'info');
   } else {
