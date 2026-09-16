@@ -424,6 +424,30 @@ export async function execCdpAction(
         if (args.waitAfter) await new Promise(r => setTimeout(r, args.waitAfter));
         return r;
       }
+      /** 真实鼠标点击（CDP Input 域）。
+       *  很多站点是 React/Vue 自研组件：对 el.click() 合成事件无响应，
+       *  或按钮必须带「用户激活(user activation)」才允许开新标签 ——
+       *  表现为「点名点击返回 ok，但页面毫无变化」。此处派发真实鼠标事件（移动+按下+抬起）绕过。
+       *  找不到元素时返回 ok:false，调用方可回退到普通 click。 */
+      case 'realClick': {
+        const found = await waitForElement(s, args, args.timeout || 8000).catch(() => false);
+        if (!found) return { ok: false, error: `未找到可点击元素：${args.text || args.selector || args.role || ''}` };
+        const ra = JSON.stringify(args);
+        const rexpr = `(function(){ ${FIND_EL_SRC} const el = __findEl(${ra}); if(!el) return JSON.stringify({found:false});
+          try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch(e) {}
+          const rr = el.getBoundingClientRect();
+          return JSON.stringify({ found: true, x: rr.left + rr.width / 2, y: rr.top + rr.height / 2 });
+        })()`;
+        const rr = await send(s, 'Runtime.evaluate', { expression: rexpr, returnByValue: true });
+        const rv = JSON.parse(rr.result.value);
+        if (!rv.found) return { ok: false, error: `未找到可点击元素：${args.text || args.selector || ''}` };
+        const cx = Math.round(rv.x), cy = Math.round(rv.y);
+        await send(s, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: cx, y: cy });
+        await send(s, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: cx, y: cy, button: 'left', clickCount: 1 });
+        await send(s, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1 });
+        if (args.waitAfter) await new Promise(r2 => setTimeout(r2, args.waitAfter));
+        return await okResult(s);
+      }
       case 'fill': {
         if (args.value === undefined) throw new Error('fill 需要 value 参数');
         const found = await waitForElement(s, args, args.timeout || 15000).catch(() => false);
