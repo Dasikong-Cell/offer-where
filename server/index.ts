@@ -601,7 +601,7 @@ app.post("/api/offerbiu/collect-keywords", async (req, res) => {
 
 /** 扫描 offerbiu 岗位中的招聘邮箱（SSE 进度 + 末尾 found 事件） */
 app.post("/api/offerbiu/scan-emails", async (req, res) => {
-  const { limit, offset, hrLikeOnly } = req.body || {};
+  const { limit, offset, hrLikeOnly, settleMs } = req.body || {};
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -614,6 +614,7 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
       limit: Number(limit) || 20,
       offset: Number(offset) || 0,
       hrLikeOnly: hrLikeOnly !== false,
+      settleMs: settleMs ? Number(settleMs) : undefined,
       onProgress: (ev) => send(ev),
     });
     send({ type: 'found', scanned: r.scanned, found: r.found });
