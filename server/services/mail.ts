@@ -305,9 +305,40 @@ export interface SendMailOptions {
 }
 
 /**
- * 发送邮件。复用 mail_config 里的邮箱与 IMAP 授权码（QQ 邮箱开启 IMAP/SMTP 后两者通用）。
+ * 把一份原始 MIME 邮件追加到「已发送」文件夹。
+ *
+ * 背景：SMTP 发信**不会**自动在邮件服务端留下副本（只有网页版/客户端发送才会 APPEND），
+ * 导致用户在 QQ「已发送」里看不到我们发出去的简历邮件，误以为没投递成功。
+ * 这里显式 APPEND 一份等内容的副本，让「已发送」= 真实投递记录。
  */
-export async function sendMail(opts: SendMailOptions): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+async function appendToSent(raw: Buffer | string, cfg: ResolvedConfig): Promise<boolean> {
+  const client = new ImapFlow({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    auth: { user: cfg.user, pass: cfg.pass },
+    tls: { rejectUnauthorized: false },
+    logger: false,
+  });
+  try {
+    await client.connect();
+    const boxes = await client.list();
+    const paths: string[] = boxes.map((b: any) => String(b.path || b.name || ''));
+    const sent = paths.find((p) => /已发送|Sent/i.test(p)) || 'Sent Messages';
+    await client.append(sent, raw as Buffer, ['\\Seen']);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { await client.logout(); } catch { /* 忽略 */ }
+  }
+}
+
+/**
+ * 发送邮件。复用 mail_config 里的邮箱与 IMAP 授权码（QQ 邮箱开启 IMAP/SMTP 后两者通用）。
+ * 成功后会尝试把副本写入「已发送」文件夹（sentSaved 标记；写入失败不影响发送结果）。
+ */
+export async function sendMail(opts: SendMailOptions): Promise<{ ok: boolean; messageId?: string; sentSaved?: boolean; error?: string }> {
   const cfg = getMailConfig();
   if (!cfg?.email || !cfg?.auth_code) {
     return { ok: false, error: '未配置邮箱或授权码，无法发送。请在「邮箱验证码配置」中填写邮箱与授权码。' };
@@ -316,7 +347,21 @@ export async function sendMail(opts: SendMailOptions): Promise<{ ok: boolean; me
     return { ok: false, error: '缺少收件人邮箱' };
   }
   const { host, port } = smtpHostOf(cfg.email);
+  const recipients = Array.isArray(opts.to) ? opts.to : [opts.to];
   try {
+    const mailOptions = {
+      from: opts.fromName ? `"${opts.fromName}" <${cfg.email}>` : cfg.email,
+      to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
+      subject: opts.subject,
+      text: opts.text,
+      html: opts.html,
+      attachments: (opts.attachments || []).map(p => ({ path: p })),
+    };
+    // 1) 先构建原始 MIME（buffer）：既用于投递，也用于存「已发送」副本，保证两者一致
+    const builder = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: 'unix' } as any);
+    const built: any = await builder.sendMail(mailOptions);
+    const raw: Buffer = built.message;
+    // 2) 真正投递（raw 原样发出）
     const transporter = nodemailer.createTransport({
       host,
       port,
@@ -328,15 +373,11 @@ export async function sendMail(opts: SendMailOptions): Promise<{ ok: boolean; me
       greetingTimeout: 20000,
       socketTimeout: 30000,
     });
-    const info = await transporter.sendMail({
-      from: opts.fromName ? `"${opts.fromName}" <${cfg.email}>` : cfg.email,
-      to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
-      subject: opts.subject,
-      text: opts.text,
-      html: opts.html,
-      attachments: (opts.attachments || []).map(p => ({ path: p })),
-    });
-    return { ok: true, messageId: info.messageId };
+    const info = await transporter.sendMail({ envelope: { from: cfg.email, to: recipients }, raw });
+    // 3) 存「已发送」副本（失败不影响发送结果）
+    let sentSaved = false;
+    try { sentSaved = await appendToSent(raw, resolveConfig()); } catch { sentSaved = false; }
+    return { ok: true, messageId: info.messageId, sentSaved };
   } catch (error: any) {
     return { ok: false, error: error?.message || String(error) };
   }

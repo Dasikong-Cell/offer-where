@@ -273,7 +273,7 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
         message: `邮件发送失败：${res.error}`,
       };
     }
-    logs.step('发送邮件', true, `已发送至 ${to}${resumePath ? '（含简历附件）' : '（无附件）'}`);
+    logs.step('发送邮件', true, `已发送至 ${to}${resumePath ? '（含简历附件）' : '（无附件）'}${res.sentSaved ? '，副本已存「已发送」' : ''}`);
     return {
       platform, status: 'applied', logs: logs.logs, company, position,
       message: `已通过邮箱向「${company || to}」投递简历：${to}（标题：${subject}）`,
