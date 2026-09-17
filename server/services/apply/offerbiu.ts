@@ -186,12 +186,16 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
       text = await pageText(CTX);
     }
     logs.step('页面解析', true, `正文 ${text.length} 字`);
-    if (text.length < 300) {
+    // ⚠️ 不要只用「正文字数」判失败：北森(zhiye.com)等招聘站首页正文很短（实测仅 162 字），
+    // 但页脚就写着 HR 邮箱。只要正文里已经出现可用邮箱，就继续走邮箱投递。
+    const shortButUsable = text.length < 300 && (text.match(EMAIL_RE) || []).length > 0;
+    if (text.length < 300 && !shortButUsable) {
       return {
         platform, status: 'need_manual', logs: logs.logs, company, position,
         message: '推文正文未能加载（微信可能要求验证或需登录），请在打开的浏览器中手动查看投递方式',
       };
     }
+    if (shortButUsable) logs.step('页面解析', true, `正文较短但已含邮箱，按联系页处理（${text.length} 字）`);
 
     // 1) 收集邮箱：优先取「邮箱/简历/投递/hr/联系」上下文附近的
     const all = Array.from(new Set(text.match(EMAIL_RE) || []));
