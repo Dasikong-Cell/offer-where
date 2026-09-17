@@ -58,6 +58,20 @@ export interface ScanOpts {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 取注册域（近似）：用于校验「确实导航到了目标站点」。多级后缀如 com.cn / co.uk 取 3 段。 */
+function rootDomain(u: string): string {
+  try {
+    const h = new URL(u).hostname.toLowerCase().replace(/^www\./, '');
+    const parts = h.split('.');
+    if (parts.length <= 2) return h;
+    const last2 = parts.slice(-2).join('.');
+    if (/^(com|net|org|gov|edu|co|ac)\.(cn|uk|jp|hk|tw)$/.test(last2)) return parts.slice(-3).join('.');
+    return last2;
+  } catch {
+    return '';
+  }
+}
+
 /** 扫描 offerbiu 岗位里的招聘邮箱 */
 export async function scanOfferbiuEmails(opts: ScanOpts = {}): Promise<{ scanned: number; found: EmailHit[] }> {
   const limit = Math.max(1, Math.min(Number(opts.limit) || 20, 100));
@@ -74,7 +88,15 @@ export async function scanOfferbiuEmails(opts: ScanOpts = {}): Promise<{ scanned
     const company = j.company || '';
     opts.onProgress?.({ type: 'progress', index: i, total: slice.length, company, message: `扫描 ${company || j.apply_url}` });
     try {
-      await execAction('official', 'navigate', { url: j.apply_url, timeout: 25000 }).catch(() => undefined);
+      const nav: any = await execAction('official', 'navigate', { url: j.apply_url, timeout: 25000 }).catch(() => undefined);
+      // ⚠️ 导航失败/超时时 pageText 会返回「上一页」内容，导致把别家公司的邮箱记到本岗位（实测串号：
+      // 通登资管→campus@hikvision.com、库犸科技→powerchina、DJI→安徽淮海）。故先校验确实落在目标站点。
+      const wantRoot = rootDomain(j.apply_url);
+      const gotRoot = rootDomain(String(nav?.url || ''));
+      if (wantRoot && gotRoot !== wantRoot) {
+        opts.onProgress?.({ type: 'progress', index: i, total: slice.length, company, message: `  跳过：未成功导航（期望 ${wantRoot}，实际 ${gotRoot || '空'}）` });
+        continue;
+      }
       await sleep(settleMs);
       const text = await pageText('official').catch(() => '');
       let mails = extractEmails(String(text || ''));
