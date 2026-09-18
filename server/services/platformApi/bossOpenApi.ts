@@ -89,16 +89,75 @@ export function toCookieHeader(cookies: CookieItem[]): string {
   return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
 }
 
-/** 快速判断某平台在调试浏览器里是否处于登录态（粗判：存在关键鉴权 Cookie） */
+/**
+ * ⚠️ Cookie 名判定登录态是**弱信号**，实测会误报（2026-09-19 复盘）：
+ *   · 猎聘未登录访客同样带 `XSRF-TOKEN` / `__gc_id` / `c_flag` / `__uuid` / `need_bind_tel`；
+ *     真正的会话 Cookie 名（`fe_se*` / `__sessionId` / `acw_tc`）在未登录时也可能存在。
+ *   · BOSS 的 `__zp_stoken__` 是反爬 token，任何访客都有；只有 `wt2` 更接近「已登录」。
+ *   → 所以这里只作 **hint**（快、不用导航页面），权威判定请用页面级 `verifyLoginViaPage()`
+ *     或 CLI `scripts/check_logins.ts`（anon 优先规则）。
+ */
 const AUTH_COOKIE: Record<ApiPlatform, RegExp> = {
-  boss: /(^|_)(zp_?token|__zp_stoken__|bst|wt2|t)$/i,
-  liepin: /(^|_)(token|__gc_id|fe_seal|XSRF-TOKEN|liepin_token)/i,
+  boss: /^(wt2|__zp_stoken__|bst)$/i,
+  liepin: /^(fe_seal|fe_se|liepin_token|__sessionId|__session_seq)$/i,
 };
 
-export async function isLoggedIn(platform: ApiPlatform): Promise<{ loggedIn: boolean; matched: string[] }> {
+export interface LoginHint {
+  /** 弱信号结论：存在疑似会话 Cookie。仅供参考，不代表一定已登录 */
+  loggedIn: boolean;
+  matched: string[];
+  /** 判定依据的可靠性说明 */
+  confidence: 'cookie-hint';
+  note: string;
+}
+
+export async function isLoggedIn(platform: ApiPlatform): Promise<LoginHint> {
   const cookies = await getSessionCookies(platform);
   const matched = cookies.filter((c) => AUTH_COOKIE[platform].test(c.name)).map((c) => c.name);
-  return { loggedIn: matched.length > 0, matched };
+  return {
+    loggedIn: matched.length > 0,
+    matched,
+    confidence: 'cookie-hint',
+    note: 'Cookie 名仅为弱信号（未登录访客也可能带同名 Cookie）；权威判定请用 verifyLoginViaPage 或 scripts/check_logins.ts',
+  };
+}
+
+/** 各平台登录/未登录的页面特征词（**anon 优先**：命中 anon 即判未登录） */
+const LOGIN_PAGE_MARKERS: Record<ApiPlatform, { home: string; logged: string[]; anon: string[] }> = {
+  boss: {
+    home: 'https://www.zhipin.com/',
+    logged: ['消息', '简历', '退出登录', '个人中心'],
+    anon: ['扫码登录', '验证码登录', '账号密码登录', '手机号登录', '登录/注册', '立即登录'],
+  },
+  liepin: {
+    home: 'https://www.liepin.com/',
+    logged: ['退出登录', '我的猎聘', '个人中心', '实名认证', '我的简历'],
+    anon: ['登录/注册', '密码登录', '获取验证码', '登录猎聘', '立即登录'],
+  },
+};
+
+/**
+ * 页面级权威登录判定：导航到首页 → 读正文 → anon 优先。
+ * 与 `scripts/check_logins.ts` 同规则，供 API 与巡检复用。
+ */
+export async function verifyLoginViaPage(platform: ApiPlatform): Promise<{
+  verdict: 'logged-in' | 'not-logged-in' | 'unknown';
+  logged: string[];
+  anon: string[];
+}> {
+  const c = LOGIN_PAGE_MARKERS[platform];
+  const ep = readCdpEndpoint(platform);
+  const nav: any = await execCdpAction(CTX[platform], 'navigate', { url: c.home, timeout: 30000 }, ep);
+  if (!nav?.ok) return { verdict: 'unknown', logged: [], anon: [] };
+  await new Promise((r) => setTimeout(r, 4500));
+  const r: any = await execCdpAction(
+    CTX[platform], 'eval',
+    { script: '(document.body.innerText||String()).replace(/\\s+/g," ").slice(0,1200)' }, ep,
+  );
+  const t = String(r?.data || '');
+  const logged = c.logged.filter((k) => t.includes(k));
+  const anon = c.anon.filter((k) => t.includes(k));
+  return { verdict: anon.length ? 'not-logged-in' : logged.length ? 'logged-in' : 'unknown', logged, anon };
 }
 
 // ---------------------------------------------------------------------------
@@ -287,16 +346,33 @@ export function applyViaWebApiNotSupported(platform: ApiPlatform): never {
 // 自检：输出当前环境下两条通道的可用性
 // ---------------------------------------------------------------------------
 
-export async function probePlatformApi(): Promise<Record<string, unknown>> {
+/**
+ * 平台通道自检。
+ * @param deep true 时额外做**页面级**权威登录判定（会导航首页，较慢但准确）
+ */
+export async function probePlatformApi(deep = false): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {
     webApiEnabled: webApiEnabled(),
     openPlatformConfigured: !!(process.env.BOSS_OPEN_APP_ID && process.env.BOSS_OPEN_APP_SECRET),
+    deep,
     targets: {},
   };
   for (const p of ['boss', 'liepin'] as ApiPlatform[]) {
     try {
       const r = await isLoggedIn(p);
-      (out.targets as any)[p] = { endpoint: readCdpEndpoint(p), loggedIn: r.loggedIn, authCookies: r.matched };
+      const entry: Record<string, unknown> = {
+        endpoint: readCdpEndpoint(p),
+        // 弱信号（Cookie 名）
+        cookieHint: r.loggedIn,
+        authCookies: r.matched,
+      };
+      if (deep) {
+        const v = await verifyLoginViaPage(p);
+        entry.pageVerdict = v.verdict;   // 权威结论
+        entry.pageLogged = v.logged;
+        entry.pageAnon = v.anon;
+      }
+      (out.targets as any)[p] = entry;
     } catch (e: any) {
       (out.targets as any)[p] = { endpoint: readCdpEndpoint(p), error: e?.message || String(e) };
     }

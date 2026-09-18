@@ -481,6 +481,8 @@ export interface JobRow {
   deadline: string | null;
   match_score: number | null;
   match_detail: string | null;
+  /** 跨公司串号隔离原因（非空表示默认跳过投递，需 force 放行） */
+  quarantine: string | null;
   status: string;
   created_at: string;
   updated_at: string;

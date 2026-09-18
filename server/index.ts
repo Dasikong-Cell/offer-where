@@ -99,6 +99,16 @@ app.get("/api/stats/funnel", (_req, res) => {
        FROM jobs WHERE match_score IS NOT NULL GROUP BY b`
     );
     const quarantined = (db.query<{ c: number }>("SELECT COUNT(*) c FROM jobs WHERE quarantine IS NOT NULL")[0] || { c: 0 }).c;
+    // 匹配分「依据来源」拆分：无 JD 的岗位只能用职位名粗略兜底（封顶 70），
+    // 这类分数参考性低 —— 不区分会让看板的「高匹配」严重虚高（实测 BOSS 高分 98.4% 来自兜底）。
+    const basis = db.query<{ title_only: number; jd_based: number }>(
+      `SELECT SUM(CASE WHEN jd IS NULL OR TRIM(jd)='' THEN 1 ELSE 0 END) title_only,
+              SUM(CASE WHEN jd IS NOT NULL AND TRIM(jd)<>'' THEN 1 ELSE 0 END) jd_based
+       FROM jobs`
+    )[0] || { title_only: 0, jd_based: 0 };
+    const highWithJd = (db.query<{ c: number }>(
+      "SELECT COUNT(*) c FROM jobs WHERE match_score>=70 AND jd IS NOT NULL AND TRIM(jd)<>''"
+    )[0] || { c: 0 }).c;
     const bySource: Record<string, any> = {};
     let total = 0, applied = 0, candidate = 0, unavailable = 0;
     for (const r of rows) {
@@ -121,6 +131,12 @@ app.get("/api/stats/funnel", (_req, res) => {
         coverage: total ? Math.round((scored.c / total) * 100) : 0,
         avg: scored.avg ? Math.round(scored.avg) : 0,
         high: bucketMap.high, mid: bucketMap.mid, low: bucketMap.low,
+        /** 仅凭职位名兜底的分数（无 JD），参考性低 */
+        titleOnly: basis.title_only,
+        /** 基于真实 JD 的分数 */
+        jdBased: basis.jd_based,
+        /** 高匹配里真正基于 JD 的数量（这才是可信的高匹配） */
+        highWithJd,
       },
     });
   } catch (error: any) {
@@ -130,9 +146,10 @@ app.get("/api/stats/funnel", (_req, res) => {
 
 /** 平台 API 通道自检：CDP 端点 / 登录态（关键鉴权 Cookie）/ 两条通道开关。
  *  用途：会话掉线巡检、诊断「登在本机日常 Chrome 而非调试窗口」的经典问题。 */
-app.get("/api/platform-api/probe", async (_req, res) => {
+app.get("/api/platform-api/probe", async (req, res) => {
   try {
-    res.json(await probePlatformApi());
+    // ?deep=1 时额外做页面级权威登录判定（导航首页，较慢但准确；默认只用 Cookie 弱信号）
+    res.json(await probePlatformApi(req.query.deep === '1'));
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "探测失败" });
   }

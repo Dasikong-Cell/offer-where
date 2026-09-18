@@ -177,6 +177,8 @@
     <div class="sub" style="margin:10px 0 6px">各平台漏斗</div>
     <div id="funnelBySource" class="funnel-src"></div>
     <div class="sub" style="margin-top:8px;color:var(--muted)">匹配分：高≥70 / 中40-69 / 低&lt;40（高 <b id="kHigh">0</b> · 中 <b id="kMid">0</b> · 低 <b id="kLow">0</b>）。未覆盖岗位可点「② 投递设置」后用 <code>/api/jobs/match</code> 精准打分。</div>
+    <div class="sub" id="matchBasisNote" style="margin-top:6px;color:var(--warn)"></div>
+  </div>
   </div>
 
   <div class="card">
@@ -830,6 +832,17 @@ async function renderFunnel() {
     document.getElementById('kHigh').textContent = d.matchScore.high;
     document.getElementById('kMid').textContent = d.matchScore.mid;
     document.getElementById('kLow').textContent = d.matchScore.low;
+    // 如实标注匹配依据：无 JD 的岗位只能靠职位名兜底（封顶 70），高分不代表真匹配
+    const ms = d.matchScore;
+    const noteEl = document.getElementById('matchBasisNote');
+    if (noteEl) {
+      const titleOnly = ms.titleOnly || 0;
+      const highJd = ms.highWithJd || 0;
+      noteEl.textContent = titleOnly
+        ? `⚠️ 可信度提示：${ms.scored} 个已评分岗位中 ${titleOnly} 个「无 JD、仅凭职位名兜底」（参考性低）；`
+          + `高匹配 ${ms.high} 个里真正基于 JD 的只有 ${highJd} 个。采集时补全 JD 后重算才可信（/api/jobs/match）。`
+        : '';
+    }
     const box = document.getElementById('funnelBySource');
     box.innerHTML = (d.bySource || []).map(s => `
       <div class="src-tile">

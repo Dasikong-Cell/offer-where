@@ -21,7 +21,14 @@ export interface ResumeStruct {
   searchBlob: string;
 }
 
-const PHONE_RE = /(?:(?:\+?86[-\s]?)?1[3-9]\d{9})/;
+/**
+ * 手机号：允许数字之间出现 `-` 或空格分隔。
+ * 实测（2026-09-19）简历里极常见 `130-9532-8850` / `138 0013 8000` 这类分段写法，
+ * 旧写法 `1[3-9]\d{9}` 要求 11 位连续数字 → 直接抽不到手机号，用户必须手填。
+ */
+const PHONE_RE = /(?:\+?86[-\s]?)?1[3-9]\d(?:[-\s]?\d){8}/;
+/** 命中后统一去分隔符，产出 11 位纯数字 */
+const normalizePhone = (s: string) => s.replace(/[^\d]/g, '').replace(/^86(?=1[3-9]\d{9}$)/, '');
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
 
 /** 抽取简历纯文本（按扩展名选择解析器） */
@@ -121,7 +128,7 @@ export function structureResume(text: string): ResumeStruct {
   return {
     rawText,
     name,
-    phone: phoneMatch ? phoneMatch[0] : null,
+    phone: phoneMatch ? normalizePhone(phoneMatch[0]) : null,
     email: emailMatch ? emailMatch[0] : null,
     education,
     skills,

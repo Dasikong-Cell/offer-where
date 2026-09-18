@@ -170,7 +170,9 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 |---|---|
 | `ensure_chrome.sh` | 一键幂等拉起 5 个 CDP 调试窗口（boss/liepin/job51/zhilian/official），机器休眠/重启后服务端与 CDP 一起掉时首先跑它 |
 | `healthcheck.ts` | 一键体检：后端可达性 / 各平台连接 / 岗位池数量 / 邮箱配置是否就绪 |
-| `check_logins.ts` | 并行检查各平台登录态（各平台独立 tab，互不干扰） |
+| `check_logins.ts` | 并行检查各平台登录态（boss/job51/liepin/zhilian）。**anon 优先**规则，输出明确结论与退出码（0=全登录 1=有未登录 2=有未知） |
+| `selftest.ts` | 功能回归自检（32 项，只读）：简历解析/手机号多格式/匹配引擎/邮箱抽取/域名归约/一岗一简历/防幻觉 |
+| `db_report.ts` | 数据库体检（只读）：表行数、岗位池与投递分布、匹配覆盖、数据质量（重复/空JD/记录不一致） |
 | `focus_login.ts <platform> [url]` | 把指定平台调试窗口导航到登录页并置顶，引导用户登录/收验证码 |
 | `probe_platform_api.ts` | 平台 API 通道自检：CDP 端点 + 登录态（关键鉴权 Cookie）+ 两条通道开关 |
 | `check_console_syntax.ts` | 校验 `public/console.html` 内联脚本语法（提交前拦下模板字面量笔误） |
