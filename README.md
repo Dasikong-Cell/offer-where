@@ -180,6 +180,7 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 | `check_logins.ts` | **平台可用性巡检**：连接 / 登录态 / 风控三合一 → 一个结论 + 处置建议（判定逻辑与 `/api/platforms/health` 同源）。退出码 0=全可用 1=有未登录或被风控 2=有未知 |
 | `probe_platform_api.ts` | 平台 API 通道自检：CDP 端点 + 登录态（关键鉴权 Cookie）+ 两条通道开关 |
 | `check_console_syntax.ts` | 校验 `public/console.html` 内联脚本语法（提交前拦下模板字面量笔误） |
+| `clean_tabs.ts` | 收敛各平台调试 Chrome 里堆积的标签页（每端点只留 1 个）。**默认 dry-run**，`--apply` 执行 |
 | `backfill_match.ts` | 回填岗位匹配分（本地规则，零 LLM 成本），让漏斗看板「匹配度」覆盖全池 |
 | `tailor_preview.ts <jobId>` \| `--source X --limit N` \| `--jd "..."` | 一岗一简历命令行预览（按 JD 定制简历片段） |
 | `test_quarantine.ts` | 自检 offerbiu 邮箱直投的「跨公司串号隔离」闸门（合成岗位，跑完自动清理） |
