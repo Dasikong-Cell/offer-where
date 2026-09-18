@@ -9,7 +9,15 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "server": "tsx server/index.ts",
-    "setup:browser": "playwright install chromium"
+    "setup:browser": "playwright install chromium",
+    "typecheck": "tsc -b",
+    "console:check": "tsx scripts/check_console_syntax.ts",
+    "selftest": "tsx scripts/selftest.ts",
+    "verify": "npm run typecheck && npm run console:check",
+    "db:report": "tsx scripts/db_report.ts",
+    "db:fix": "tsx scripts/fix_job_data.ts",
+    "jobs:backfill-jd": "tsx scripts/backfill_jd.ts",
+    "hooks:install": "git config core.hooksPath .githooks && echo \"已启用 .githooks/（pre-push 会跑 typecheck + console:check）\""
   },
   "dependencies": {
     "@tdesign-react/aigc": "^0.1.0-alpha.1",

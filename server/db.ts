@@ -503,6 +503,89 @@ export function getJob(id: string): JobRow | undefined {
 }
 
 /** 按来源+公司+岗位去重插入/更新；返回最终行 */
+/**
+ * 岗位文本字段统一清洗（**防御层**：放在写库口，任何采集器调用方都受保护）。
+ *
+ * 背景（2026-09-19 测评实测）：BOSS 列表页的薪资用**加密字体**渲染（Unicode 私有区 U+E000–U+F8FF），
+ * 抽取时字形丢失、数字变空，于是 `job-title` 的文本变成 `"Java\n-K"`；
+ * 又因某些采集器（collect_multi）用 `.job-title` 取职位名且不做空白折叠，脏值直接落了库。
+ * 实测库内 59/373 条 BOSS 岗位的 position 含换行或薪资残片。
+ *
+ * 清洗规则：去 PUA 字形 → 折叠换行/多余空白 → 剥离尾部薪资残片 → 去首尾符号；
+ * 若整串本身就是无意义的薪资残片（如 `"-K"`），返回 null（宁可为空，也不要脏值）。
+ */
+const PUA_RE = /[\uE000-\uF8FF]/g;
+/** 尾部薪资残片：`Java -K` / `java开发工程师 K`（数字已被加密字体吞掉） */
+const SALARY_LOST_TAIL_RE = /\s+[-–—]?\s*[kK]\s*$/;
+/** 完整薪资：`Java 10-20K ·16薪` / `20~30k` */
+const SALARY_NUM_TAIL_RE = /\s*·?\s*\d+\s*[-~至]\s*\d+\s*[kK千]\s*(?:·?\s*\d+\s*薪)?\s*$/;
+/** 整串即薪资残片 */
+const SALARY_ONLY_RE = /^[-–—·,，\s]*[kK]?\s*(?:·?\s*\d+\s*薪)?$/;
+
+export function sanitizeJobText(input: unknown, maxLen = 120): string | null {
+  if (input === null || input === undefined) return null;
+  let s = String(input).replace(PUA_RE, '');
+  s = s.replace(/\s+/g, ' ').trim();
+  if (SALARY_ONLY_RE.test(s)) return null;
+  s = s.replace(SALARY_NUM_TAIL_RE, '').replace(SALARY_LOST_TAIL_RE, '').trim();
+  s = s.replace(/^[-–—·,，;；|｜/\s]+/, '').replace(/[-–—·,，;；|｜/\s]+$/, '').trim();
+  if (!s) return null;
+  return s.slice(0, maxLen);
+}
+
+/**
+ * 薪资字段专用清洗：**不能**复用 sanitizeJobText —— 后者的「剥离尾部薪资残片」规则
+ * 会把合法的 `10-20k` 整串清成 null（实测踩过）。
+ * 薪资只需要：去 PUA 字形 → 折叠空白；若清洗后**一个数字都不剩**（加密字体把数字吞了，
+ * 只剩 `-K` 这种残片）则视为无信息，返回 null。
+ */
+export function sanitizeSalary(input: unknown): string | null {
+  if (input === null || input === undefined) return null;
+  const s = String(input).replace(PUA_RE, '').replace(/\s+/g, ' ').trim();
+  if (!/\d/.test(s)) return null;
+  return s.slice(0, 30);
+}
+
+/**
+ * 去掉「职位名」后面粘上的卡片元数据。
+ *
+ * 背景（2026-09-19 测评实测）：老版 51job 采集器直接拿链接元素的 `innerText` 当职位名，
+ * 而那是**整张卡片**的文本，于是入库成：
+ *   `"软件全栈工程师(010565) 5-9千 昆明·呈贡区 无需经验 本科 java mysql 数据库"`
+ * （实测 118/149 条 job51 岗位被污染，同时污染关键词过滤与展示）。
+ *
+ * 修复：截断到「城市·区」或「薪资」标记之前。仅在能识别出标记、且截断后长度合理时才生效 ——
+ * 否则原样返回（宁可保留长值，也不误伤合法职位名如「Java开发工程师·远程」）。
+ */
+const CARD_CITY_DIST = /\s+[\u4e00-\u9fa5]{2,5}·[\u4e00-\u9fa5]{2,6}/;
+const CARD_SALARY = /\s+\d+(?:\.\d+)?\s*[-~至]?\s*\d*(?:\.\d+)?\s*[千万kK](?:·\s*\d+\s*薪)?/;
+
+export function stripCardTail(s: string): string {
+  let out = s;
+  const c = out.match(CARD_CITY_DIST);
+  if (c && c.index !== undefined && c.index >= 2) out = out.slice(0, c.index);
+  const sal = out.match(CARD_SALARY);
+  if (sal && sal.index !== undefined && sal.index >= 2) out = out.slice(0, sal.index);
+  out = out.trim().replace(/[·,，;；|｜/\s]+$/, '').trim();
+  return out.length >= 2 && out.length <= 50 ? out : s;
+}
+
+/** 职位名清洗 = 通用文本清洗 + 去掉卡片尾巴 */
+export function sanitizePosition(input: unknown): string | null {
+  const s = sanitizeJobText(input, 80);
+  return s ? stripCardTail(s) : null;
+}
+
+/** 公司名清洗 = 通用文本清洗 + 剥掉标签前缀 + 过滤纯导航/按钮类脏值 */
+const COMPANY_JUNK = /^(APP下载|下载APP|首页|登录|注册|搜索|关注公众号|求职招聘|立即投递|查看全部)$/;
+export function sanitizeCompany(input: unknown): string | null {
+  let s = sanitizeJobText(input, 60);
+  if (!s) return null;
+  s = s.replace(/^公司全称[：:]\s*/, '').trim();
+  if (COMPANY_JUNK.test(s)) return null;
+  return s || null;
+}
+
 export function upsertJob(job: {
   id?: string;
   source?: string;
@@ -515,13 +598,27 @@ export function upsertJob(job: {
   apply_url?: string | null;
   deadline?: string | null;
 }): JobRow {
+  // 写库口统一清洗（员工 见 sanitizeJobText 注释）
+  job = {
+    ...job,
+    company: sanitizeCompany(job.company),
+    position: sanitizePosition(job.position),
+    city: sanitizeJobText(job.city, 30),
+    // 薪资也被加密字体污染（`10-20K` → `-K`），用专用清洗（保留合法薪资、丢弃无数字残片）
+    salary: sanitizeSalary(job.salary),
+  };
   const now = new Date().toISOString();
+  // 去重键：优先「来源 + 公司 + 职位」，退化到「来源 + apply_url」。
+  // ⚠️ 必须用 COALESCE 包一层：SQL 里 `NULL = NULL` 恒为 false，
+  // 若沿用 `company = ?` 而历史行的 company 为 NULL，就永远匹配不上 → 同一岗位被反复插入。
+  // 这正是 2026-09-19 测评发现「重复岗位」的根因（实测 company 为空的记录重复了 11+ 组）。
+  const src = job.source || 'manual';
   const existing = job.company && job.position
-    ? db.prepare('SELECT * FROM jobs WHERE source = ? AND company = ? AND position = ?')
-        .get(job.source || 'manual', job.company, job.position) as JobRow | undefined
+    ? db.prepare("SELECT * FROM jobs WHERE source = ? AND COALESCE(company,'') = ? AND COALESCE(position,'') = ?")
+        .get(src, job.company, job.position) as JobRow | undefined
     : job.apply_url
       ? db.prepare('SELECT * FROM jobs WHERE source = ? AND apply_url = ?')
-          .get(job.source || 'manual', job.apply_url) as JobRow | undefined
+          .get(src, job.apply_url) as JobRow | undefined
       : undefined;
   const id = existing?.id || job.id || randomUUID();
   db.prepare(`
@@ -559,12 +656,20 @@ export function updateJob(id: string, updates: Partial<Pick<JobRow,
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];
+  /** 文本字段同样过清洗，避免绕过 upsertJob 直接脏写（见 sanitize* 系列） */
+  const sanitizeField = (k: string, v: any): any => {
+    if (k === 'company') return sanitizeCompany(v);
+    if (k === 'position') return sanitizePosition(v);
+    if (k === 'salary') return sanitizeSalary(v);
+    if (k === 'city') return sanitizeJobText(v, 30);
+    return v;
+  };
   for (const key of Object.keys(updates) as Array<keyof typeof updates>) {
-    const value = (updates as any)[key];
-    if (value !== undefined) {
-      fields.push(`${key} = ?`);
-      values.push(value);
-    }
+    const raw = (updates as any)[key];
+    if (raw === undefined) continue;
+    const value = sanitizeField(key as string, raw);
+    fields.push(`${key} = ?`);
+    values.push(value);
   }
   if (fields.length === 0) return false;
   fields.push('updated_at = ?');

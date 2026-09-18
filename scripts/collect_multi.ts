@@ -56,18 +56,29 @@ const EXTRACT_LIEPIN = `(() => {
   return out;
 })()`;
 
-// BOSS：列表卡片含 a[href*="job_detail"]
+// BOSS：列表卡片 = .job-card-wrap（实测单页 90 个），卡片内 a[href*="job_detail"] 即岗位直链。
+// ⚠️ 选择器踩坑修正（2026-09-19 实测）：
+//   · 旧版用 `.job-title` 取职位名 —— 该元素的 innerText 是「职位名\n薪资」，而 BOSS 薪资用
+//     **加密字体**渲染（Unicode 私有区 U+E000–U+F8FF），抽取时数字丢失，于是变成 `"Java\n-K"` 这种脏值入库。
+//     正确选择器是 `.job-name`（只有职位名）。
+//   · 旧版用 `.company-name` 取公司名 —— 该选择器在列表卡片上**不存在**，导致 company 全为空。
+//     正确选择器是 `.boss-name`（实测命中，如「兆富科技」）。
+//   · 旧版用 `[class*="job-card"], li` 这种宽泛选择器遍历容器，易产生嵌套重复项。
 const EXTRACT_BOSS = `(() => {
   const out = [];
-  document.querySelectorAll('[class*="job-card"], .job-card-wrapper, li').forEach(c => {
+  const PUA = /[\\uE000-\\uF8FF]/;
+  document.querySelectorAll('.job-card-wrap').forEach(c => {
     const a = c.querySelector('a[href*="job_detail"]');
     if (!a) return;
     const href = (a.href || '').split('?')[0];
-    const position = ((c.querySelector('.job-title, .job-name, [class*="job-name"], [class*="job-title"]') || {}).innerText || '').trim();
-    const company = ((c.querySelector('.company-name, [class*="company-name"]') || {}).innerText || '').trim();
+    if (!href) return;
+    const position = ((c.querySelector('.job-name') || {}).innerText || '').trim();
+    const company = ((c.querySelector('.boss-name') || {}).innerText || '').trim();
+    let salary = ((c.querySelector('.job-salary') || {}).innerText || '').trim();
+    if (PUA.test(salary)) salary = ''; // 加密字体，数字无法还原
     const txt = (c.innerText || '').replace(/\\s+/g, ' ');
-    const m = txt.match(/\\d+\\s*[-~]\\s*\\d+\\s*[kK]/);
-    out.push({ url: href, position, company, salary: m ? m[0] : '', city: '' });
+    const cityM = txt.match(/(昆明|北京|上海|广州|深圳|杭州|成都|重庆|武汉|西安|南京|苏州|长沙|郑州|天津|厦门|青岛)/);
+    out.push({ url: href, position, company, salary, city: cityM ? cityM[1] : '' });
   });
   return out;
 })()`;
@@ -108,6 +119,8 @@ async function collectOne(platform: string) {
       const items: any[] = r.data || [];
       let added = 0;
       for (const it of items) {
+        // 无直链 / 无职位名的候选无法投递、也无法去重，直接丢弃（避免脏数据入库）
+        if (!it.url || !it.position) continue;
         const pos = (it.position || '').toLowerCase();
         if (EXCLUDE.some((e) => pos.includes(e))) continue;
         if (!KEEP.some((k) => pos.includes(k))) continue;
@@ -120,6 +133,8 @@ async function collectOne(platform: string) {
   }
   const target = pool.slice(0, PER_PLATFORM);
   for (const j of target) {
+    // 写库前最后一道护栏：没有直链的岗位投不了，不入库
+    if (!j.url) continue;
     upsertJob({
       source: platform,
       company: j.company || null,

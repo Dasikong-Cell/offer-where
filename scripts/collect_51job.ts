@@ -53,7 +53,19 @@ const EXTRACT_JOBS = `(() => {
     const url = h.split('?')[0];
     if (seen.has(url)) return;
     seen.add(url);
-    const position = (a.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 50);
+    // ⚠️ 旧版用 a.innerText 当职位名 —— 那是**整张卡片**的文本（职位+薪资+城市+学历+技能），
+    // 实测 118/149 条 job51 岗位的 position 因此被污染（如
+    // "软件全栈工程师(010565) 5-9千 昆明·呈贡区 无需经验 本科 java mysql"）。
+    // 改用卡片上的 sensorsdata JSON（最稳），再退化到职位名选择器。
+    const box2 = a.closest('[class]') || a;
+    const sdEl = box2.querySelector('[sensorsdata]') || a.querySelector('[sensorsdata]');
+    let position = '';
+    if (sdEl) { try { position = String((JSON.parse(sdEl.getAttribute('sensorsdata')) || {}).jobTitle || ''); } catch (e) {} }
+    if (!position) {
+      const t = a.querySelector('.jname, [class*=jobName], [class*=job-name], .joblist-item-jobname');
+      position = t ? (t.innerText || t.textContent || '').trim() : '';
+    }
+    position = position.trim().replace(/\\s+/g, ' ').slice(0, 50);
     const box = a.closest('[class]') || a;
     const txt = (box.innerText || '').replace(/\\s+/g, ' ');
     const sal = (txt.match(/\\d+\\s*[-~]\\s*\\d+\\s*(?:千|万|元\\/月|元\\/天)/) || [])[0] || '';

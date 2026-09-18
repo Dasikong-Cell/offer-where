@@ -171,8 +171,11 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 | `ensure_chrome.sh` | 一键幂等拉起 5 个 CDP 调试窗口（boss/liepin/job51/zhilian/official），机器休眠/重启后服务端与 CDP 一起掉时首先跑它 |
 | `healthcheck.ts` | 一键体检：后端可达性 / 各平台连接 / 岗位池数量 / 邮箱配置是否就绪 |
 | `check_logins.ts` | 并行检查各平台登录态（boss/job51/liepin/zhilian）。**anon 优先**规则，输出明确结论与退出码（0=全登录 1=有未登录 2=有未知） |
-| `selftest.ts` | 功能回归自检（32 项，只读）：简历解析/手机号多格式/匹配引擎/邮箱抽取/域名归约/一岗一简历/防幻觉 |
+| `selftest.ts` | 功能回归自检（42 项，只读）：简历解析/手机号多格式/匹配引擎/邮箱抽取/域名归约/一岗一简历/防幻觉/字段清洗 |
 | `db_report.ts` | 数据库体检（只读）：表行数、岗位池与投递分布、匹配覆盖、数据质量（重复/空JD/记录不一致） |
+| `fix_job_data.ts` | 历史脏数据修复：清洗被加密字体污染的字段、按 apply_url 回填公司名、清理空壳/重复。**默认 dry-run，`--apply` 才写库且自动备份** |
+| `backfill_jd.ts` | 回填岗位 JD 正文（顺带补公司名）。**可续跑、失败不中断**，建议 `--limit=50` 分批跑；`--include-applied` 可连已投岗位一起补 |
+| `calibrate_jd_selectors.ts` | 探测各平台详情页的 JD/公司名选择器（用于校准 `backfill_jd.ts`，只读） |
 | `focus_login.ts <platform> [url]` | 把指定平台调试窗口导航到登录页并置顶，引导用户登录/收验证码 |
 | `probe_platform_api.ts` | 平台 API 通道自检：CDP 端点 + 登录态（关键鉴权 Cookie）+ 两条通道开关 |
 | `check_console_syntax.ts` | 校验 `public/console.html` 内联脚本语法（提交前拦下模板字面量笔误） |
@@ -291,6 +294,21 @@ npm run dev          # 前端(React, 5173) + 后端(默认 3000，CORS 互通)�
 npm run build        # tsc -b && vite build（产物 dist/，供自托管/开发用）
 npm run server       # 仅起后端，并在 / 托管 public/console.html（生产控制台，默认 3000，PORT=4400 覆盖）
 ```
+
+### ⚠️ 改完代码必须跑 `npm run verify`（血的教训）
+
+服务端用 `tsx` 直跑 `.ts`，**完全不做类型检查** —— 类型错误在运行期毫无异常、冒烟测试全绿，
+但 `npm run build`（`tsc -b`）会直接失败。2026-09-19 软件测评实测踩到：给 `jobs` 加 `quarantine` 列时
+漏改 `JobRow` 接口，运行时一切正常，**构建却长期是坏的**，直到测评才发现。
+
+```bash
+npm run verify       # = typecheck(tsc -b，含 server/) + console:check(控制台内联 JS 语法)
+npm run selftest     # 42 项功能回归（只读，不投递不发信）
+npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「构建坏了没人知道」
+```
+
+`npm run hooks:install` 会设置 `core.hooksPath=.githooks`（配置随 `.githooks/` 一起入库）。
+紧急时可 `git push --no-verify` 跳过。
 
 > 生产一键启动：双击桌面「投递Agent」（= `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 自动打开 `http://127.0.0.1:4400/`（console.html 控制台）。
 

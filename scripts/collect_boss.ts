@@ -87,6 +87,8 @@ const EXTRACT = `(() => {
   console.log(`\n=== 共采集 ${pool.length} 个候选岗位，开始写库 ===`);
   let inserted = 0;
   for (const j of pool) {
+    // 护栏：无直链的岗位投不了，不入库（测评发现库里有 35 条空 apply_url 记录）
+    if (!j.url) continue;
     upsertJob({
       source: 'boss',
       company: j.company || null,

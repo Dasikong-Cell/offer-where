@@ -1,0 +1,40 @@
+#!/bin/sh
+# ============================================================================
+# pre-push 静态防线
+#
+# 为什么必须有：服务端用 `tsx` 直跑 `.ts`，**完全不做类型检查** —— 类型错误在运行期
+# 毫无异常、冒烟测试全绿，但 `tsc -b`（npm run build）会直接失败。
+# 2026-09-19 测评实测踩到：给 jobs 加 quarantine 列时漏改 JobRow 接口，
+# 运行时一切正常，构建却长期是坏的，直到一次软件测评才发现。
+#
+# 启用：npm run hooks:install   （即 git config core.hooksPath .githooks）
+# 跳过：git push --no-verify    （请自行确认风险）
+# ============================================================================
+set -e
+
+NODE=node
+if [ -x "./node/node.exe" ]; then NODE="./node/node.exe"; fi
+if ! command -v "$NODE" >/dev/null 2>&1; then
+  echo "⚠️  未找到可用 node，跳过 pre-push 检查（不影响推送）"
+  exit 0
+fi
+if [ ! -f node_modules/typescript/bin/tsc ]; then
+  echo "⚠️  未安装依赖（node_modules 缺失），跳过 pre-push 检查。先跑 npm install。"
+  exit 0
+fi
+
+echo "▶ pre-push [1/2] 类型检查（tsc -b，含 server/）..."
+if ! "$NODE" node_modules/typescript/bin/tsc -b; then
+  echo ""
+  echo "❌ 类型检查失败。服务端 tsx 不做类型检查，这里失败 = 构建是坏的，必须修。"
+  exit 1
+fi
+
+echo "▶ pre-push [2/2] 控制台内联 JS 语法检查..."
+if ! "$NODE" node_modules/tsx/dist/cli.mjs scripts/check_console_syntax.ts; then
+  echo ""
+  echo "❌ public/console.html 内联脚本有语法错误（嵌套模板字面量最容易漏括号）。"
+  exit 1
+fi
+
+echo "✅ pre-push 检查通过"
