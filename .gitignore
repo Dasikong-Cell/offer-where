@@ -56,6 +56,12 @@ _update_profile.cjs
 _update_profile2.cjs
 _probe_*.cjs
 _gaga_*.cjs
+# .ts 版临时探针：命名以 `_` 开头即视为一次性，不入库
+# （历史上 scripts/_probe_pos.ts 被误提交并留存很久，内含硬编码人名过滤，属噪音）
+scripts/_probe_*.ts
+scripts/_tmp_*.ts
+_probe_*.ts
+_tmp_*.ts
 
 # ── 编辑器 / 系统文件 ─────────────────────────────────
 .vscode/
