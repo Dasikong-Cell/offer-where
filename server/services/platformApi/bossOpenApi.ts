@@ -130,8 +130,10 @@ const LOGIN_PAGE_MARKERS: Record<ApiPlatform, { home: string; logged: string[]; 
     anon: ['扫码登录', '验证码登录', '账号密码登录', '手机号登录', '登录/注册', '立即登录'],
   },
   liepin: {
-    home: 'https://www.liepin.com/',
-    logged: ['退出登录', '我的猎聘', '个人中心', '实名认证', '我的简历'],
+    // ⚠️ 用求职者中心 c.liepin.com：www.liepin.com 对已登录用户会重定向过去，
+    // 在重定向前取样会读到营销页登录框 → 把已登录误判为未登录（实测踩到）。
+    home: 'https://c.liepin.com/',
+    logged: ['你好，', '编辑求职期望', '我的简历', '退出登录', '个人中心'],
     anon: ['登录/注册', '密码登录', '获取验证码', '登录猎聘', '立即登录'],
   },
 };
@@ -144,20 +146,33 @@ export async function verifyLoginViaPage(platform: ApiPlatform): Promise<{
   verdict: 'logged-in' | 'not-logged-in' | 'unknown';
   logged: string[];
   anon: string[];
+  attempts: number;
 }> {
   const c = LOGIN_PAGE_MARKERS[platform];
   const ep = readCdpEndpoint(platform);
   const nav: any = await execCdpAction(CTX[platform], 'navigate', { url: c.home, timeout: 30000 }, ep);
-  if (!nav?.ok) return { verdict: 'unknown', logged: [], anon: [] };
-  await new Promise((r) => setTimeout(r, 4500));
-  const r: any = await execCdpAction(
-    CTX[platform], 'eval',
-    { script: '(document.body.innerText||String()).replace(/\\s+/g," ").slice(0,1200)' }, ep,
-  );
-  const t = String(r?.data || '');
-  const logged = c.logged.filter((k) => t.includes(k));
-  const anon = c.anon.filter((k) => t.includes(k));
-  return { verdict: anon.length ? 'not-logged-in' : logged.length ? 'logged-in' : 'unknown', logged, anon };
+  if (!nav?.ok) return { verdict: 'unknown', logged: [], anon: [], attempts: 0 };
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // 页面未稳定时标记会读空 → 判 unknown 抖动（实测猎聘有一次返回 unknown）。
+  // 策略：等 readyState 就绪 + 最多 3 次取样，取得非 unknown 结论即返回。
+  const MAX = 3;
+  let last: { logged: string[]; anon: string[]; verdict: 'logged-in' | 'not-logged-in' | 'unknown' } =
+    { logged: [], anon: [], verdict: 'unknown' };
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    await sleep(attempt === 1 ? 4500 : 3000);
+    try { await execCdpAction(CTX[platform], 'eval', { script: 'document.readyState' }, ep); } catch { /* ignore */ }
+    const r: any = await execCdpAction(
+      CTX[platform], 'eval',
+      { script: '(document.body.innerText||String()).replace(/\\s+/g," ").slice(0,1500)' }, ep,
+    );
+    const t = String(r?.data || '');
+    const logged = c.logged.filter((k) => t.includes(k));
+    const anon = c.anon.filter((k) => t.includes(k));
+    last = { logged, anon, verdict: anon.length ? 'not-logged-in' : logged.length ? 'logged-in' : 'unknown' };
+    if (last.verdict !== 'unknown') return { ...last, attempts: attempt };
+  }
+  return { ...last, attempts: MAX };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +386,7 @@ export async function probePlatformApi(deep = false): Promise<Record<string, unk
         entry.pageVerdict = v.verdict;   // 权威结论
         entry.pageLogged = v.logged;
         entry.pageAnon = v.anon;
+        entry.pageAttempts = v.attempts;
       }
       (out.targets as any)[p] = entry;
     } catch (e: any) {

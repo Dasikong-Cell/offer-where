@@ -39,9 +39,14 @@ const CFG: Record<string, LoginCfg> = {
     anon: ['请登录', '账号登录', '登录并投递', '扫码登录', '短信登录', '登录/注册'],
   },
   liepin: {
-    home: 'https://www.liepin.com/',
-    // ⚠️ 不能用「简历」——未登录首页有「简历优化」会误命中
-    logged: ['退出登录', '我的猎聘', '个人中心', '实名认证', '我的简历'],
+    // ⚠️ 必须用求职者中心 c.liepin.com，不能用营销首页 www.liepin.com ——
+    // 后者对已登录用户会**重定向**到 c.liepin.com，若在重定向前取样，读到的是
+    // 「登录/注册｜密码登录｜获取验证码」的营销页登录框 → 把**已登录误判为未登录**
+    // （2026-09-19 实测踩到：实际已登录，页面显示「你好，杨先生」）。
+    // 未登录访问 c.liepin.com 会被重定向到登录页，此时 anon 标记生效。
+    home: 'https://c.liepin.com/',
+    // ⚠️ 也不能用「简历」——营销首页有「简历优化」会误命中
+    logged: ['你好，', '编辑求职期望', '我的简历', '退出登录', '个人中心'],
     anon: ['登录/注册', '密码登录', '获取验证码', '登录猎聘', '立即登录'],
   },
   zhilian: {
@@ -57,14 +62,22 @@ async function check(p: string): Promise<{ platform: string; verdict: Verdict; l
   const c = CFG[p];
   try {
     await ex(p, { action: 'navigate', url: c.home, waitUntil: 'domcontentloaded' });
-    await sleep(4500);
-    const d = await ex(p, { action: 'eval', script: '(document.body.innerText||String()).replace(/\\s+/g," ").slice(0,1200)' });
-    const t: string = String(d.data || '');
-    const logged = c.logged.filter((k) => t.includes(k));
-    const anon = c.anon.filter((k) => t.includes(k));
-    // anon 优先：未登录页会同时出现营销文案，但登录框只在未登录时出现
-    const verdict: Verdict = anon.length ? 'not-logged-in' : logged.length ? 'logged-in' : 'unknown';
-    return { platform: p, verdict, logged, anon, text: t };
+    // SPA 首页常在导航后再跳一次，过早取样会读空标记 → 判 unknown 抖动。
+    // 策略：最多 3 次取样，取得非 unknown 结论即返回。
+    let last = { logged: [] as string[], anon: [] as string[], text: '' };
+    let verdict: Verdict = 'unknown';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sleep(attempt === 1 ? 4500 : 3000);
+      const d = await ex(p, { action: 'eval', script: '(document.body.innerText||String()).replace(/\\s+/g," ").slice(0,1500)' });
+      const t: string = String(d.data || '');
+      const logged = c.logged.filter((k) => t.includes(k));
+      const anon = c.anon.filter((k) => t.includes(k));
+      // anon 优先：未登录页会同时出现营销文案，但登录框只在未登录时出现
+      verdict = anon.length ? 'not-logged-in' : logged.length ? 'logged-in' : 'unknown';
+      last = { logged, anon, text: t };
+      if (verdict !== 'unknown') break;
+    }
+    return { platform: p, verdict, logged: last.logged, anon: last.anon, text: last.text };
   } catch (e: any) {
     return { platform: p, verdict: 'unknown', logged: [], anon: [], text: `检查失败：${e?.message || e}` };
   }
