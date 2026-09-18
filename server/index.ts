@@ -630,6 +630,8 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
 /** 对指定岗位批量「邮箱直投」（channel=email + realSend，SSE 进度） */
 app.post("/api/offerbiu/email-apply", async (req, res) => {
   const jobIds: string[] = Array.isArray(req.body?.jobIds) ? req.body.jobIds.map((x: unknown) => String(x)) : [];
+  /** 预取证邮箱映射（jobId -> 已核验 HR 邮箱）：提供后邮箱通道跳过页面重抽，规避微信限流 */
+  const emails: Record<string, string> = req.body?.emails && typeof req.body.emails === 'object' ? req.body.emails : {};
   const intervalMs = Math.max(0, Number(req.body?.intervalMs ?? 8000));
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -662,6 +664,7 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
           autofill: (profile.autofill as Record<string, string>) || undefined,
           channel: 'email',
           realSend: true,
+          email: emails[job.id] || undefined,
         });
         if (r.status === 'applied') {
           ok++;

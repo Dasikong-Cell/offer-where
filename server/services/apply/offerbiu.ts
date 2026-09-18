@@ -174,52 +174,66 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
     return { platform, status: 'need_login', message: '该岗位缺少投递入口链接', logs: logs.logs, company, position };
   }
 
+  // 预取证邮箱（扫描阶段已提取并人工核验）：直接用它投递，跳过「重新打开页面抽邮箱」，
+  // 规避微信推文被限流/需验证导致正文加载不出、抽不到邮箱的死局。
+  const selfMail = (input.profile.email || '').toLowerCase();
+  const overrideEmail =
+    input.email && !EMAIL_BLACKLIST.test(input.email) && input.email.toLowerCase() !== selfMail
+      ? input.email.trim().toLowerCase()
+      : undefined;
+
   try {
-    await bexec(CTX, 'navigate', { url: jobUrl, waitUntil: 'domcontentloaded' }, logs, '打开招聘推文');
-    await sleep(3000);
-    let text = await pageText(CTX);
-    // 微信推文懒加载/风控常导致首屏拿不到正文，正文过短就再等一轮重取
-    if (text.length < 300) {
-      logs.step('页面解析', false, `正文仅 ${text.length} 字，等待重试`);
-      await bexec(CTX, 'eval', { script: 'window.scrollTo(0, document.body.scrollHeight)' }, logs, '滚动加载');
-      await sleep(5000);
+    let text = '';
+    let to: string;
+    if (overrideEmail) {
+      to = overrideEmail;
+      logs.step('提取邮箱', true, `${to}（使用扫描预取证邮箱，跳过页面加载）`);
+    } else {
+      await bexec(CTX, 'navigate', { url: jobUrl, waitUntil: 'domcontentloaded' }, logs, '打开招聘推文');
+      await sleep(3000);
       text = await pageText(CTX);
-    }
-    logs.step('页面解析', true, `正文 ${text.length} 字`);
-    // ⚠️ 不要只用「正文字数」判失败：北森(zhiye.com)等招聘站首页正文很短（实测仅 162 字），
-    // 但页脚就写着 HR 邮箱。只要正文里已经出现可用邮箱，就继续走邮箱投递。
-    const shortButUsable = text.length < 300 && (text.match(EMAIL_RE) || []).length > 0;
-    if (text.length < 300 && !shortButUsable) {
-      return {
-        platform, status: 'need_manual', logs: logs.logs, company, position,
-        message: '推文正文未能加载（微信可能要求验证或需登录），请在打开的浏览器中手动查看投递方式',
-      };
-    }
-    if (shortButUsable) logs.step('页面解析', true, `正文较短但已含邮箱，按联系页处理（${text.length} 字）`);
+      // 微信推文懒加载/风控常导致首屏拿不到正文，正文过短就再等一轮重取
+      if (text.length < 300) {
+        logs.step('页面解析', false, `正文仅 ${text.length} 字，等待重试`);
+        await bexec(CTX, 'eval', { script: 'window.scrollTo(0, document.body.scrollHeight)' }, logs, '滚动加载');
+        await sleep(5000);
+        text = await pageText(CTX);
+      }
+      logs.step('页面解析', true, `正文 ${text.length} 字`);
+      // ⚠️ 不要只用「正文字数」判失败：北森(zhiye.com)等招聘站首页正文很短（实测仅 162 字），
+      // 但页脚就写着 HR 邮箱。只要正文里已经出现可用邮箱，就继续走邮箱投递。
+      const shortButUsable = text.length < 300 && (text.match(EMAIL_RE) || []).length > 0;
+      if (text.length < 300 && !shortButUsable) {
+        return {
+          platform, status: 'need_manual', logs: logs.logs, company, position,
+          message: '推文正文未能加载（微信可能要求验证或需登录），请在打开的浏览器中手动查看投递方式',
+        };
+      }
+      if (shortButUsable) logs.step('页面解析', true, `正文较短但已含邮箱，按联系页处理（${text.length} 字）`);
 
-    // 1) 收集邮箱：优先取「邮箱/简历/投递/hr/联系」上下文附近的
-    const all = Array.from(new Set(text.match(EMAIL_RE) || []));
-    const selfMail = (input.profile.email || '').toLowerCase();
-    const candidates = all.filter(e => !EMAIL_BLACKLIST.test(e) && e.toLowerCase() !== selfMail);
-    if (!candidates.length) {
-      return {
-        platform, status: 'need_manual', logs: logs.logs, company, position,
-        message: '推文中未找到可用的 HR 邮箱（可能只提供二维码/网申链接），请在打开的浏览器中手动投递',
-      };
+      // 1) 收集邮箱：优先取「邮箱/简历/投递/hr/联系」上下文附近的
+      const all = Array.from(new Set(text.match(EMAIL_RE) || []));
+      const candidates = all.filter(e => !EMAIL_BLACKLIST.test(e) && e.toLowerCase() !== selfMail);
+      if (!candidates.length) {
+        return {
+          platform, status: 'need_manual', logs: logs.logs, company, position,
+          message: '推文中未找到可用的 HR 邮箱（可能只提供二维码/网申链接），请在打开的浏览器中手动投递',
+        };
+      }
+      const scored = candidates.map(e => {
+        const i = text.indexOf(e);
+        const around = text.slice(Math.max(0, i - 80), i + e.length + 80);
+        let score = 0;
+        if (/邮箱|简历|投递|应聘/.test(around)) score += 5;
+        if (/hr|HR|招聘|人力/.test(around)) score += 3;
+        if (/联系|联系方式/.test(around)) score += 2;
+        return { email: e, score };
+      }).sort((a, b) => b.score - a.score);
+      to = scored[0].email;
+      logs.step('提取邮箱', true, `${to}（候选 ${candidates.length} 个：${candidates.join(', ')}）`);
     }
-    const scored = candidates.map(e => {
-      const i = text.indexOf(e);
-      const around = text.slice(Math.max(0, i - 80), i + e.length + 80);
-      let score = 0;
-      if (/邮箱|简历|投递|应聘/.test(around)) score += 5;
-      if (/hr|HR|招聘|人力/.test(around)) score += 3;
-      if (/联系|联系方式/.test(around)) score += 2;
-      return { email: e, score };
-    }).sort((a, b) => b.score - a.score);
-    const to = scored[0].email;
-    logs.step('提取邮箱', true, `${to}（候选 ${candidates.length} 个：${candidates.join(', ')}）`);
 
-    // 2) 按推文给的「标题格式」拼标题
+    // 2) 按推文给的「标题格式」拼标题（预取证邮箱无页面正文时回落默认标题）
     const { subject, matched } = buildSubject(text, input.profile as any, input.job);
     logs.step('邮件标题', true, matched ? `按推文指定格式：${subject}` : `未识别到指定格式，使用默认：${subject}`);
 

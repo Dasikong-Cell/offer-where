@@ -72,6 +72,12 @@ export interface ApplyInput {
   jdText?: string;
   /** offerbiu 投递通道：auto=按链接自动判断；email=强制走「HR 邮箱投递」 */
   channel?: 'auto' | 'email';
+  /**
+   * 预取证的 HR 邮箱（扫描阶段已从岗位页提取并人工核验过）。
+   * 提供后邮箱通道跳过「重新打开页面抽取邮箱」一步，直接用此地址投递——
+   * 用于规避微信推文被限流/需验证导致正文加载不出、抽不到邮箱的场景。
+   */
+  email?: string;
   /** 预览模式：只解析收件人/标题/正文并写入日志，不真正发信 */
   dryRun?: boolean;
   /** 真实投递开关（官网/offerbiu 通道专用）：只有显式 true 才真正提交；
