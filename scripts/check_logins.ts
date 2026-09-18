@@ -1,109 +1,51 @@
 /**
- * 并行检查各平台登录态（各 platform 用独立 tab，互不干扰）
+ * 并行检查各平台可用性：**连接 + 登录态 + 风控**
  * ==========================================================================
- * 2026-09-19 重写。旧版有三个问题（实测踩到）：
- *   ① **只打印标记数组、不给结论** —— 用户得自己猜「登录标记=[简历]」算不算登录；
- *   ② **标记词与实际页面不符** —— 猎聘真实未登录页出现的是「登录/注册」「密码登录」「获取验证码」，
- *      旧 anon 标记写的是「请登录/账号登录/登录猎聘」→ 一个都不命中，于是「未登录标记=[]」；
- *   ③ **logged 标记含泛词** —— 旧 liepin logged 里有「简历」，而未登录首页有「简历优化」→ 命中 →
- *      把**未登录误报成已登录**（实测：页面明明有登录框，却报「登录标记=[简历]」）。
+ * 判定逻辑已统一收敛到 `server/services/platformHealth.ts`（API `/api/platforms/health` 同源），
+ * 本脚本只负责 CLI 输出与退出码，避免「CLI 一套规则、API 另一套规则」导致结论不一致。
  *
- * 现规则（决定性差异）：**anon 优先**。命中 anon 一律判未登录；否则命中 logged 才算已登录；
- * 都不命中判「未知」（不猜测，并提示需人工确认）。退出码 0=全部已登录，1=有未登录，2=有未知。
+ * 三条判定铁律（详见 platformHealth 注释）：
+ *   1. 先看 CDP 连不连得上 —— Chrome 没起时报「未登录」会把人带偏；
+ *   2. **风控优先于登录态** —— 51job 被滑块拦时整页被替换，所有业务特征词都不命中；
+ *   3. **anon 优先于 logged** —— 营销页的「简历优化」会误命中泛词「简历」。
  *
  * 运行：./node/node.exe node_modules/tsx/dist/cli.mjs scripts/check_logins.ts [platform...]
+ * 退出码：0=全部可用 1=有未登录/被风控 2=有未知
  */
-import { ex } from './lib/browser.ts';
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-interface LoginCfg {
-  home: string;
-  /** 已登录特征词（必须是**只有登录后**才出现的词，禁止用「简历/我的」这类泛词） */
-  logged: string[];
-  /** 未登录特征词（登录框/注册入口的原文） */
-  anon: string[];
-}
-
-const CFG: Record<string, LoginCfg> = {
-  boss: {
-    home: 'https://www.zhipin.com/',
-    // 未登录时页头是「登录/注册」，登录后才把「消息/简历」入口加进页头导航（实测 2026-09-19）
-    logged: ['消息', '简历', '退出登录', '个人中心'],
-    // BOSS 未登录首页顶部/弹层会出现登录方式选择（命中即判未登录，优先级高于 logged）
-    anon: ['扫码登录', '验证码登录', '账号密码登录', '手机号登录', '登录/注册', '立即登录'],
-  },
-  job51: {
-    home: 'https://www.51job.com/',
-    logged: ['我的求职', '我的简历', '在线简历', '个人中心', '退出登录', '简历快推'],
-    anon: ['请登录', '账号登录', '登录并投递', '扫码登录', '短信登录', '登录/注册'],
-  },
-  liepin: {
-    // ⚠️ 必须用求职者中心 c.liepin.com，不能用营销首页 www.liepin.com ——
-    // 后者对已登录用户会**重定向**到 c.liepin.com，若在重定向前取样，读到的是
-    // 「登录/注册｜密码登录｜获取验证码」的营销页登录框 → 把**已登录误判为未登录**
-    // （2026-09-19 实测踩到：实际已登录，页面显示「你好，杨先生」）。
-    // 未登录访问 c.liepin.com 会被重定向到登录页，此时 anon 标记生效。
-    home: 'https://c.liepin.com/',
-    // ⚠️ 也不能用「简历」——营销首页有「简历优化」会误命中
-    logged: ['你好，', '编辑求职期望', '我的简历', '退出登录', '个人中心'],
-    anon: ['登录/注册', '密码登录', '获取验证码', '登录猎聘', '立即登录'],
-  },
-  zhilian: {
-    home: 'https://www.zhaopin.com/',
-    logged: ['退出登录', '我的智联', '个人中心', '我的简历'],
-    anon: ['登录/注册', '密码登录', '立即登录', '微信登录', '扫码登录', '获取验证码'],
-  },
-};
-
-type Verdict = 'logged-in' | 'not-logged-in' | 'unknown';
-
-async function check(p: string): Promise<{ platform: string; verdict: Verdict; logged: string[]; anon: string[]; text: string }> {
-  const c = CFG[p];
-  try {
-    await ex(p, { action: 'navigate', url: c.home, waitUntil: 'domcontentloaded' });
-    // SPA 首页常在导航后再跳一次，过早取样会读空标记 → 判 unknown 抖动。
-    // 策略：最多 3 次取样，取得非 unknown 结论即返回。
-    let last = { logged: [] as string[], anon: [] as string[], text: '' };
-    let verdict: Verdict = 'unknown';
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      await sleep(attempt === 1 ? 4500 : 3000);
-      const d = await ex(p, { action: 'eval', script: '(document.body.innerText||String()).replace(/\\s+/g," ").slice(0,1500)' });
-      const t: string = String(d.data || '');
-      const logged = c.logged.filter((k) => t.includes(k));
-      const anon = c.anon.filter((k) => t.includes(k));
-      // anon 优先：未登录页会同时出现营销文案，但登录框只在未登录时出现
-      verdict = anon.length ? 'not-logged-in' : logged.length ? 'logged-in' : 'unknown';
-      last = { logged, anon, text: t };
-      if (verdict !== 'unknown') break;
-    }
-    return { platform: p, verdict, logged: last.logged, anon: last.anon, text: last.text };
-  } catch (e: any) {
-    return { platform: p, verdict: 'unknown', logged: [], anon: [], text: `检查失败：${e?.message || e}` };
-  }
-}
+import { probePlatformHealth, type PlatformHealth } from '../server/services/platformHealth.js';
 
 const targets = process.argv.slice(2).filter((a) => !a.startsWith('-'));
-const list = targets.length ? targets : Object.keys(CFG);
 
-const results = await Promise.all(list.map((p) => check(p)));
+const ICON: Record<string, string> = {
+  ok: '✅', 'not-logged-in': '❌', blocked: '🛑', offline: '🔌', unknown: '⚠️',
+};
+const LABEL: Record<string, string> = {
+  ok: '可用', 'not-logged-in': '未登录', blocked: '被风控', offline: '未启动', unknown: '未知',
+};
 
-const ICON: Record<Verdict, string> = { 'logged-in': '✅', 'not-logged-in': '❌', unknown: '⚠️' };
-const LABEL: Record<Verdict, string> = { 'logged-in': '已登录', 'not-logged-in': '未登录', unknown: '未知（需人工确认）' };
+const list = await probePlatformHealth(targets.length ? targets : undefined, true);
 
-console.log('\n══════ 平台登录态 ══════');
-for (const r of results) {
-  console.log(`\n${ICON[r.verdict]} [${r.platform}] ${LABEL[r.verdict]}`);
-  console.log(`   已登录标记: ${JSON.stringify(r.logged)}   未登录标记: ${JSON.stringify(r.anon)}`);
-  console.log(`   页面片段: ${r.text.slice(0, 180)}`);
+console.log('\n══════ 平台可用性 ══════');
+for (const h of list) {
+  console.log(`\n${ICON[h.verdict] || '❔'} [${h.platform}] ${LABEL[h.verdict] || h.verdict}   ${h.endpoint}`);
+  console.log(`   ${h.detail}`);
+  if (h.matched.logged.length || h.matched.anon.length) {
+    console.log(`   命中特征：已登录 ${JSON.stringify(h.matched.logged)} / 未登录 ${JSON.stringify(h.matched.anon)}`);
+  }
+  if (h.verdict !== 'ok') console.log(`   → ${h.action}`);
 }
 
-const notLogged = results.filter((r) => r.verdict === 'not-logged-in');
-const unknown = results.filter((r) => r.verdict === 'unknown');
+const ok = list.filter((h) => h.verdict === 'ok');
+const needLogin = list.filter((h) => h.verdict === 'not-logged-in' || h.verdict === 'blocked');
+const unknown = list.filter((h) => h.verdict === 'unknown' || h.verdict === 'offline');
+
 console.log('\n══════ 汇总 ══════');
-console.log(`已登录 ${results.filter((r) => r.verdict === 'logged-in').length} / 未登录 ${notLogged.length} / 未知 ${unknown.length}`);
-if (notLogged.length) {
-  console.log('\n需人工登录（用 focus_login.ts 把登录页置顶）：');
-  for (const r of notLogged) console.log(`  ${r.platform} → ./node/node.exe node_modules/tsx/dist/cli.mjs scripts/focus_login.ts ${r.platform}`);
+console.log(`可用 ${ok.length} ｜ 需人工处理 ${needLogin.length} ｜ 未知/未启动 ${unknown.length}（共 ${list.length}）`);
+if (needLogin.length) {
+  console.log('\n需人工处理：');
+  for (const h of needLogin as PlatformHealth[]) {
+    console.log(`  ${h.platform}：${h.verdict === 'blocked' ? '人工过一次滑块/短信验证' : `登录 → scripts/focus_login.ts ${h.platform}`}`);
+  }
 }
-process.exit(notLogged.length ? 1 : unknown.length ? 2 : 0);
+// 未登录与被风控都算「阻断」，返回 1；其余未知返回 2
+process.exit(needLogin.length ? 1 : unknown.length ? 2 : 0);

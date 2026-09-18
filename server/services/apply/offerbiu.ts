@@ -14,6 +14,7 @@
  * 使用独立浏览器上下文键 'official'，避免污染 Offerbiu 采集用的上下文。
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, pollEmailCode, resolveResumePath } from './common.js';
 import * as db from '../../db.js';
 import { sendMail } from '../mail.js';
@@ -168,7 +169,12 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
   const jobUrl = input.jobUrl || input.job?.apply_url || undefined;
   const company = input.job?.company ?? null;
   const position = input.job?.position ?? null;
-  const resumePath = resolveResumePath(input.profile.resume_path);
+  // 一岗一简历：优先用「按本岗位 JD 定制的 PDF」作附件；没有则回退固定简历。
+  // （定制文件由 tailoredResumePdf.ensureTailoredResumePdf 生成，路径经 input.resumeOverride 传入）
+  const override = input.resumeOverride ? resolveResumePath(input.resumeOverride) : undefined;
+  const hasOverride = !!override && fs.existsSync(override);
+  const resumePath = hasOverride ? override! : resolveResumePath(input.profile.resume_path);
+  if (hasOverride && resumePath) logs.step('使用定制简历附件', true, path.basename(resumePath));
 
   if (!jobUrl) {
     return { platform, status: 'need_login', message: '该岗位缺少投递入口链接', logs: logs.logs, company, position };

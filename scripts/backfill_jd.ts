@@ -39,12 +39,17 @@ const INTERVAL = Math.max(500, Number(arg('interval', '2500')));
 const INCLUDE_APPLIED = flag('include-applied');
 const DRY_RUN = flag('dry-run');
 
-/** 平台「岗位详情页」链接特征（列表页/搜索页没有 JD，必须排除） */
+/**
+ * 平台「岗位详情页」链接特征（列表页/搜索页没有 JD，必须排除）。
+ * ⚠️ 必须按**实测的真实 URL 形态**写，否则候选数会莫名变成 0：
+ * 智联详情页是 `https://www.zhaopin.com/jobdetail/CCxxxxxxx.htm`，
+ * 不是 `jobs.zhaopin.com`（早期写成后者 → 127 个智联岗位被误判为「无详情页直链」而整批漏掉）。
+ */
 const DETAIL_URL: Record<string, RegExp> = {
   boss: /\/job_detail\/[^/]+\.html/,
   liepin: /\/lptjob\/[^/]+/,
   job51: /jobs\.51job\.com\/[^/]+\/[^/]+\.html/,
-  zhilian: /jobs\.zhaopin\.com\//,
+  zhilian: /zhaopin\.com\/jobdetail\//,
 };
 
 /**

@@ -661,6 +661,59 @@ export async function execCdpAction(
       case 'closeTab': {
         return await okResult(s);
       }
+      /** 把本地 HTML 文件渲染成 PDF（用 Chrome 自己的排版引擎，Pages.printToPDF）。
+       *
+       *  场景：一岗一简历 —— 按 JD 定制好内容后，需要产出**真正的 PDF** 才能作为邮件附件/上传件。
+       *  为什么不开新进程：项目已有 Playwright，但额外下载 Chromium(~150MB) 不划算；
+       *  而平台调试 Chrome 本来就在跑，直接借它排版即可。
+       *
+       *  ⚠️ 关键：**开临时标签页**渲染，绝不占用平台主标签 ——
+       *  否则会打断正在进行的投递/采集（把 BOSS 聊天页导航走，会话就乱了）。
+       *  渲染完立即关掉临时标签。
+       *
+       *  参数：{ fileUrl: 'file:///C:/.../resume.html', outPath: 'C:/.../resume.pdf', timeout? }
+       *  返回：{ data: { path, bytes } } */
+      case 'htmlToPdf': {
+        const fileUrl = String(args.fileUrl || '');
+        const outPath = String(args.outPath || '');
+        if (!fileUrl) return { ok: false, error: 'htmlToPdf 需要 fileUrl' };
+        if (!outPath) return { ok: false, error: 'htmlToPdf 需要 outPath' };
+        let tmpTargetId = '';
+        let tmpWs: WebSocket | undefined;
+        try {
+          const t: any = await httpReq('PUT', `${ep}/json/new?about:blank`);
+          tmpTargetId = t?.id || '';
+          if (!t?.webSocketDebuggerUrl) return { ok: false, error: 'htmlToPdf 无法新建临时标签' };
+          tmpWs = await connect(t.webSocketDebuggerUrl);
+          const ts = attachSession(tmpWs, `${platform}__pdf`);
+          ts.targetId = tmpTargetId;
+          await send(ts, 'Page.enable');
+          await send(ts, 'Page.navigate', { url: fileUrl });
+          await waitForLoad(ts, args.timeout || 20000);
+          const r: any = await send(ts, 'Page.printToPDF', {
+            printBackground: true,
+            paperWidth: Number(args.paperWidth) || 8.27,   // A4 宽（英寸）
+            paperHeight: Number(args.paperHeight) || 11.69,
+            marginTop: Number(args.marginTop ?? 0.35),
+            marginBottom: Number(args.marginBottom ?? 0.35),
+            marginLeft: Number(args.marginLeft ?? 0.4),
+            marginRight: Number(args.marginRight ?? 0.4),
+            scale: Number(args.scale) || 1,
+          });
+          if (!r?.data) return { ok: false, error: 'printToPDF 未返回数据' };
+          const buf = Buffer.from(r.data, 'base64');
+          fs.mkdirSync(path.dirname(outPath), { recursive: true });
+          fs.writeFileSync(outPath, buf);
+          return { ok: true, data: { path: outPath, bytes: buf.length } };
+        } catch (error: any) {
+          return { ok: false, error: `htmlToPdf 失败：${error?.message || error}` };
+        } finally {
+          // 无论成败都要关掉临时标签，避免残留空白页堆积
+          if (tmpTargetId) { try { await httpReq('GET', `${ep}/json/close/${tmpTargetId}`); } catch { /* 忽略 */ } }
+          try { tmpWs?.close(); } catch { /* 忽略 */ }
+          sessions.delete(`${platform}__pdf`);
+        }
+      }
       /** 读取当前 Chrome 会话可见的 Cookie（**含 httpOnly**，如 BOSS 的 `__zp_stoken__`、
        *  猎聘的 `X-XSRF-TOKEN` 配套 cookie）。文档中 `document.cookie` 读不到 httpOnly，
        *  必须走 CDP。用途：

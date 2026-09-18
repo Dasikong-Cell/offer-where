@@ -17,7 +17,8 @@
 | 💬 **跟进（HR复聊）** | `autoReply.ts` / `bossChat.ts` | BOSS 自动读取会话、按意图生成回复、自动发送；识别拒聊/已读不回等状态 |
 | 🖥️ **全程 AI 托管** | `public/console.html` 单一控制台 | 多选平台 + 数量/间隔 + SSE 实时进度 + 一键启动，浏览器里完成全套操作 |
 | 📄 **简历解析** | `/api/resume/parse` | 解析 PDF/Word 简历为结构化文本与技能列表，供匹配与投递复用 |
-| 📄 **一岗一简历** | `/api/jobs/tailor` + `resumeTailor.ts` | 按目标岗位 JD 定制简历片段：技能按岗位相关度重排 + 定制「核心优势」+ 命中/待补分析；LLM 优先、本地规则兜底，**严禁编造**不存在的事实 |
+| 📄 **一岗一简历** | `/api/jobs/tailor` + `/api/jobs/tailor-resume` | 按 JD 定制：技能按相关度重排 + 定制「核心优势」+ 命中/待补分析。**已接入投递**——可生成定制简历 PDF 作为邮件附件（`tailorResume` → HTML → Chrome 排版 → PDF，带内容哈希缓存）。LLM 优先、本地规则兜底，**严禁编造**事实 |
+| 🩺 **平台可用性巡检** | `/api/platforms/health` | 把「连接 / 登录态 / 风控」收敛成**一个结论 + 一条处置建议**，消除「跑完 50 个却投出 0 个」的静默失败 |
 | 📊 **投递漏斗 + 匹配度看板** | `/api/stats/funnel` | 全池按状态/来源聚合（候选/已投/不可用/已隔离），匹配分覆盖度与高/中/低分布，控制台实时展示 |
 | 🔐 **平台 API 通道** | `platformApi/bossOpenApi.ts` | CDP 读取已登录会话 Cookie（含 httpOnly）做**登录态巡检**；逆向 JSON 只读检索提速。**结论：官方开放平台是 B 端，求职者侧无法用它投递**（详见 `BOSS_OPENAPI_PLAN.md`） |
 
@@ -170,13 +171,13 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 |---|---|
 | `ensure_chrome.sh` | 一键幂等拉起 5 个 CDP 调试窗口（boss/liepin/job51/zhilian/official），机器休眠/重启后服务端与 CDP 一起掉时首先跑它 |
 | `healthcheck.ts` | 一键体检：后端可达性 / 各平台连接 / 岗位池数量 / 邮箱配置是否就绪 |
-| `check_logins.ts` | 并行检查各平台登录态（boss/job51/liepin/zhilian）。**anon 优先**规则，输出明确结论与退出码（0=全登录 1=有未登录 2=有未知） |
 | `selftest.ts` | 功能回归自检（42 项，只读）：简历解析/手机号多格式/匹配引擎/邮箱抽取/域名归约/一岗一简历/防幻觉/字段清洗 |
 | `db_report.ts` | 数据库体检（只读）：表行数、岗位池与投递分布、匹配覆盖、数据质量（重复/空JD/记录不一致） |
 | `fix_job_data.ts` | 历史脏数据修复：清洗被加密字体污染的字段、按 apply_url 回填公司名、清理空壳/重复。**默认 dry-run，`--apply` 才写库且自动备份** |
 | `backfill_jd.ts` | 回填岗位 JD 正文（顺带补公司名）。**可续跑、失败不中断**，建议 `--limit=50` 分批跑；`--include-applied` 可连已投岗位一起补 |
 | `calibrate_jd_selectors.ts` | 探测各平台详情页的 JD/公司名选择器（用于校准 `backfill_jd.ts`，只读） |
 | `focus_login.ts <platform> [url]` | 把指定平台调试窗口导航到登录页并置顶，引导用户登录/收验证码 |
+| `check_logins.ts` | **平台可用性巡检**：连接 / 登录态 / 风控三合一 → 一个结论 + 处置建议（判定逻辑与 `/api/platforms/health` 同源）。退出码 0=全可用 1=有未登录或被风控 2=有未知 |
 | `probe_platform_api.ts` | 平台 API 通道自检：CDP 端点 + 登录态（关键鉴权 Cookie）+ 两条通道开关 |
 | `check_console_syntax.ts` | 校验 `public/console.html` 内联脚本语法（提交前拦下模板字面量笔误） |
 | `backfill_match.ts` | 回填岗位匹配分（本地规则，零 LLM 成本），让漏斗看板「匹配度」覆盖全池 |
@@ -268,6 +269,22 @@ curl -s -X POST http://127.0.0.1:4400/api/browser/exec -H 'Content-Type: applica
 ./node/node.exe node_modules/tsx/dist/cli.mjs scripts/tailor_preview.ts --position "Java开发工程师" --jd "要求 Spring Boot / MySQL / Redis"
 # HTTP：POST /api/jobs/tailor  { "jobId": "..." }  或 { "job": { "position","company","jd" } }
 ```
+
+### 接入投递：一岗一简历 PDF
+
+邮箱直投时勾选「一岗一简历」即可按各岗位 JD 生成定制 PDF 作为附件：
+
+```bash
+# 单个岗位：生成并返回路径（首次约 8s，之后命中缓存 1s）
+curl -X POST http://127.0.0.1:4400/api/jobs/tailor-resume -H 'Content-Type: application/json' -d '{"jobId":"..."}'
+# 批量投递时自动逐岗生成：POST /api/offerbiu/email-apply 加 "tailor": true
+```
+
+管线：`tailorResume()` → `buildResumeHtml()`（自包含 A4 HTML）→ `cdpDriver.htmlToPdf`（**临时标签页**借调试 Chrome 排版，不打断平台主标签）→ `data/resume_tailored/<公司>-<职位>-<hash>.pdf`。
+三处设计取舍：
+- **不给 HR 看内部信息**：PDF 里只有简历内容，**不含**「匹配度 73/100」「待补 2 项」这类内部分析；
+- **信息零丢失**：定制部分之外的原文完整保留，仅把原文的「专业技能」段替换为重排版本；
+- **缓存键只用输入**：绝不能把 LLM 生成文案纳入哈希 —— LLM 每次输出微变会导致永远缓存不命中（实测踩到）。
 
 ---
 

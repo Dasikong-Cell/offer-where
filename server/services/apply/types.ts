@@ -78,6 +78,12 @@ export interface ApplyInput {
    * 用于规避微信推文被限流/需验证导致正文加载不出、抽不到邮箱的场景。
    */
   email?: string;
+  /**
+   * 一岗一简历：本次投递使用的**定制简历附件路径**（覆盖档案里的 `resume_path`）。
+   * 由 `services/apply/tailoredResumePdf.ensureTailoredResumePdf()` 按岗位 JD 生成。
+   * 不传则沿用固定简历，行为与以前完全一致（向后兼容）。
+   */
+  resumeOverride?: string;
   /** 预览模式：只解析收件人/标题/正文并写入日志，不真正发信 */
   dryRun?: boolean;
   /** 真实投递开关（官网/offerbiu 通道专用）：只有显式 true 才真正提交；

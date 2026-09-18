@@ -16,6 +16,7 @@ import { extractEmails, rootDomain } from '../server/services/offerbiuEmailScan.
 import { tailorResume, parseSkills, buildResumeBlob } from '../server/services/apply/resumeTailor.js';
 import { isAiEnabled } from '../server/services/apply/aiClient.js';
 import { sanitizeJobText, sanitizePosition, sanitizeCompany } from '../server/db.js';
+import { buildResumeHtml } from '../server/services/apply/resumeRender.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -174,6 +175,31 @@ for (const [input, expect] of coCases) {
   const got = sanitizeCompany(input);
   check(`公司名 ${JSON.stringify(input)}`, got === expect, `→ ${JSON.stringify(got)}`);
 }
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ G. 定制简历 HTML 渲染（一岗一简历出稿） ══════');
+const html = buildResumeHtml({
+  profile: { name: '张三', phone: '13000000000', email: 'a@b.com', city: '昆明' },
+  struct: {
+    rawText: '张三\n电话：13000000000\n求职意向\nJava开发工程师\n教育经历\n云南大学｜软件工程\n2020.09 — 2024.06\n• 主修数据结构、计算机网络\n专业技能\nJava、MySQL\n项目经历\n• 电商后台系统（Spring Boot）\n• 数据看板（Vue3）',
+    name: '张三', phone: '13000000000', email: 'a@b.com',
+  },
+  tailored: {
+    company: '测试公司', position: 'Java开发工程师',
+    summary: '软件工程本科，具备 Java 后端开发能力。',
+    highlights: ['熟练掌握 Java 与 Spring Boot'],
+    orderedSkills: ['Java', 'Spring Boot', 'MySQL', 'Redis', 'Docker'],
+  },
+});
+check('HTML 含姓名与应聘岗位', html.includes('张三') && html.includes('Java开发工程师'), `${html.length} 字符`);
+check('HTML 含定制核心优势', html.includes('核心优势') && html.includes('软件工程本科'), '');
+check('HTML 含重排后的技能', html.includes('Docker') && html.includes('class="tag"'), '');
+check('HTML 保留原文经历（信息零丢失）', html.includes('项目经历') && html.includes('电商后台系统'), '');
+// ⚠️ 关键：发给 HR 的简历里**不得**出现内部匹配分析
+check('HTML 不泄露内部匹配信息', !/匹配度|matchScore|待补/.test(html), '');
+const skillOccur = (html.match(/专业技能/g) || []).length;
+check('专业技能只出现一次（未与原文重复）', skillOccur === 1, `出现 ${skillOccur} 次`);
+check('HTML 自包含（无外链资源）', !/<(link|script|img)\b/i.test(html), '');
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ 汇总 ══════');

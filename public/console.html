@@ -134,6 +134,13 @@
   .src-tile { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: 12px; }
   .src-tile .st { display: flex; justify-content: space-between; color: var(--muted); margin-top: 4px; }
   .src-tile .st b { color: var(--text); font-weight: 600; }
+  .health-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .hchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: help;
+           padding: 5px 10px; border-radius: 9px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
+  .hchip .p { font-weight: 600; color: var(--text); }
+  .hchip.ok { background: #ecfdf5; border-color: #a7f3d0; }
+  .hchip.bad { background: #fef2f2; border-color: #fecaca; }
+  .hchip.warn { background: #fffbeb; border-color: #fde68a; }
   .usage {
     font-size: 12px; line-height: 1.6; background: var(--brand-soft); color: var(--brand);
     border: 1px solid #bfdbfe; border-radius: 9px; padding: 9px 12px; margin-bottom: 16px;
@@ -179,6 +186,14 @@
     <div class="sub" style="margin-top:8px;color:var(--muted)">匹配分：高≥70 / 中40-69 / 低&lt;40（高 <b id="kHigh">0</b> · 中 <b id="kMid">0</b> · 低 <b id="kLow">0</b>）。未覆盖岗位可点「② 投递设置」后用 <code>/api/jobs/match</code> 精准打分。</div>
     <div class="sub" id="matchBasisNote" style="margin-top:6px;color:var(--warn)"></div>
   </div>
+
+  <div class="card">
+    <div class="row-between" style="margin-bottom:10px">
+      <h2 style="margin:0">🩺 平台可用性（连接 / 登录态 / 风控）</h2>
+      <button id="btnHealth" style="padding:6px 12px">重新巡检</button>
+    </div>
+    <div class="sub" id="healthSummary" style="margin-bottom:8px">尚未巡检。投递/采集前建议先点「重新巡检」，避免「跑完 50 个却投出 0 个」。</div>
+    <div id="healthList" class="health-list"></div>
   </div>
 
   <div class="card">
@@ -282,9 +297,14 @@
     <div class="actions" style="margin-top:10px">
       <button id="btnScanEmails">扫描招聘邮箱</button>
       <button class="primary" id="btnEmailApply" disabled>批量邮箱直投（选中 0 个）</button>
+      <button id="btnPreviewTailor">预览定制简历</button>
       <label class="checkline" id="forceWrap" style="display:none;gap:6px;align-items:center">
         <input type="checkbox" id="chkForceApply" />
         <span>强制投递（忽略跨公司隔离标记）</span>
+      </label>
+      <label class="checkline" style="display:inline-flex;gap:6px;align-items:center">
+        <input type="checkbox" id="chkTailor" />
+        <span>一岗一简历（按 JD 定制简历附件）</span>
       </label>
       <span class="sub" id="scanTip" style="margin-left:8px"></span>
     </div>
@@ -814,6 +834,33 @@ $('#btnReplyStop').onclick = () => {
   line('已请求停止自动回复。', 'warn');
 };
 
+// ===== 平台可用性巡检（连接 / 登录态 / 风控）=====
+const HEALTH_ICON = { ok: '✅', 'not-logged-in': '❌', blocked: '🛑', offline: '🔌', unknown: '⚠️' };
+async function renderHealth() {
+  const btn = $('#btnHealth');
+  const sum = $('#healthSummary');
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '巡检中…';
+  sum.style.color = 'var(--muted)';
+  sum.textContent = '巡检中（会依次打开各平台首页做权威判定，约 8s/平台）…';
+  try {
+    const d = await (await fetch(API_BASE + '/api/platforms/health')).json();
+    if (d.error) throw new Error(d.error);
+    sum.textContent = d.summary || '';
+    $('#healthList').innerHTML = (d.platforms || []).map(h => {
+      const cls = h.verdict === 'ok' ? 'ok'
+        : (h.verdict === 'blocked' || h.verdict === 'not-logged-in' || h.verdict === 'offline') ? 'bad' : 'warn';
+      const tip = `${h.detail || ''}\n→ ${h.action || ''}`;
+      return `<span class="hchip ${cls}" title="${esc(tip)}">${HEALTH_ICON[h.verdict] || '❔'} <span class="p">${esc(h.platform)}</span> ${esc(h.verdict)}</span>`;
+    }).join('');
+  } catch (e) {
+    sum.textContent = '巡检失败：' + (e.message || e);
+    sum.style.color = 'var(--err)';
+  }
+  btn.disabled = false; btn.textContent = old;
+}
+$('#btnHealth').onclick = renderHealth;
+
 // ===== 自动回复常驻监视器 =====
 // 投递漏斗 & 匹配度看板
 async function renderFunnel() {
@@ -1237,6 +1284,30 @@ $('#btnScanEmails').onclick = async () => {
   setTimeout(() => { tip.textContent = ''; }, 5000);
 };
 
+// 预览「一岗一简历」：为选中的第 1 个岗位生成定制 PDF 并直接打开（先看质量，再决定是否真投）
+$('#btnPreviewTailor').onclick = async () => {
+  const sel = selectedEmailHits();
+  const hit = sel[0] || emailHits[0];
+  if (!hit) { line('请先扫描出候选邮箱，或在列表中勾选一个岗位', 'warn'); return; }
+  const b = $('#btnPreviewTailor');
+  b.disabled = true; b.textContent = '生成中…';
+  line(`正在为「${hit.company || ''} ${hit.position || ''}」按 JD 定制简历（首次约 8s，之后命中缓存 1s）…`, 'info');
+  try {
+    const r = await fetch(API_BASE + '/api/jobs/tailor-resume', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: hit.jobId }),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || '生成失败');
+    line(`✅ 定制简历已生成（匹配度 ${d.matchScore ?? '-'}｜技能重排 ${(d.orderedSkills || []).length} 项｜${d.cached ? '缓存命中' : '新生成'}）`, 'ok');
+    line(`   ${(d.summary || '').slice(0, 120)}`, 'dim');
+    window.open(API_BASE + d.url, '_blank');
+  } catch (e) {
+    line('定制简历生成失败：' + (e.message || e), 'err');
+  }
+  b.disabled = false; b.textContent = '预览定制简历';
+};
+
 $('#btnEmailApply').onclick = async () => {
   const sel = selectedEmailHits();
   if (!sel.length) return;
@@ -1249,11 +1320,16 @@ $('#btnEmailApply').onclick = async () => {
   try {
     const res = await fetch(API_BASE + '/api/offerbiu/email-apply', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobIds: ids, intervalMs: 8000, force: !!$('#chkForceApply')?.checked }),
-    });
+    body: JSON.stringify({
+      jobIds: ids,
+      intervalMs: 8000,
+      force: !!$('#chkForceApply')?.checked,
+      tailor: !!$('#chkTailor')?.checked,
+    }),
+  });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     await readSse(res, (ev) => {
-      if (ev.type === 'progress') line(`[${ev.index + 1}/${ev.total}] ${ev.company || ''} ${ev.position || ''}`, 'info');
+      if (ev.type === 'progress') line(`[${ev.index + 1}/${ev.total}] ${ev.company || ''} ${ev.position || ''}${ev.message ? ' — ' + ev.message : ''}`, 'info');
       else if (ev.type === 'result') line(`  ${ev.status === 'applied' ? '✓ 已投递' : '✗ ' + ev.status}：${ev.company || ''} — ${String(ev.message || '').slice(0, 120)}`, ev.status === 'applied' ? 'ok' : 'warn');
       else if (ev.type === 'done') line(`邮箱直投完成：成功 ${ev.ok} / 失败 ${ev.fail}（共 ${ev.total}）`, ev.fail ? 'warn' : 'ok');
       else if (ev.type === 'error') line('邮箱直投失败：' + ev.message, 'err');

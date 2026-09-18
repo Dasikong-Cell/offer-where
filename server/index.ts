@@ -14,6 +14,7 @@ import { probePlatformConnections } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
 import { tailorResume } from "./services/apply/resumeTailor.js";
+import { ensureTailoredResumePdf } from "./services/apply/tailoredResumePdf.js";
 import { isAiEnabled, getAiConfig } from "./services/apply/aiClient.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
@@ -25,6 +26,7 @@ import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatc
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
 import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuCollect.js";
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
+import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
@@ -69,6 +71,11 @@ app.use((req, res, next) => {
 const SCREENSHOT_DIR = path.join(__dirname, '..', 'data', 'screenshots');
 if (!fs.existsSync(SCREENSHOT_DIR)) fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 app.use('/data/screenshots', express.static(SCREENSHOT_DIR));
+
+// 静态资源：一岗一简历生成的定制简历 PDF/HTML（供前端预览与下载）
+const TAILORED_DIR = path.join(__dirname, '..', 'data', 'resume_tailored');
+if (!fs.existsSync(TAILORED_DIR)) fs.mkdirSync(TAILORED_DIR, { recursive: true });
+app.use('/data/resume_tailored', express.static(TAILORED_DIR));
 
 // 静态资源：投递控制台（单一入口 App，public/console.html）
 const CONSOLE_DIR = path.join(__dirname, '..', 'public');
@@ -141,6 +148,20 @@ app.get("/api/stats/funnel", (_req, res) => {
     });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "统计失败" });
+  }
+});
+
+/** 平台可用性巡检：连接 / 登录态 / 风控 三合一结论 + 处置建议。
+ *  ?deep=1（默认）会导航各平台页面做权威判定（约 8s/平台）；deep=0 只测 CDP 连接。
+ *  用途：投递/采集前先看一眼，避免「跑完 50 个投出 0 个却不知道为什么」。 */
+app.get("/api/platforms/health", async (req, res) => {
+  try {
+    const deep = req.query.deep !== '0';
+    const list = String(req.query.platforms || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const health = await probePlatformHealth(list.length ? list : undefined, deep);
+    res.json({ deep, summary: summarizeHealth(health, deep), platforms: health });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '巡检失败' });
   }
 });
 
@@ -719,9 +740,32 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
   }
 });
 
+/** 一岗一简历：为指定岗位生成「按 JD 定制」的简历 PDF，返回路径与定制摘要。
+ *  入参 { jobId } 或 { job }；force=true 强制重生成。
+ *  产出文件在 data/resume_tailored/，可作为投递附件（email-apply 传 tailor:true 会自动调用本逻辑）。 */
+app.post("/api/jobs/tailor-resume", async (req, res) => {
+  try {
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    let job = req.body?.job;
+    if (!job && req.body?.jobId) {
+      const j = db.getJob(String(req.body.jobId));
+      if (!j) return res.status(404).json({ error: '岗位不存在' });
+      job = { id: j.id, company: j.company, position: j.position, jd: j.jd, requirements: j.requirements };
+    }
+    if (!job) return res.status(400).json({ error: '请提供 jobId 或 job 对象' });
+    const r = await ensureTailoredResumePdf(job, { profile, force: req.body?.force === true });
+    if (!r.ok) return res.status(500).json(r);
+    res.json({ ...r, url: `/data/resume_tailored/${path.basename(r.pdfPath!)}` });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '定制简历生成失败' });
+  }
+});
+
 /** 对指定岗位批量「邮箱直投」（channel=email + realSend，SSE 进度） */
 app.post("/api/offerbiu/email-apply", async (req, res) => {
   const jobIds: string[] = Array.isArray(req.body?.jobIds) ? req.body.jobIds.map((x: unknown) => String(x)) : [];
+  /** 一岗一简历开关：true 时先按各岗位 JD 生成定制 PDF，作为本次投递的附件 */
+  const tailor = req.body?.tailor === true;
   /** 预取证邮箱映射（jobId -> 已核验 HR 邮箱）：提供后邮箱通道跳过页面重抽，规避微信限流 */
   const emails: Record<string, string> = req.body?.emails && typeof req.body.emails === 'object' ? req.body.emails : {};
   const intervalMs = Math.max(0, Number(req.body?.intervalMs ?? 8000));
@@ -743,6 +787,30 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
       send({ type: 'error', message: '档案未配置邮箱，无法发信。请先在「我的档案」填写邮箱与授权码' });
       return;
     }
+
+    // 一岗一简历：投递前先按各岗位 JD 生成定制 PDF（串行，带内容哈希缓存，重复投递不会重算）
+    const resumeOverrides: Record<string, string> = {};
+    if (tailor) {
+      send({ type: 'progress', index: 0, total: jobIds.length, message: '一岗一简历：正在按 JD 生成定制简历…' });
+      let tailored = 0;
+      for (const jid of jobIds) {
+        const j = db.getJob(jid);
+        if (!j) continue;
+        const r = await ensureTailoredResumePdf(
+          { id: j.id, company: j.company, position: j.position, jd: j.jd, requirements: j.requirements },
+          { profile },
+        ).catch((e: any) => ({ ok: false, error: e?.message } as any));
+        if (r.ok && r.pdfPath) {
+          resumeOverrides[j.id] = r.pdfPath;
+          tailored++;
+          send({ type: 'progress', index: tailored, total: jobIds.length, jobId: j.id, company: j.company, position: j.position, message: `定制简历已生成（匹配度 ${r.matchScore ?? '-'}，${r.cached ? '缓存命中' : '新生成'}）` });
+        } else {
+          send({ type: 'progress', index: tailored, total: jobIds.length, jobId: j.id, message: `定制简历生成失败，将回退固定简历：${r.error || '未知错误'}` });
+        }
+      }
+      send({ type: 'progress', index: jobIds.length, total: jobIds.length, message: `一岗一简历就绪：${tailored}/${jobIds.length} 份定制简历` });
+    }
+
     for (let i = 0; i < jobIds.length; i++) {
       const job = db.getJob(jobIds[i]);
       if (!job) { fail++; send({ type: 'result', jobId: jobIds[i], status: 'error', message: '岗位不存在' }); continue; }
@@ -762,6 +830,8 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
           channel: 'email',
           realSend: true,
           email: emails[job.id] || undefined,
+          /** 一岗一简历：该岗位的定制 PDF（未生成成功则不传 → 回退固定简历） */
+          resumeOverride: resumeOverrides[job.id],
         });
         if (r.status === 'applied') {
           ok++;
