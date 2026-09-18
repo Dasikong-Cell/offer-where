@@ -16,6 +16,17 @@ import { matchResumeToJobAi } from "./services/apply/matchAi.js";
 import { tailorResume } from "./services/apply/resumeTailor.js";
 import { ensureTailoredResumePdf } from "./services/apply/tailoredResumePdf.js";
 import { isAiEnabled, getAiConfig } from "./services/apply/aiClient.js";
+import { decideGreet, decideGreetBatch, DEFAULT_EXCLUDE_KEYWORDS } from "./services/apply/greetDecision.js";
+import {
+  composeCoverLetter, markLetterSent, letterAlreadySent,
+  getLetterTemplate, saveLetterTemplate, clearLetterTemplate, renderLetterTemplate, TEMPLATE_VARIABLES,
+} from "./services/apply/coverLetter.js";
+import { buildInterviewPrep, getInterviewPrep, clearInterviewPrep } from "./services/apply/interviewPrep.js";
+import { resumeVersionStatus, setResumeVersion, getResumeVersion, RESUME_VERSION_LABELS } from "./services/apply/resumeVersion.js";
+import { listSchedules, setSchedule, getSchedule, describeSchedule, evaluateSchedule, advanceSchedule } from "./services/apply/schedule.js";
+import { getExchangeActions, setExchangeActions, runExchangeActions, summarizeExchange, EXCHANGE_LABELS } from "./services/apply/exchangeContact.js";
+import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMAGE_INPUTS } from "./services/apply/chatResumeImage.js";
+import { locateJobById } from "./services/apply/jobLocate.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import { runBatchApply } from "./services/apply/batch.js";
@@ -116,6 +127,27 @@ app.get("/api/stats/funnel", (_req, res) => {
     const highWithJd = (db.query<{ c: number }>(
       "SELECT COUNT(*) c FROM jobs WHERE match_score>=70 AND jd IS NOT NULL AND TRIM(jd)<>''"
     )[0] || { c: 0 }).c;
+    // 跳过原因分布（我们比职得鸭多的一层）：每条被跳过的岗位都有可读理由，
+    // 按「原因前缀」归并后，能直接看出是哪条规则在大量误杀。
+    const skipRows = db.query<{ reason: string; c: number }>(
+      `SELECT skip_reason reason, COUNT(*) c FROM jobs
+       WHERE skip_reason IS NOT NULL AND TRIM(skip_reason) <> ''
+       GROUP BY skip_reason ORDER BY c DESC LIMIT 40`
+    );
+    const skipByRule: Record<string, number> = {};
+    for (const r of skipRows) {
+      const key = String(r.reason).split(/[（(:：]/)[0].trim().slice(0, 20) || '其他';
+      skipByRule[key] = (skipByRule[key] || 0) + r.c;
+    }
+    const skipTotal = (db.query<{ c: number }>(
+      "SELECT COUNT(*) c FROM jobs WHERE skip_reason IS NOT NULL AND TRIM(skip_reason) <> ''"
+    )[0] || { c: 0 }).c;
+    // 求职信台账：已写过多少封（三重去重的①号依据）
+    const lettersSent = (db.query<{ c: number }>("SELECT COUNT(*) c FROM cover_letters")[0] || { c: 0 }).c;
+    // 已定位（公司背调/岗位定位）过的岗位数
+    const located = (db.query<{ c: number }>(
+      "SELECT COUNT(*) c FROM app_kv WHERE key LIKE 'located:%'"
+    )[0] || { c: 0 }).c;
     const bySource: Record<string, any> = {};
     let total = 0, applied = 0, candidate = 0, unavailable = 0;
     for (const r of rows) {
@@ -145,6 +177,16 @@ app.get("/api/stats/funnel", (_req, res) => {
         /** 高匹配里真正基于 JD 的数量（这才是可信的高匹配） */
         highWithJd,
       },
+      /** 跳过原因：total 为被主动跳过的岗位数，byRule 为按规则归并的分布 */
+      skipReasons: {
+        total: skipTotal,
+        byRule: Object.entries(skipByRule).map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count),
+        samples: skipRows.slice(0, 12).map((r) => ({ reason: r.reason, count: r.c })),
+      },
+      /** 求职信台账条数（三重去重①的依据） */
+      lettersSent,
+      /** 已定位/背调过的岗位数 */
+      located,
     });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "统计失败" });
@@ -759,6 +801,240 @@ app.post("/api/jobs/tailor-resume", async (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error?.message || '定制简历生成失败' });
   }
+});
+
+/** 打招呼决策（对标职得鸭 /api/ai/checkAutoChat，但我们返回可读理由）
+ *  入参：{ jobId } 或 { jobIds: [] }；apply=true 时把 skip_reason 落到 jobs 表。
+ *  决策顺序：硬规则（已回复/已写过/已投过/不可投/隔离/排除词/城市/匹配度）→ AI → 兜底。 */
+app.post("/api/jobs/greet-decision", async (req, res) => {
+  try {
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    const opts = {
+      minScore: req.body?.minScore !== undefined ? Number(req.body.minScore) : undefined,
+      useAi: req.body?.useAi !== false,
+      excludeKeywords: Array.isArray(req.body?.excludeKeywords) ? req.body.excludeKeywords.map(String) : undefined,
+    };
+    const ids: string[] = Array.isArray(req.body?.jobIds) ? req.body.jobIds.map((x: unknown) => String(x))
+      : req.body?.jobId ? [String(req.body.jobId)] : [];
+    if (!ids.length) return res.status(400).json({ error: '请提供 jobId 或 jobIds' });
+
+    const jobs = ids.map((id) => db.getJob(id)).filter(Boolean) as ReturnType<typeof db.getJob>[];
+    const results = await decideGreetBatch(jobs as any[], profile, opts);
+
+    if (req.body?.apply === true) {
+      for (const { job, decision } of results) {
+        db.updateJob(job!.id, { skip_reason: decision.greet ? null : decision.reason });
+      }
+    }
+    res.json({
+      total: results.length,
+      greet: results.filter((r) => r.decision.greet).length,
+      skip: results.filter((r) => !r.decision.greet).length,
+      applied: req.body?.apply === true,
+      results: results.map(({ job, decision }) => ({
+        jobId: job!.id, company: job!.company, position: job!.position,
+        greet: decision.greet, reason: decision.reason, source: decision.source,
+        score: decision.score ?? null, evidence: decision.evidence || [],
+      })),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '打招呼决策失败' });
+  }
+});
+
+/** 生成/预览求职信（对标职得鸭 type2「AI写求职信」）
+ *  入参：{ jobId, kind: 'hello'|'letter'|'reply', mode: 'ai'|'custom', chatHistory?, hrGroupId?, save? }
+ *  save=true 时写入 cover_letters 台账（后续三重去重会挡住重复发送）。 */
+app.post("/api/jobs/cover-letter", async (req, res) => {
+  try {
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    let job: any = req.body?.job;
+    if (!job && req.body?.jobId) {
+      const j = db.getJob(String(req.body.jobId));
+      if (!j) return res.status(404).json({ error: '岗位不存在' });
+      job = { id: j.id, company: j.company, position: j.position, jd: j.jd, requirements: j.requirements, city: j.city };
+    }
+    if (!job) return res.status(400).json({ error: '请提供 jobId 或 job 对象' });
+
+    const r = await composeCoverLetter({
+      platform: String(req.body?.platform || job.source || 'boss'),
+      kind: req.body?.kind || 'letter',
+      mode: req.body?.mode === 'custom' ? 'custom' : 'ai',
+      job,
+      jd: req.body?.jd || job.jd || null,
+      chatHistory: req.body?.chatHistory || null,
+      hrGroupId: req.body?.hrGroupId || null,
+      hrReplied: req.body?.hrReplied === true,
+      profile,
+      templateContent: req.body?.templateContent || null,
+    });
+
+    if (r.ok && req.body?.save === true && !r.skipped) {
+      markLetterSent({
+        platform: String(req.body?.platform || job.source || 'boss'),
+        job, hrGroupId: req.body?.hrGroupId || null,
+        content: r.content, source: r.source,
+      });
+    }
+    res.json(r);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '求职信生成失败' });
+  }
+});
+
+/** 自定义求职信模板（含可用变量清单）。GET 读取，POST 保存，DELETE 清空。 */
+app.get("/api/cover-letter/template", (_req, res) => {
+  res.json({ template: getLetterTemplate(), variables: TEMPLATE_VARIABLES });
+});
+app.post("/api/cover-letter/template", (req, res) => {
+  try {
+    const name = String(req.body?.name || '未命名模板');
+    const content = String(req.body?.content || '');
+    if (!content.trim()) return res.status(400).json({ error: '模板内容不能为空' });
+    res.json({ ok: true, template: saveLetterTemplate(name, content), variables: TEMPLATE_VARIABLES });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '模板保存失败' });
+  }
+});
+app.delete("/api/cover-letter/template", (_req, res) => {
+  clearLetterTemplate();
+  res.json({ ok: true });
+});
+
+/** 模板试渲染：把变量替换后返回，方便前端所见即所得地预览 */
+app.post("/api/cover-letter/render", (req, res) => {
+  const tpl = String(req.body?.content || '');
+  const vars = (req.body?.vars && typeof req.body.vars === 'object') ? req.body.vars : {};
+  res.json({ rendered: renderLetterTemplate(tpl, vars) });
+});
+
+/** 面试攻略（对标职得鸭「面试鸭攻略」）。GET 读缓存，POST 生成（force 重算）。 */
+app.get("/api/jobs/interview-prep", (req, res) => {
+  const jobId = String(req.query.jobId || '');
+  if (!jobId) return res.status(400).json({ error: '请提供 jobId' });
+  const cached = getInterviewPrep(jobId);
+  if (!cached) return res.status(404).json({ error: '尚无该岗位的面试攻略，请先生成', cached: false });
+  res.json({ ...cached, cached: true });
+});
+app.post("/api/jobs/interview-prep", async (req, res) => {
+  try {
+    const jobId = String(req.body?.jobId || '');
+    if (!jobId) return res.status(400).json({ error: '请提供 jobId' });
+    const job = db.getJob(jobId);
+    if (!job) return res.status(404).json({ error: '岗位不存在' });
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    const r = await buildInterviewPrep(profile, job, { force: req.body?.force === true });
+    if (req.body?.clear === true) clearInterviewPrep(jobId);
+    res.json({ ...r, jobId, company: job.company, position: job.position, aiEnabled: isAiEnabled() });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '面试攻略生成失败' });
+  }
+});
+
+/** 简历版本（original / optimized / tailored）——对标职得鸭 resumeType 开关 */
+app.get("/api/resume/version", (_req, res) => {
+  res.json(resumeVersionStatus());
+});
+app.post("/api/resume/version", (req, res) => {
+  const v = setResumeVersion(String(req.body?.version || 'original'));
+  res.json({ ok: true, version: v, label: RESUME_VERSION_LABELS[v], status: resumeVersionStatus() });
+});
+
+/** 运行时间段调度（对标职得鸭 TimeManager）。GET 全平台，POST 设置单平台。 */
+app.get("/api/schedule", (_req, res) => {
+  res.json({
+    schedules: listSchedules().map((s) => ({ ...s, description: describeSchedule(s.platform), status: evaluateSchedule(s.platform) })),
+  });
+});
+app.post("/api/schedule", (req, res) => {
+  try {
+    const platform = String(req.body?.platform || '');
+    if (!platform) return res.status(400).json({ error: '请提供 platform' });
+    const saved = setSchedule(platform, {
+      enabled: req.body?.enabled,
+      slots: Array.isArray(req.body?.slots) ? req.body.slots : undefined,
+      reset: req.body?.reset === true,
+    });
+    res.json({ ok: true, schedule: saved, description: describeSchedule(platform), status: evaluateSchedule(platform) });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '时间段保存失败' });
+  }
+});
+app.post("/api/schedule/advance", (req, res) => {
+  const platform = String(req.body?.platform || '');
+  if (!platform) return res.status(400).json({ error: '请提供 platform' });
+  res.json({ ok: true, schedule: advanceSchedule(platform) });
+});
+
+/** 猎聘「交换联系方式」配置与执行（发简历 / 换手机号 / 换微信号） */
+app.get("/api/exchange/actions", (_req, res) => {
+  res.json({ actions: getExchangeActions(), labels: EXCHANGE_LABELS, options: Object.entries(EXCHANGE_LABELS).map(([value, label]) => ({ value, label })) });
+});
+app.post("/api/exchange/actions", (req, res) => {
+  res.json({ ok: true, actions: setExchangeActions(req.body?.actions) });
+});
+app.post("/api/exchange/run", async (req, res) => {
+  try {
+    const actions = Array.isArray(req.body?.actions) ? req.body.actions : getExchangeActions();
+    const logs = new (await import("./services/apply/common.js")).ApplyLogger();
+    const results = await runExchangeActions('liepin', actions, logs);
+    res.json({ ok: results.every((r) => r.outcome !== 'failed'), summary: summarizeExchange(results), results, logs: logs.logs });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '交换动作执行失败' });
+  }
+});
+
+/** 简历「聊天图」通道：生成 PNG（可顺带发到当前聊天框）。
+ *  入参 { jobId, send?: boolean }；返回 PNG 路径，可静态访问 /data/resume_tailored/<file>.png */
+app.post("/api/jobs/chat-resume", async (req, res) => {
+  try {
+    const jobId = String(req.body?.jobId || '');
+    if (!jobId) return res.status(400).json({ error: '请提供 jobId' });
+    const job = db.getJob(jobId);
+    if (!job) return res.status(404).json({ error: '岗位不存在' });
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    const png = await ensureChatResumePng(
+      { id: job.id, company: job.company, position: job.position, jd: job.jd, requirements: job.requirements },
+      { profile, force: req.body?.force === true },
+    );
+    if (!png.ok) return res.status(500).json(png);
+    let sent: { ok: boolean; detail: string } | null = null;
+    if (req.body?.send === true) {
+      sent = await sendChatResumeImage(job.source, png.pngPath!);
+    }
+    res.json({
+      ...png, sent,
+      url: `/data/resume_tailored/${path.basename(png.pngPath!)}`,
+      note: 'PNG 聊天图用于「平台内聊天」场景；若该岗位有 HR 邮箱，建议改用 PDF 邮件通道（可被 ATS 解析）',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '聊天简历图生成失败' });
+  }
+});
+
+/** 简历通道决策：给定岗位（是否已有 HR 邮箱），返回该走哪条通道以及理由 */
+app.post("/api/resume/channel", (req, res) => {
+  const platform = String(req.body?.platform || '');
+  const hasEmail = req.body?.hasEmail === true;
+  res.json({ ...decideResumeChannel({ hasEmail, platform }), chatImagePlatforms: Object.keys(CHAT_IMAGE_INPUTS) });
+});
+
+/** 岗位定位 / 公司背调（对标职得鸭 bossSearch.js，即前端所谓「AI公司背调」）
+ *  入参 { jobId, platform? } —— BOSS 走「公司 → 在招职位 → 职位」两级定位，其他平台直达详情页。 */
+app.post("/api/jobs/locate", async (req, res) => {
+  try {
+    const jobId = String(req.body?.jobId || '');
+    if (!jobId) return res.status(400).json({ error: '请提供 jobId' });
+    const r = await locateJobById(jobId, req.body?.platform ? String(req.body.platform) : undefined);
+    res.json(r);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '岗位定位失败' });
+  }
+});
+
+/** 排除词表（打招呼决策的默认排除项，前端只读展示） */
+app.get("/api/jobs/exclude-keywords", (_req, res) => {
+  res.json({ keywords: DEFAULT_EXCLUDE_KEYWORDS });
 });
 
 /** 对指定岗位批量「邮箱直投」（channel=email + realSend，SSE 进度） */

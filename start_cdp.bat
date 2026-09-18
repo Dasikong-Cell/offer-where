@@ -49,6 +49,26 @@ echo.
 REM 2026-09-12 反检测加固：--disable-blink-features=AutomationControlled 让 navigator.webdriver 返回 false，
 REM 抹掉 CDP 自动化特征，避免 BOSS/猎聘/51job 检测到调试器后强制重新登录或弹风控。
 REM （--disable-infobars 在 Chrome151 已近似空操作，保留无害）
+REM ============================================================================
+REM Chrome 启动参数（2026-09-19 依据竞品取证结论复核）
+REM
+REM 核心一条：--disable-blink-features=AutomationControlled
+REM   等价于职得鸭（puppeteer-real-browser）往 --disable-features 里追加 AutomationControlled，
+REM   作用是让 navigator.webdriver 返回 false，抹掉 CDP 自动化标志。
+REM
+REM 刻意【不】做的两件事（否则会主动扩大指纹差异面）：
+REM   · 不批量禁用 Chrome 自带特性（Translate / MediaRouter / BackForwardCache …）——
+REM     chrome-launcher 的默认 flags 会禁掉这些，而**正常用户的 Chrome 是开着的**，
+REM     禁用它们反而让浏览器更容易被识别。职得鸭照抄了这套默认 flags，是它的一处技术债。
+REM   · 不启用 --disable-component-update —— 保持组件更新通道正常，贴近真实安装。
+REM
+REM 已知仍落后竞品的一点（记录在案，勿忘）：
+REM   职得鸭用 rebrowser-puppeteer-core，消除了 CDP `Runtime.enable` 的运行时泄漏，
+REM   因此它可以正常使用**完整** puppeteer API；我们目前只能靠"绝不调用 Runtime.enable"
+REM   手工规避（见 server/services/cdpDriver.ts 注释），CDP 能力被自我限制。
+REM   这是架构级改动，需单独 PoC 验证后再替换，不在本次范围内。
+REM   自检：scripts/check_stealth.ts 可实测当前窗口到底泄露了哪些指纹。
+REM ============================================================================
 set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-blink-features=AutomationControlled --disable-infobars"
 
 REM Window layout: 640x700 grid so all 5 windows fit on a 1920x1080 screen

@@ -206,12 +206,88 @@ function httpReq(method: string, url: string): Promise<any> {
   });
 }
 
-function connect(wsUrl: string): Promise<WebSocket> {
+function connect(wsUrl: string, timeoutMs = 8000): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
-    ws.on('open', () => resolve(ws));
-    ws.on('error', e => reject(e));
+    // 握手也要有超时：目标标签若处于半死状态，'open' 可能永远不触发，
+    // 早期实现会在这里无限挂起（表现为整条链路"卡住"却没有任何报错）。
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch { /* ignore */ }
+      reject(new Error(`CDP WebSocket 握手超时（${timeoutMs}ms）：${wsUrl.slice(-40)}`));
+    }, timeoutMs);
+    ws.on('open', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ws);
+    });
+    ws.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(e);
+    });
   });
+}
+
+/**
+ * 探测标签的「渲染进程是否还活着」。
+ *
+ * 背景（实测）：BOSS 的聊天页长时间挂机后会变成**僵尸标签** ——
+ * 浏览器进程级命令正常（`Page.getNavigationHistory` 秒回），
+ * 但所有渲染进程级命令（`Runtime.evaluate` / `Page.enable` / `DOM.getDocument`）全部超时。
+ * 此时若直接接管，之后每条命令都要白等 25s 才失败，整批投递看起来就是"卡住、投出 0 个"。
+ *
+ * 判定方式：发一条极轻量的 `Runtime.evaluate`，短超时内收到应答即视为存活。
+ * 实现上只用一个 `settled` 标志收敛结果，不依赖 `ws.off()`（不同 ws 版本/类型定义不一致）。
+ */
+function probeRendererAlive(ws: WebSocket, timeoutMs = 3500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const id = Math.floor(Math.random() * 1e9);
+    let settled = false;
+    const done = (v: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(v);
+    };
+    const onMsg = (raw: WebSocket.RawData) => {
+      let m: any;
+      try { m = JSON.parse(raw.toString()); } catch { return; }
+      if (m.id === id) done(true);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    ws.on('message', onMsg);
+    try {
+      ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: '1', returnByValue: true } }));
+    } catch {
+      done(false);
+    }
+  });
+}
+
+/** 临时连一下目标标签探测存活；无论结果如何都会释放这条临时连接 */
+async function targetRendererAlive(
+  target: { id: string; webSocketDebuggerUrl: string },
+  timeoutMs = 3500,
+): Promise<boolean> {
+  let ws: WebSocket | undefined;
+  try {
+    ws = await connect(target.webSocketDebuggerUrl, timeoutMs);
+    return await probeRendererAlive(ws, timeoutMs);
+  } catch {
+    return false;
+  } finally {
+    try { ws?.close(); } catch { /* ignore */ }
+  }
+}
+
+/** 关闭指定标签（失败忽略）。⚠️ 不要关闭端点下最后一个标签，否则 Chrome 会退出。 */
+async function closeTarget(endpoint: string, targetId: string): Promise<void> {
+  try { await httpReq('GET', `${endpoint}/json/close/${targetId}`); } catch { /* ignore */ }
 }
 
 function attachSession(ws: WebSocket, platform: string): PageSession {
@@ -285,7 +361,9 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   const existing = sessions.get(platform);
   if (existing && !existing.dead && existing.ws.readyState === WebSocket.OPEN) {
     try {
-      await send(existing, 'Runtime.evaluate', { expression: '1', returnByValue: true });
+      // 短超时（3.5s）探活：僵尸标签在这里就能被快速识别并丢弃，
+      // 而不是让后续每条业务命令都白等 25s。
+      await send(existing, 'Runtime.evaluate', { expression: '1', returnByValue: true }, 3500);
       // ⚠️ 这里**绝不能**调用 Page.bringToFront：本函数是每一次浏览器动作（click/fill/
       // eval/screenshot…）的公共入口，一旦置顶，用户刚最小化的窗口会在下一个动作被立刻
       // 弹回来，表现为「点了最小化没用、窗口又自己弹出来」。
@@ -316,10 +394,26 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
       return h === host || h.endsWith('.' + host) || host.endsWith('.' + h);
     } catch { return false; }
   };
-  const picked =
+  const picked0 =
     (remembered?.id ? candidates.find((t) => t.id === remembered.id) : undefined) ||
     (remembered?.host ? candidates.find((t) => sameHost(t.url, remembered.host!)) : undefined) ||
     (candidates.length === 1 ? candidates[0] : undefined);
+
+  // ── 僵尸标签检测（实测修复）─────────────────────────────────────────
+  // 挑中的标签可能是个"僵尸"：渲染进程已死，浏览器进程仍把它列在 /json/list 里。
+  // 直接接管 → 之后每条命令都要等到超时（25s）才失败，整批投递表现为"卡住、投出 0 个"。
+  // 这里先花最多 3.5s 探一次；是僵尸就关掉它并改走"新建标签"分支。
+  let picked = picked0;
+  if (picked) {
+    const alive = await targetRendererAlive(picked);
+    if (!alive) {
+      console.log(`[CDP] 检测到僵尸标签（渲染进程无响应），已关闭并改用新标签：${String(picked.url).slice(0, 60)}`);
+      // 只在端点下不止这一个标签时才关，避免把 Chrome 关掉
+      if (candidates.length > 1) await closeTarget(endpoint, picked.id);
+      if (lastTarget.get(platform)?.id === picked.id) lastTarget.delete(platform);
+      picked = undefined;
+    }
+  }
 
   let target: any;
   if (picked) {
@@ -343,9 +437,21 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
   // 但 `Runtime.evaluate` 命令本身无需 enable 即可执行，且不会触发该检测 ——
   // 因此所有 JS 交互（click/fill/eval/screenshot 等）照常通过 Runtime.evaluate 完成，
   // 页面保持正常渲染。Page 域用于导航与 loadEventFired 等待。
-  await send(s, 'Page.enable');
+  //
+  // ⚠️ Page.enable 为**软步骤**：它只是启用导航类事件通知，失败不影响 click/fill/eval。
+  // 早期实现让它继承 25s 超时且失败即抛 → 一个慢页面就会让整条链路失败，
+  // 并顺带把会话标记 dead（下次又要重建标签）。现在短超时 + 容忍失败。
+  await send(s, 'Page.enable', {}, 6000).catch(() => { /* 软失败：不阻断 */ });
   // 2026-09-12 反检测：新标签注入 anti-bot 脚本（Page 域，不触发 Runtime.enable 检测）
   await installStealth(s);
+  // 接管后做一次轻量存活校验：若这里就无响应，说明标签本身就是坏的，
+  // 如实报出来（而不是等到业务动作里以"超时"的形式暴露，让人误判成业务问题）。
+  const ok = await probeRendererAlive(ws, 5000);
+  if (!ok) {
+    try { ws.close(); } catch { /* ignore */ }
+    sessions.delete(platform);
+    throw new Error(`CDP 标签无响应（渲染进程未就绪）：${endpoint}。请在浏览器里手动刷新该平台页面，或关掉该标签后重试。`);
+  }
   // 新标签不再自动置顶：置顶会把用户已最小化的窗口重新弹出（同上）。
   // 需要展示给用户的场景请显式调用 'bringToFront' 动作。
   sessions.set(platform, s);
@@ -562,6 +668,79 @@ export async function execCdpAction(
         })()`;
         await send(s, 'Runtime.evaluate', { expression: expr, returnByValue: true });
         if (args.delay) await new Promise(r => setTimeout(r, args.delay));
+        return await okResult(s);
+      }
+      /** 拟人输入（技术债 D2，对标职得鸭 `typeSlowly`）。
+       *  区别：`type` 是 JS 原生 setter 一次性赋值（`event.isTrusted === false`，
+       *  且没有逐键节奏）；`typeHuman` 走 CDP Input 域派发**真实键盘事件**，
+       *  `isTrusted === true`，且每字符间有随机延迟 —— 更接近真人打字。
+       *
+       *  参数：{ selector|text, value, minDelay=60, maxDelay=180, timeout, verify=true }
+       *  安全设计：打完会**回读校验**；若受控组件没接住（值没写进去），
+       *  自动回退到 `type` 的 setter 方案，避免"打了字但没进去"的静默失败。 */
+      case 'typeHuman': {
+        if (args.value === undefined) throw new Error('typeHuman 需要 value 参数');
+        const found = await waitForElement(s, args, args.timeout || 15000).catch(() => false);
+        if (!found) return { ok: false, error: `未找到输入框：${args.selector || args.text || ''}` };
+        const text = String(args.value);
+        const minDelay = Number(args.minDelay) || 60;
+        const maxDelay = Number(args.maxDelay) || 180;
+
+        // 1) 先真实点击聚焦（触发 focus / onFocus / 弹层，很多输入框必须"点一下"才可编辑）
+        const focusExpr = `(function(){ ${FIND_EL_SRC} const el = __findEl(${JSON.stringify(args)}); if(!el) return JSON.stringify({found:false});
+          try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch(e) {}
+          const rr = el.getBoundingClientRect();
+          return JSON.stringify({ found: true, x: rr.left + rr.width / 2, y: rr.top + rr.height / 2 });
+        })()`;
+        const fr: any = await send(s, 'Runtime.evaluate', { expression: focusExpr, returnByValue: true });
+        const fv = JSON.parse(fr.result.value);
+        if (!fv.found) return { ok: false, error: `未找到输入框：${args.selector || args.text || ''}` };
+        const fx = Math.round(fv.x), fy = Math.round(fv.y);
+        await send(s, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: fx, y: fy });
+        await send(s, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: fx, y: fy, button: 'left', clickCount: 1 });
+        await send(s, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: fx, y: fy, button: 'left', clickCount: 1 });
+        await new Promise(r => setTimeout(r, 150 + Math.random() * 250));
+
+        // 2) 逐字符派发真实键盘事件（keydown 带 text → Chrome 插入字符；再 keyup）
+        for (const ch of text) {
+          if (ch === '\n') {
+            await send(s, 'Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+            await send(s, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+          } else {
+            await send(s, 'Input.dispatchKeyEvent', { type: 'keyDown', text: ch, unmodifiedText: ch, key: ch });
+            await send(s, 'Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+          }
+          await new Promise(r => setTimeout(r, minDelay + Math.random() * Math.max(0, maxDelay - minDelay)));
+        }
+        if (args.delay) await new Promise(r => setTimeout(r, args.delay));
+
+        // 3) 回读校验：受控组件没接住就回退到 setter 方案（保证不静默丢字）
+        if (args.verify !== false) {
+          const checkExpr = `(function(){ ${FIND_EL_SRC} const el = __findEl(${JSON.stringify(args)}); if(!el) return JSON.stringify({ok:false});
+            var v = (el.value !== undefined && el.value !== null) ? String(el.value) : String(el.innerText || '');
+            return JSON.stringify({ ok: v.length >= ${Math.min(text.length, 4)} });
+          })()`;
+          const cr: any = await send(s, 'Runtime.evaluate', { expression: checkExpr, returnByValue: true }).catch(() => null);
+          let ok = true;
+          try { ok = JSON.parse(cr?.result?.value || '{"ok":true}').ok; } catch { ok = true; }
+          if (!ok) {
+            const val = JSON.stringify(text);
+            const fallbackExpr = `(function(){ ${FIND_EL_SRC} const el = __findEl(${JSON.stringify(args)}); if(!el) return JSON.stringify({found:false});
+              el.focus();
+              if (el.isContentEditable) { el.textContent = ${val}; }
+              else { var proto = (el.tagName==='TEXTAREA')?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+                Object.getOwnPropertyDescriptor(proto,'value').set.call(el, ${val}); }
+              el.dispatchEvent(new Event('input',{bubbles:true}));
+              el.dispatchEvent(new Event('change',{bubbles:true}));
+              return JSON.stringify({found:true});
+            })()`;
+            await send(s, 'Runtime.evaluate', { expression: fallbackExpr, returnByValue: true });
+            const res = await okResult(s);
+            return { ...res, data: { typed: 'fallback-setter' } };
+          }
+          const res = await okResult(s);
+          return { ...res, data: { typed: 'human', chars: text.length } };
+        }
         return await okResult(s);
       }
       case 'press': {
@@ -844,6 +1023,58 @@ export async function execCdpAction(
           if (tmpTargetId) { try { await httpReq('GET', `${ep}/json/close/${tmpTargetId}`); } catch { /* 忽略 */ } }
           try { tmpWs?.close(); } catch { /* 忽略 */ }
           sessions.delete(`${platform}__pdf`);
+        }
+      }
+      /** HTML → PNG 长图（对标职得鸭「简历 HTML → 截图 → 聊天框发图」）。
+       *  与 htmlToPdf 同样是**临时标签页**，绝不占用平台主标签。
+       *  参数：{ fileUrl, outPath, width=1000, scale=2, maxHeight=16000, timeout } */
+      case 'htmlToImage': {
+        const fileUrl = String(args.fileUrl || '');
+        const outPath = String(args.outPath || '');
+        if (!fileUrl) return { ok: false, error: 'htmlToImage 需要 fileUrl' };
+        if (!outPath) return { ok: false, error: 'htmlToImage 需要 outPath' };
+        const width = Number(args.width) || 1000;
+        const scale = Number(args.scale) || 2;
+        let tmpTargetId = '';
+        let tmpWs: WebSocket | undefined;
+        try {
+          const t: any = await httpReq('PUT', `${ep}/json/new?about:blank`);
+          tmpTargetId = t?.id || '';
+          if (!t?.webSocketDebuggerUrl) return { ok: false, error: 'htmlToImage 无法新建临时标签' };
+          tmpWs = await connect(t.webSocketDebuggerUrl);
+          const ts = attachSession(tmpWs, `${platform}__img`);
+          ts.targetId = tmpTargetId;
+          await send(ts, 'Page.enable');
+          const setMetrics = (h: number) =>
+            send(ts, 'Emulation.setDeviceMetricsOverride', { width, height: h, deviceScaleFactor: scale, mobile: false });
+          await setMetrics(1200);
+          await send(ts, 'Page.navigate', { url: fileUrl });
+          await waitForLoad(ts, args.timeout || 20000);
+          // 量出真实内容高度，再按内容高度重设视口 → 得到"完整长图"而非一屏
+          const hr: any = await send(ts, 'Runtime.evaluate', {
+            expression: 'Math.max(document.body?document.body.scrollHeight:0, document.documentElement?document.documentElement.scrollHeight:0, 800)',
+            returnByValue: true,
+          }).catch(() => null);
+          const rawH = Number(hr?.result?.value) || 1200;
+          const maxH = Number(args.maxHeight) || 16000;
+          await setMetrics(Math.min(Math.max(rawH, 800), maxH));
+          await new Promise((r) => setTimeout(r, 350));
+          const r: any = await send(ts, 'Page.captureScreenshot', {
+            format: 'png',
+            captureBeyondViewport: true,
+            fromSurface: true,
+          });
+          if (!r?.data) return { ok: false, error: 'captureScreenshot 未返回数据' };
+          const buf = Buffer.from(r.data, 'base64');
+          fs.mkdirSync(path.dirname(outPath), { recursive: true });
+          fs.writeFileSync(outPath, buf);
+          return { ok: true, data: { path: outPath, bytes: buf.length, width, height: Math.min(Math.max(rawH, 800), maxH) } };
+        } catch (error: any) {
+          return { ok: false, error: `htmlToImage 失败：${error?.message || error}` };
+        } finally {
+          if (tmpTargetId) { try { await httpReq('GET', `${ep}/json/close/${tmpTargetId}`); } catch { /* 忽略 */ } }
+          try { tmpWs?.close(); } catch { /* 忽略 */ }
+          sessions.delete(`${platform}__img`);
         }
       }
       /** 读取当前 Chrome 会话可见的 Cookie（**含 httpOnly**，如 BOSS 的 `__zp_stoken__`、

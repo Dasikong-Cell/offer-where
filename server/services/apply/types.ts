@@ -9,6 +9,7 @@ export type ApplyAction = 'hello' | 'auto' | 'keyword' | 'search' | 'again' | 'l
 
 export type ApplyStatus =
   | 'applied'        // 已成功投递
+  | 'skipped'        // 被去重/决策规则主动跳过（如「该 HR 已写过求职信」「AI 判定不打招呼」）
   | 'found'          // 仅搜索收集到岗位（search 动作）
   | 'need_login'     // 未登录，需先登录
   | 'need_captcha'   // 出现滑块/图形验证码，需在打开的浏览器里人工过一下后重试
@@ -89,6 +90,16 @@ export interface ApplyInput {
   /** 真实投递开关（官网/offerbiu 通道专用）：只有显式 true 才真正提交；
    *  其余情况（含 dryRun 或 realSend 缺省）一律只做只读预览，防止批量误投 */
   realSend?: boolean;
+  /** 求职信生成模式：ai=LLM 按 JD 生成；custom=用自定义模板（支持 {职位名称} 等变量） */
+  letterMode?: 'ai' | 'custom';
+  /** 自定义模板内容（覆盖全局模板，仅 letterMode=custom 时生效） */
+  letterTemplate?: string | null;
+  /** HR 是否已回复（求职信三重去重的②号依据：已回复则不插播模板信） */
+  hrReplied?: boolean;
+  /** 投递成功后追加发送「简历聊天图」（无 HR 邮箱的岗位用来覆盖平台内聊天场景） */
+  chatResume?: boolean;
+  /** 猎聘：投递/复聊后执行的交换动作（sendResume / changePhone / changeWechat） */
+  exchangeActions?: string[];
 }
 
 export interface ApplyLog {

@@ -430,6 +430,101 @@
       <button id="btnApplyWatchStatus">刷新状态</button>
     </div>
     <div id="applyWatchStatusLine" class="sub" style="margin-top:8px"></div>
+
+    <div class="divider" style="margin:16px 0 12px;border-top:1px dashed #d8dee4"></div>
+    <h2 style="margin-top:0">⑤ 高级功能（对标职得鸭 · 全部免费本地跑）</h2>
+    <div class="sub" style="margin-bottom:10px">
+      求职信模板 · 简历版本 · 运行时间段 · 猎聘交换联系方式 · 一岗一简历（PDF/PNG 双通道）· 面试攻略。
+      全部走<b>本地 LLM</b>，没有金币、套餐、充值这类概念。
+    </div>
+
+    <div class="fields">
+      <div class="field">
+        <label>目标岗位（求职信 / 定制简历 / 面试攻略用）</label>
+        <select id="advJob"><option value="">加载中…</option></select>
+      </div>
+      <div class="field">
+        <label>简历版本</label>
+        <select id="advResumeVersion">
+          <option value="original">原始简历</option>
+          <option value="optimized">优化后的简历</option>
+          <option value="tailored">一岗一简历（按 JD 定制）</option>
+        </select>
+      </div>
+      <div class="field" style="align-self:end">
+        <button id="btnSaveResumeVersion">保存简历版本</button>
+      </div>
+    </div>
+    <div id="advResumeVersionNote" class="sub" style="margin-top:6px"></div>
+
+    <div class="divider" style="margin:12px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:6px"><b>求职信模板</b>：留空则由 AI 按 JD 生成；填了就用你的模板（<b>不消耗任何额度</b>）。</div>
+    <div class="fields">
+      <div class="field">
+        <label>模板名称</label>
+        <input type="text" id="advLetterName" placeholder="如：通用求职信模板" />
+      </div>
+    </div>
+    <textarea id="advLetterBody" rows="4" placeholder="可用变量：{职位名称} {公司名称} {工作地点} {我的姓名} {期望岗位}" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:8px;font:inherit"></textarea>
+    <div class="actions" style="margin-top:8px">
+      <button class="primary" id="btnSaveLetterTpl">保存模板</button>
+      <button id="btnClearLetterTpl">清空模板</button>
+      <button id="btnGenLetter">按当前岗位生成求职信</button>
+    </div>
+    <div id="advLetterOut" class="sub" style="margin-top:8px;white-space:pre-wrap"></div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:6px"><b>一岗一简历（双通道）</b>：有 HR 邮箱走 PDF 邮件（可解析）；没有就走聊天 PNG 图（HR 在对话里直接看到）。</div>
+    <div class="actions">
+      <button id="btnChannelDecide">判断当前岗位走哪条通道</button>
+      <button class="primary" id="btnGenResume">生成定制简历</button>
+      <button id="btnGenChatPng">生成聊天用 PNG 简历</button>
+    </div>
+    <div id="advResumeOut" class="sub" style="margin-top:8px"></div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:6px"><b>面试攻略</b>：按 JD + 你的简历生成考察重点与高概率面试题（含答题要点，不会编造简历里没有的经历）。</div>
+    <div class="actions">
+      <button class="primary" id="btnGenInterview">生成面试攻略</button>
+    </div>
+    <div id="advInterviewOut" class="sub" style="margin-top:8px;white-space:pre-wrap"></div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:6px"><b>运行时间段</b>：只在你配置的时间段内跑，到点自动停；更像真人作息，也降低风控概率。</div>
+    <div class="fields">
+      <div class="field">
+        <label>平台</label>
+        <select id="advSchedPlatform">
+          <option value="boss">BOSS 直聘</option>
+          <option value="liepin">猎聘</option>
+          <option value="job51">51job</option>
+          <option value="zhilian">智联招聘</option>
+          <option value="offerbiu">企业官网</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>时间段（逗号分隔，如 09:30-12:00,14:00-18:00）</label>
+        <input type="text" id="advSchedSlots" placeholder="留空=全天运行" />
+      </div>
+      <div class="field" style="align-self:end">
+        <label class="checkline"><input type="checkbox" id="advSchedEnabled" /> 启用</label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button class="primary" id="btnSaveSchedule">保存时间段</button>
+      <button id="btnLoadSchedule">读取当前平台配置</button>
+    </div>
+    <div id="advScheduleOut" class="sub" style="margin-top:8px"></div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:6px"><b>猎聘交换联系方式</b>：复聊后自动点「发简历 / 换手机号 / 换微信号」；对方已发起时自动点同意，索要中则不重复点。</div>
+    <div class="actions">
+      <label class="checkline"><input type="checkbox" class="advExchange" value="sendResume" /> 发简历</label>
+      <label class="checkline"><input type="checkbox" class="advExchange" value="changePhone" /> 交换手机号</label>
+      <label class="checkline"><input type="checkbox" class="advExchange" value="changeWechat" /> 交换微信号</label>
+      <button class="primary" id="btnSaveExchange">保存</button>
+    </div>
+    <div id="advExchangeOut" class="sub" style="margin-top:8px"></div>
   </div>
 </div>
 
@@ -1373,6 +1468,165 @@ setInterval(refreshAiStatus, 15000);
 
 line('控制台就绪。选择平台后点「开始投递」。', 'info');
 if (API_BASE) line('检测到本页不是从 http://127.0.0.1:4400 打开，已自动直连后端；建议以后用桌面「投递Agent」图标打开。', 'warn');
+
+// ===================== ⑤ 高级功能（对标职得鸭） =====================
+async function advApi(path, init) {
+  const r = await fetch(API_BASE + path, init);
+  const t = await r.text();
+  try { return JSON.parse(t); } catch (_) { return { ok: false, error: t.slice(0, 300) }; }
+}
+async function advPost(path, body) {
+  return advApi(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+}
+
+/** 载入「有 JD」的岗位：没有 JD 就做不了定制简历与面试攻略 */
+async function loadAdvJobs() {
+  const sel = $('#advJob');
+  try {
+    const j = await advApi('/api/jobs?status=candidate&limit=60');
+    const list = (j && (j.jobs || j)) || [];
+    const usable = list.filter(x => x && x.id && String(x.jd || '').length > 50);
+    if (!usable.length) {
+      sel.innerHTML = '<option value="">（暂无带 JD 的候选岗位）</option>';
+      return;
+    }
+    sel.innerHTML = usable.slice(0, 40).map(x =>
+      '<option value="' + esc(x.id) + '">' + esc((x.company || '?') + ' · ' + (x.position || '?')) + '</option>').join('');
+  } catch (_) {
+    sel.innerHTML = '<option value="">（岗位加载失败，后端可能离线）</option>';
+  }
+}
+function advJobId() {
+  const v = $('#advJob').value;
+  if (!v) { line('⑤ 请先在「目标岗位」下拉框选一个带 JD 的岗位', 'warn'); return null; }
+  return v;
+}
+
+// —— 简历版本 ——
+async function loadResumeVersion() {
+  try {
+    const d = await advApi('/api/resume/version');
+    $('#advResumeVersion').value = d.version || 'original';
+    $('#advResumeVersionNote').textContent = d.description || '';
+  } catch (_) { /* 静默：不影响投递 */ }
+}
+$('#btnSaveResumeVersion').onclick = async () => {
+  const v = $('#advResumeVersion').value;
+  const d = await advPost('/api/resume/version', { version: v });
+  line('⑤ 简历版本 → ' + (d.label || v), d.ok || d.version ? 'info' : 'warn');
+  $('#advResumeVersionNote').textContent = d.description || '';
+};
+
+// —— 求职信模板 ——
+async function loadLetterTpl() {
+  try {
+    const d = await advApi('/api/cover-letter/template');
+    if (d && d.template) {
+      $('#advLetterName').value = d.template.name || '';
+      $('#advLetterBody').value = d.template.content || '';
+      $('#advLetterOut').textContent = '已载入模板。可用变量：' + (d.variables || []).map(v => v.key).join(' ');
+    }
+  } catch (_) { /* 无模板则保持空 */ }
+}
+$('#btnSaveLetterTpl').onclick = async () => {
+  const name = $('#advLetterName').value.trim();
+  if (!name) { line('⑤ 请先填模板名称', 'warn'); return; }
+  const d = await advPost('/api/cover-letter/template', { name, content: $('#advLetterBody').value });
+  line(d.ok ? '⑤ 求职信模板已保存（使用模板不消耗任何额度）' : '⑤ 保存失败：' + (d.error || ''), d.ok ? 'info' : 'warn');
+};
+$('#btnClearLetterTpl').onclick = async () => {
+  await advApi('/api/cover-letter/template', { method: 'DELETE' });
+  $('#advLetterName').value = ''; $('#advLetterBody').value = '';
+  $('#advLetterOut').textContent = '已清空模板，之后由 AI 按 JD 生成。';
+};
+$('#btnGenLetter').onclick = async () => {
+  const id = advJobId(); if (!id) return;
+  $('#advLetterOut').textContent = '生成中…';
+  const d = await advPost('/api/jobs/cover-letter', { jobId: id });
+  if (d.skipped) { $('#advLetterOut').textContent = '跳过：' + (d.skipReason || '未知原因'); return; }
+  $('#advLetterOut').textContent = '【来源 ' + (d.source || '?') + '】\n' + (d.content || d.error || '（空）');
+  line('⑤ 求职信已生成（' + (d.source || '?') + '）', 'info');
+};
+
+// —— 一岗一简历（双通道）——
+$('#btnChannelDecide').onclick = async () => {
+  const d = await advPost('/api/resume/channel', { hasEmail: false, platform: 'boss' });
+  $('#advResumeOut').textContent = 'BOSS 无邮箱时 → ' + (d.channel || '?') + '：' + (d.reason || '');
+};
+$('#btnGenResume').onclick = async () => {
+  const id = advJobId(); if (!id) return;
+  $('#advResumeOut').textContent = '生成中（首次要调 LLM，约 10 秒）…';
+  const d = await advPost('/api/jobs/tailor-resume', { jobId: id });
+  if (!d.ok) { $('#advResumeOut').textContent = '生成失败：' + (d.error || '未知'); return; }
+  $('#advResumeOut').innerHTML = '匹配 ' + d.matchScore + ' 分 · 缓存=' + (d.cached ? '是' : '否') +
+    (d.url ? ' · <a href="' + esc(d.url) + '" target="_blank">打开 PDF</a>' : '');
+  line('⑤ 定制简历已生成（' + d.matchScore + ' 分）', 'info');
+};
+$('#btnGenChatPng').onclick = async () => {
+  const id = advJobId(); if (!id) return;
+  $('#advResumeOut').textContent = '生成聊天用 PNG…';
+  const d = await advPost('/api/jobs/chat-resume', { jobId: id });
+  $('#advResumeOut').textContent = d.ok
+    ? 'PNG 已生成' + (d.path ? '：' + d.path : '') + (d.sent ? ' · 已尝试发送：' + d.sent.detail : ' · 未发送（需先打开对应平台聊天页）')
+    : '失败：' + (d.error || '未知');
+};
+
+// —— 面试攻略 ——
+$('#btnGenInterview').onclick = async () => {
+  const id = advJobId(); if (!id) return;
+  $('#advInterviewOut').textContent = '生成中（约 20 秒）…';
+  const d = await advPost('/api/jobs/interview-prep', { jobId: id });
+  $('#advInterviewOut').textContent = d.content || d.error || '（空）';
+  line('⑤ 面试攻略已生成', 'info');
+};
+
+// —— 运行时间段 ——
+function parseSlots(text) {
+  return String(text || '').split(/[,，]/).map(s => s.trim()).filter(Boolean).map(seg => {
+    const m = seg.split(/[-~至]/).map(x => x.trim());
+    return (m.length === 2 && m[0] && m[1]) ? { startTime: m[0], endTime: m[1] } : null;
+  }).filter(Boolean);
+}
+$('#btnSaveSchedule').onclick = async () => {
+  const platform = $('#advSchedPlatform').value;
+  const enabled = $('#advSchedEnabled').checked;
+  const slots = parseSlots($('#advSchedSlots').value);
+  if (enabled && !slots.length) { line('⑤ 启用了时间段就必须填至少一个，或取消勾选「启用」', 'warn'); return; }
+  const d = await advPost('/api/schedule', { platform, enabled, slots, reset: !enabled });
+  const st = (d.status || {});
+  $('#advScheduleOut').textContent = (d.description || '') + ' · 当前状态：' + (st.message || st.state || '');
+  line('⑤ ' + platform + ' 时间段已保存' + (enabled ? '（' + slots.length + ' 段）' : '（全天）'), 'info');
+};
+$('#btnLoadSchedule').onclick = async () => {
+  const p = $('#advSchedPlatform').value;
+  const d = await advApi('/api/schedule');
+  const one = ((d.schedules) || []).find(s => s.platform === p);
+  if (!one) { $('#advScheduleOut').textContent = '未找到该平台配置'; return; }
+  $('#advSchedEnabled').checked = !!one.enabled;
+  $('#advSchedSlots').value = (one.slots || []).map(s => s.startTime + '-' + s.endTime).join(', ');
+  $('#advScheduleOut').textContent = (one.description || '') + ' · ' + (((one.status) || {}).message || '');
+};
+
+// —— 猎聘交换联系方式 ——
+async function loadExchange() {
+  try {
+    const d = await advApi('/api/exchange/actions');
+    const cur = (d.actions) || [];
+    document.querySelectorAll('.advExchange').forEach(el => { el.checked = cur.indexOf(el.value) >= 0; });
+    $('#advExchangeOut').textContent = cur.length ? ('当前：' + cur.map(v => (d.labels || {})[v] || v).join('、')) : '当前：不进行交换';
+  } catch (_) { /* 静默 */ }
+}
+$('#btnSaveExchange').onclick = async () => {
+  const actions = Array.from(document.querySelectorAll('.advExchange')).filter(el => el.checked).map(el => el.value);
+  await advPost('/api/exchange/actions', { actions });
+  $('#advExchangeOut').textContent = actions.length ? ('已保存：' + actions.join('、')) : '已保存：不进行交换';
+  line('⑤ 猎聘交换联系方式已保存（' + (actions.length || 0) + ' 项）', 'info');
+};
+
+loadAdvJobs();
+loadResumeVersion();
+loadLetterTpl();
+loadExchange();
 </script>
 </body>
 </html>

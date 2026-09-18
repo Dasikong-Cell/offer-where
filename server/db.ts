@@ -105,6 +105,7 @@ db.exec(`
     match_score REAL,
     match_detail TEXT,
     quarantine TEXT,
+    skip_reason TEXT,
     status TEXT NOT NULL DEFAULT 'candidate',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -112,6 +113,28 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
   CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+  -- 通用键值存储（运行时间段调度 / 求职信模板 / 简历版本 等轻量配置）
+  CREATE TABLE IF NOT EXISTS app_kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  -- 求职信台账：用于「三重去重」（该 HR 是否已写过求职信、HR 是否已回复）
+  CREATE TABLE IF NOT EXISTS cover_letters (
+    id TEXT PRIMARY KEY,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    company TEXT,
+    position TEXT,
+    job_id TEXT,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'llm',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cover_letters_platform ON cover_letters(platform);
 
   -- HR 会话跟踪（自动回复用）
   -- conv_key 用于去重：同一平台+同一 HR+同一公司视为一条会话，避免重复回复
@@ -182,6 +205,99 @@ try {
   }
 } catch (e) {
   // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 skip_reason 列（跳过原因留痕，供漏斗分析规则误杀）
+try {
+  const jc2 = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jc2.some((c) => c.name === 'skip_reason')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN skip_reason TEXT");
+    console.log("[DB] Added skip_reason column to jobs");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// ============= 通用 kv（app_kv） =============
+
+/** 读 kv；不存在返回 null。value 为字符串，结构化数据由调用方自行 JSON 解析。 */
+export function kvGet(key: string): string | null {
+  const row = db.prepare('SELECT value FROM app_kv WHERE key = ?').get(key) as { value: string } | undefined;
+  return row ? row.value : null;
+}
+
+/** 写 kv（upsert） */
+export function kvSet(key: string, value: string): void {
+  db.prepare(`INSERT INTO app_kv (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .run(key, value, new Date().toISOString());
+}
+
+/** 读 JSON kv，解析失败返回 fallback */
+export function kvGetJson<T>(key: string, fallback: T): T {
+  const raw = kvGet(key);
+  if (!raw) return fallback;
+  try { return JSON.parse(raw) as T; } catch { return fallback; }
+}
+
+/** 写 JSON kv */
+export function kvSetJson(key: string, value: unknown): void {
+  kvSet(key, JSON.stringify(value));
+}
+
+/** 删除 kv（不存在也不报错） */
+export function kvDelete(key: string): void {
+  db.prepare('DELETE FROM app_kv WHERE key = ?').run(key);
+}
+
+/** 按前缀列出 kv 键（如 'interview:'） */
+export function kvKeysByPrefix(prefix: string): string[] {
+  const rows = db.prepare('SELECT key FROM app_kv WHERE key LIKE ? ORDER BY key').all(`${prefix}%`) as Array<{ key: string }>;
+  return rows.map((r) => r.key);
+}
+
+// ============= 求职信台账（三重去重） =============
+
+export interface CoverLetterRow {
+  id: string;
+  dedupe_key: string;
+  platform: string;
+  company: string | null;
+  position: string | null;
+  job_id: string | null;
+  content: string;
+  source: string;
+  created_at: string;
+}
+
+/** 生成求职信去重键：同平台 + 同 HR/公司 + 同岗位 视为同一封信 */
+export function coverLetterKey(platform: string, company?: string | null, position?: string | null, hrKey?: string | null): string {
+  const part = (s?: string | null) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+  return hrKey ? `${platform}|hr:${part(hrKey)}` : `${platform}|${part(company)}|${part(position)}`;
+}
+
+export function getCoverLetter(dedupeKey: string): CoverLetterRow | undefined {
+  return db.prepare('SELECT * FROM cover_letters WHERE dedupe_key = ?').get(dedupeKey) as CoverLetterRow | undefined;
+}
+
+export function saveCoverLetter(row: {
+  dedupe_key: string; platform: string; company?: string | null;
+  position?: string | null; job_id?: string | null; content: string; source?: string;
+}): CoverLetterRow {
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO cover_letters (id, dedupe_key, platform, company, position, job_id, content, source, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(dedupe_key) DO UPDATE SET content = excluded.content, source = excluded.source, job_id = excluded.job_id`)
+    .run(randomUUID(), row.dedupe_key, row.platform, row.company ?? null, row.position ?? null,
+      row.job_id ?? null, row.content, row.source || 'llm', now);
+  return getCoverLetter(row.dedupe_key) as CoverLetterRow;
+}
+
+export function countCoverLetters(platform?: string): number {
+  const r = platform
+    ? db.prepare('SELECT COUNT(*) c FROM cover_letters WHERE platform = ?').get(platform) as { c: number }
+    : db.prepare('SELECT COUNT(*) c FROM cover_letters').get() as { c: number };
+  return r.c;
 }
 
 // 类型定义
@@ -483,6 +599,8 @@ export interface JobRow {
   match_detail: string | null;
   /** 跨公司串号隔离原因（非空表示默认跳过投递，需 force 放行） */
   quarantine: string | null;
+  /** 跳过投递的原因（AI/规则给出，用于漏斗分析规则误杀；非空表示此岗位被主动跳过） */
+  skip_reason: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -652,7 +770,7 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'status'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];

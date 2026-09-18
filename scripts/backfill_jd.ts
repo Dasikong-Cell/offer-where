@@ -23,6 +23,7 @@
  *   ./node/node.exe node_modules/tsx/dist/cli.mjs scripts/backfill_jd.ts --limit=100 --include-applied --interval=3000
  */
 import * as db from '../server/db.js';
+import { SERIALIZE_DOM_SRC, serializeToStructuredText } from '../server/services/domSerialize.js';
 import { ex } from './lib/browser.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -80,8 +81,25 @@ const COMPANY_SELECTORS = [
 ];
 
 const EXTRACT = (jdSels: string[]) => `(() => {
+  ${SERIALIZE_DOM_SRC}
   const clean = (t) => (t || '').replace(/[\\uE000-\\uF8FF]/g, '').replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();
-  /** 按优先级取第一个「够长」的选择器结果（避免命中侧边栏/推荐位等碎片） */
+  /**
+   * 取第一个「够长」的选择器结果，返回**结构化序列化 HTML**（保留标签与关键 class）。
+   * 为什么不直接用 innerText：innerText 会丢掉「这段是岗位职责 / 这段是任职要求」的结构，
+   * 喂给 LLM 做匹配判定时容易把「福利」当「要求」。结构化结果在 Node 侧再转成
+   * 保留段落边界、小标题带 \`##\` 前缀的纯文本（见 serializeToStructuredText）。
+   */
+  const pickHtml = (sels, min) => {
+    for (const s of sels) {
+      const e = document.querySelector(s);
+      if (!e) continue;
+      const html = __serializeClean(e, 0);
+      const txt = html.replace(/<[^>]+>/g, '').trim();
+      if (txt.length >= min) return html;
+    }
+    return '';
+  };
+  /** 公司名这类短字段仍用 innerText（不需要结构） */
   const pick = (sels, min) => {
     for (const s of sels) {
       const e = document.querySelector(s);
@@ -102,7 +120,7 @@ const EXTRACT = (jdSels: string[]) => `(() => {
     blocked: blocked || (body.length < 400 && BLOCK.test(body)),
     bodyLen: body.length,
     title: ((document.querySelector('.job-name, .name') || {}).innerText || '').trim().slice(0, 60),
-    jd: pick(${JSON.stringify(jdSels)}, 20),
+    jdHtml: pickHtml(${JSON.stringify(jdSels)}, 20),
     company: pick(${JSON.stringify(COMPANY_SELECTORS)}, 2).slice(0, 40),
   };
 })()`;
@@ -150,7 +168,9 @@ const EXTRACT = (jdSels: string[]) => `(() => {
         break;
       }
 
-      const jdText = String(d.jd || '');
+      // JD：页面返回的是**结构化序列化 HTML**，这里转成保留段落边界、
+      // 小标题带 `##` 前缀的纯文本再入库（既保留结构，又不会把标签写进库脏了展示与本地匹配）。
+      const jdText = serializeToStructuredText(String(d.jdHtml || ''));
       const patch: Record<string, any> = {};
       if (jdText.length >= 20) { patch.jd = jdText.slice(0, 4000); okJd++; }
       // 公司名为空时顺带补（测评发现大量岗位 company 为空）

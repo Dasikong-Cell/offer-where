@@ -6,11 +6,18 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { execAction } from '../browser.js';
 import { fetchLatestCode } from '../mail.js';
 import type { ApplyLog, ApplyProfile } from './types.js';
 
 export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+// 本项目 package.json 为 "type": "module"，tsx 下 __dirname 不会被注入。
+// 统一用 import.meta.url 推导模块目录（server/services/apply/ → 项目根）。
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(MODULE_DIR, '..', '..', '..');
+export const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 
 /**
  * 解析有效的简历附件路径。
@@ -20,7 +27,7 @@ export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
  */
 export function resolveResumePath(configured?: string | null): string | undefined {
   if (configured && fs.existsSync(configured)) return configured;
-  const fallback = path.resolve(__dirname, '../../../data/resume_source.pdf');
+  const fallback = path.join(DATA_DIR, 'resume_source.pdf');
   if (fs.existsSync(fallback)) return fallback;
   return undefined;
 }

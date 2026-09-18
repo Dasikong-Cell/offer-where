@@ -12,7 +12,9 @@
  */
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
 import { getPlatform, type PlatformCfg, type PlatformKey } from './platforms.js';
-import { writeLetter } from './letterWriter.js';
+import { composeCoverLetter, markLetterSent } from './coverLetter.js';
+import { runExchangeActions } from './exchangeContact.js';
+import { sendChatResume } from './chatResumeImage.js';
 import { runJob51List } from './job51.js';
 import type { ApplyInput, ApplyResult, ApplyPlatform } from './types.js';
 import * as db from '../../db.js';
@@ -510,13 +512,20 @@ async function runAgain(input: ApplyInput): Promise<ApplyResult> {
       return { platform, status: 'need_login', message: '未登录，请先登录', logs: logs.logs, screenshot: shot };
     }
 
-    const msg = await writeLetter({
+    // 复聊文案：kind='reply' → 承接聊天的单句回复（不走去重，复聊本就该可重复）
+    const composed = await composeCoverLetter({
       platform: cfg.key,
+      kind: 'reply',
+      job: { company: input.job?.company, position: input.job?.position },
       jd: input.jdText,
       chatHistory: input.chatHistory,
-      company: input.job?.company,
-      position: input.job?.position,
+      hrGroupId: input.hrGroupId,
+      profile: input.profile as unknown as Record<string, any>,
     });
+    const msg = composed.content;
+    if (!msg) {
+      return { platform, status: 'skipped', message: composed.skipReason || '复聊文案为空，已跳过', logs: logs.logs };
+    }
 
     let sent = false;
     for (const sel of cfg.hr.chatInputSel) {
@@ -570,12 +579,24 @@ async function runLetter(input: ApplyInput): Promise<ApplyResult> {
       await sleep(2500);
     }
 
-    const msg = await writeLetter({
+    // 求职信：三重去重（台账已写过 / HR已回复 / 岗位记录已标记）命中则直接跳过，
+    // 不发送、不消耗 AI 调用 —— 对应职得鸭的「否-已写过」「否-HR已回复」但**理由可读且落库**。
+    const composed = await composeCoverLetter({
       platform: cfg.key,
+      kind: 'letter',
+      mode: input.letterMode === 'custom' ? 'custom' : 'ai',
+      templateContent: input.letterTemplate || null,
+      job: { id: input.job?.id, company, position },
       jd: input.jdText,
-      company,
-      position,
+      hrGroupId: input.hrGroupId,
+      hrReplied: input.hrReplied === true,
+      profile: input.profile as unknown as Record<string, any>,
     });
+    if (composed.skipped) {
+      logs.step('求职信跳过', true, composed.skipReason);
+      return { platform, status: 'skipped', message: `已跳过：${composed.skipReason}`, logs: logs.logs, company, position };
+    }
+    const msg = composed.content;
 
     const boxSels = cfg.chatBased && cfg.hr ? cfg.hr.chatInputSel : ['.chat-input', 'textarea[placeholder*="沟通"]', 'div[contenteditable="true"]'];
     let sent = false;
@@ -596,8 +617,43 @@ async function runLetter(input: ApplyInput): Promise<ApplyResult> {
       if (r.ok) break;
     }
     await sleep(2000);
+
+    // 台账留痕（三重去重①的依据）+ 岗位行标记，避免下次对这个 HR 重复发同一封求职信
+    try {
+      markLetterSent({
+        platform: cfg.key,
+        job: { id: input.job?.id, company, position },
+        hrGroupId: input.hrGroupId,
+        content: msg,
+        source: composed.source,
+      });
+    } catch { /* 留痕失败不影响投递结论 */ }
+
+    const extras: string[] = [];
+
+    // 猎聘：复聊/求职信后主动交换联系方式（发简历 / 换手机号 / 换微信号）
+    if (platform === 'liepin' && input.exchangeActions && input.exchangeActions.length) {
+      const exResults = await runExchangeActions('liepin', input.exchangeActions as any[], logs);
+      const done = exResults.filter((r) => r.outcome === 'clicked' || r.outcome === 'agreed').map((r) => r.label);
+      const pending = exResults.filter((r) => r.outcome === 'pending').map((r) => r.label);
+      if (done.length) extras.push(`已完成交换：${done.join('/')}`);
+      if (pending.length) extras.push(`已在索要中，跳过：${pending.join('/')}`);
+    }
+
+    // 简历聊天图：无 HR 邮箱的岗位用它覆盖「平台内聊天」场景（有邮箱的走 PDF 邮件通道）
+    if (input.chatResume) {
+      const chat = await sendChatResume(
+        platform,
+        { id: input.job?.id, company, position, jd: input.jdText || undefined },
+        logs,
+        { profile: input.profile as unknown as Record<string, any> },
+      );
+      extras.push(chat.ok ? `简历聊天图已发送` : `简历聊天图未发送（${chat.detail}）`);
+    }
+
     const shot = await tryScreenshot(platform);
-    return { platform, status: 'applied', message: `已向「${company || position || '该岗位'}」发送求职信/招呼语`, logs: logs.logs, company, position, screenshot: shot };
+    const base = `已向「${company || position || '该岗位'}」发送求职信/招呼语`;
+    return { platform, status: 'applied', message: extras.length ? `${base}；${extras.join('；')}` : base, logs: logs.logs, company, position, screenshot: shot };
   } catch (e: any) {
     const shot = await tryScreenshot(platform).catch(() => undefined);
     return { platform, status: 'error', message: e?.message || String(e), logs: logs.logs, company, position, screenshot: shot };

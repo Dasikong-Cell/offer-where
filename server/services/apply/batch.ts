@@ -27,6 +27,12 @@ import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
 import type { ApplyPlatform, ApplyResult } from './types.js';
 import { tryAcquire, release } from './sessionLock.js';
+import { decideGreet } from './greetDecision.js';
+import { composeCoverLetter, markLetterSent } from './coverLetter.js';
+import { runExchangeActions, getExchangeActions, summarizeExchange } from './exchangeContact.js';
+import { ensureChatResumePng, sendChatResumeImage } from './chatResumeImage.js';
+import { checkAndAdvance } from './schedule.js';
+import { isClosingRelatedError, randomInt } from '../safeOp.js';
 
 export interface BatchCriteria {
   keywords?: string[];      // 任一命中即保留（岗位名/公司/JD）
@@ -35,6 +41,12 @@ export interface BatchCriteria {
   maxSalary?: number;       // 月薪上限（k）；岗位薪资下限高于它则排除
   minScore?: number;        // 匹配分下限（0-100）；缺失时现场计算
   excludeApplied?: boolean; // 跳过已投递岗位
+  /** 打招呼前先做决策（默认 true）。命中硬规则/AI 判否 → 跳过并写入 skip_reason */
+  greetDecision?: boolean;
+  /** 投递成功后追加发送求职信（默认 false，因为会显著变慢并可能打扰 HR） */
+  coverLetter?: boolean;
+  /** 投递成功后发送「简历聊天图」（默认 false；有 HR 邮箱的岗位本来就走了 PDF 邮件通道，无需重复） */
+  chatResume?: boolean;
 }
 
 export interface BatchInput {
@@ -48,6 +60,8 @@ export interface BatchInput {
   headless?: boolean;               // 默认非无头（便于人工过滑块）
   sinceMinutes?: number;            // 验证码邮件时间窗
   intervalMs?: number;              // 两次投递间隔（默认 20000）
+  /** 启用运行时间段限制（读取 app_kv 里该平台的 schedule 配置）；到点自动停 */
+  useSchedule?: boolean;
 }
 
 export interface BatchItemResult {
@@ -325,8 +339,63 @@ export async function runBatchApply(
       results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'skipped', message: `不支持的平台：${platform}` });
       continue;
     }
+
+    // 运行时间段闸门：到点即停（对标职得鸭 TimeManager，但**不在服务端长 sleep**）。
+    // 每处理一个岗位检查一次，用户可随时中断；cursor 已落库，下次启动继续剩余时间段。
+    if (input.useSchedule) {
+      const gate = checkAndAdvance(platform);
+      if (gate.state === 'done') {
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'skipped', message: `运行时间段已全部执行完毕：${gate.message}` });
+        break;
+      }
+      if (gate.state === 'waiting') {
+        // 不在服务端空转等待：把状态告知调用方后结束本批，等用户/定时器在时间段内重跑
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'skipped', message: `${gate.message}（本批提前结束，避免在非运行时间段内消耗风控额度）` });
+        break;
+      }
+      onEvent?.({
+        type: 'progress', index: i, total: picked.length, jobId: job.id,
+        company: job.company, position: job.position, platform,
+        message: gate.message,
+      } as any);
+    }
+
+    // 打招呼决策（对标职得鸭 checkAutoChat）：命中硬规则或 AI 判否 → 跳过并留痕 skip_reason。
+    // 这是「规则误杀可见」的数据来源：每一次不投都能回答"为什么不投"。
+    if (input.criteria?.greetDecision !== false) {
+      const decision = await decideGreet({
+        platform,
+        jobId: job.id,
+        company: job.company,
+        position: job.position,
+        city: job.city,
+        salary: job.salary,
+        jd: job.jd,
+        requirements: job.requirements,
+        quarantine: job.quarantine,
+        status: job.status,
+        profile,
+        minScore: input.criteria?.minScore,
+      });
+      if (!decision.greet) {
+        skipped++;
+        try { db.updateJob(job.id, { skip_reason: decision.reason }); } catch { /* 留痕失败不阻断 */ }
+        results.push({
+          jobId: job.id, company: job.company, position: job.position, platform,
+          status: 'skipped', message: `跳过：${decision.reason}`,
+        });
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'skipped', message: `跳过：${decision.reason}` });
+        continue;
+      }
+      // 通过则清掉上一次的跳过原因，避免旧标记残留造成"看起来一直被跳过"
+      try { db.updateJob(job.id, { skip_reason: null }); } catch { /* 忽略 */ }
+    }
+
     if (i > 0 && intervalMs > 0) {
-      await new Promise<void>(r => setTimeout(r, intervalMs));
+      // 拟人节流：固定间隔本身就是一个机器特征（等间距请求）。
+      // 这里在 ±25% 区间内随机抖动，让节奏更像人（对标职得鸭的随机目标量 + 随机等待）。
+      const jittered = Math.max(0, Math.round(intervalMs * (0.75 + randomInt(0, 50) / 100)));
+      await new Promise<void>(r => setTimeout(r, jittered));
     }
     onEvent?.({
       type: 'progress', index: i, total: picked.length, jobId: job.id,
@@ -348,6 +417,17 @@ export async function runBatchApply(
         sinceMinutes: input.sinceMinutes ? Number(input.sinceMinutes) : 10,
       });
     } catch (e: any) {
+      // 标签/会话被关闭属于「正常收尾噪声」（对标职得鸭 isClosingRelatedError）：
+      // 用户手关窗口、超时回收、页面 detach 都会抛 Target closed / detached Frame。
+      // 这类不算投递失败，计入 skipped 并写明原因，否则会污染失败率、把排查带偏到「平台风控」。
+      if (isClosingRelatedError(e)) {
+        skipped++;
+        const closingMsg = `浏览器会话已关闭（${e?.message || String(e)}）`;
+        results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'skipped', message: closingMsg });
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'skipped', message: closingMsg });
+        await reclaimTabs(platform, i, picked.length, job.id, onEvent);
+        continue;
+      }
       error++;
       results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'error', message: e?.message || String(e) });
       onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'error', message: e?.message || String(e) });
@@ -377,6 +457,74 @@ export async function runBatchApply(
         });
         db.updateJob(job.id, { status: 'applied' });
       } catch { /* 记录失败不阻断主流程 */ }
+
+      // ── 投递成功后的「追加动作」（对标职得鸭 AI写求职信 / 交换联系方式 / 发简历图）
+      // 全部为可选，且**任何一步失败都不影响"已投递"这个既成事实**，只记日志。
+      const extras: string[] = [];
+      try {
+        if (input.criteria?.coverLetter) {
+          const letter = await composeCoverLetter({
+            platform, kind: 'letter', mode: 'ai',
+            job: { id: job.id, company: job.company, position: job.position, city: job.city },
+            jd: job.jd, profile,
+          });
+          if (letter.skipped) {
+            extras.push(`求职信跳过（${letter.skipReason}）`);
+          } else {
+            const boxSels = ['.chat-input', 'textarea[placeholder*="沟通"]', 'div[contenteditable="true"]'];
+            let sent = false;
+            for (const sel of boxSels) {
+              const r = await execAction(platform, 'fill', { selector: sel, value: letter.content, timeout: 5000 });
+              if (r.ok) { sent = true; break; }
+            }
+            if (sent) {
+              for (const t of ['发送', 'Send']) {
+                if ((await execAction(platform, 'click', { text: t, timeout: 4000 })).ok) break;
+              }
+              markLetterSent({ platform, job: { id: job.id, company: job.company, position: job.position }, content: letter.content, source: letter.source });
+              extras.push(`求职信已发送（${letter.source}，${letter.content.length} 字）`);
+            } else {
+              extras.push('求职信已生成但未找到聊天输入框');
+            }
+          }
+        }
+
+        if (platform === 'liepin') {
+          const exActions = getExchangeActions();
+          if (exActions.length) {
+            const exResults = await runExchangeActions('liepin', exActions);
+            extras.push(`交换联系方式：${summarizeExchange(exResults)}`);
+          }
+        }
+
+        // 简历聊天图：只在该岗位**没有 HR 邮箱**时才补（有邮箱的已走 PDF 邮件通道，不必重复发图）
+        if (input.criteria?.chatResume) {
+          const hasEmail = !!(job as any).hr_email;
+          const channel = hasEmail ? 'email' : 'chat';
+          if (channel === 'chat') {
+            const png = await ensureChatResumePng(
+              { id: job.id, company: job.company, position: job.position, jd: job.jd, requirements: job.requirements },
+              { profile: profile as Record<string, any> },
+            );
+            if (png.ok && png.pngPath) {
+              const sent = await sendChatResumeImage(platform, png.pngPath);
+              extras.push(sent.ok ? `简历聊天图已发送（${png.cached ? '缓存' : '新生成'}）` : `简历聊天图未发送：${sent.detail}`);
+            } else {
+              extras.push(`简历聊天图生成失败：${png.error}`);
+            }
+          } else {
+            extras.push('该岗位有 HR 邮箱，简历图通道跳过（已由 PDF 邮件通道覆盖）');
+          }
+        }
+      } catch (e: any) {
+        extras.push(`追加动作异常：${e?.message || e}`);
+      }
+
+      if (extras.length) {
+        const last = results[results.length - 1];
+        if (last && last.jobId === job.id) last.message = `${last.message}；${extras.join('；')}`;
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'applied', message: extras.join('；') });
+      }
     } else if (res.status === 'need_captcha') {
       needCaptcha++;
       onEvent?.({
