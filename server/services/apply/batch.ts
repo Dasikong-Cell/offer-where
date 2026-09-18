@@ -22,6 +22,7 @@ import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
 import { collectBossToDb } from './engine.js';
 import { toApplyProfile } from './common.js';
+import { execAction } from '../browser.js';
 import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
 import type { ApplyPlatform, ApplyResult } from './types.js';
@@ -141,6 +142,29 @@ function kwTokens(k: string): string[] {
     if (!changed) break;
   }
   return [...out].filter(t => t.length >= 2 && !KW_GENERIC.has(t));
+}
+
+/**
+ * 回收某平台的多余标签页（**同域只留一个**）。
+ *
+ * 用户反馈「投递时一个点击事件占一个窗口」的兜底清扫：
+ * 根因是会话失效后旧实现会新建标签，而 `closeTab` 又是空壳（从不回收）。
+ * 主修复在 `cdpDriver.ensureSession`（优先接管已有标签），这里每完成一个岗位再扫一次。
+ *
+ * ⚠️ 必须带 `sameHostOnly`：一个 CDP 端点会承载多个平台（official/offerbiu 共用 9227），
+ * 不加限制会把**别的平台**的标签一起关掉。
+ */
+async function reclaimTabs(
+  platform: string, index: number, total: number, jobId: string,
+  onEvent?: (ev: any) => void,
+): Promise<void> {
+  try {
+    const r: any = await execAction(platform, 'closeExtraTabs', { sameHostOnly: true });
+    const closed = Number(r?.data?.closed || 0);
+    if (closed > 0) {
+      onEvent?.({ type: 'progress', index, total, jobId, message: `已回收 ${closed} 个多余标签页（同域只留 1 个）` });
+    }
+  } catch { /* 回收失败不影响投递结果 */ }
 }
 
 export async function runBatchApply(
@@ -327,8 +351,14 @@ export async function runBatchApply(
       error++;
       results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'error', message: e?.message || String(e) });
       onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'error', message: e?.message || String(e) });
+      await reclaimTabs(platform, i, picked.length, job.id, onEvent);
       continue;
     }
+
+    // 完成一个岗位后收拾标签页：同域只留一个，避免「一个点击事件占一个窗口」越堆越多。
+    // 主修复在 cdpDriver.ensureSession 的「优先接管已有标签」（会话失效不再新建）；
+    // 这里是兜底清扫，顺带把历史泄漏的标签收敛掉。
+    await reclaimTabs(platform, i, picked.length, job.id, onEvent);
 
     if (res.status === 'applied') {
       applied++;

@@ -296,18 +296,47 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
     catch { sessions.delete(platform); }
   }
   if (existing && existing.dead) { try { existing.ws.close(); } catch { /* ignore */ } sessions.delete(platform); }
-  // 在真实 Chrome 中新建一个标签页（默认 profile），连接其调试 ws
-  // 每个平台拿到自己独立的标签，互不共用，避免「拥挤在一个页面上」
-  // 注意：绝不使用 Playwright connectOverCDP（会开启 Debugger 域触发反爬）
+
+  // ── 优先「接管已有标签」，而不是无脑新建 ─────────────────────────────
+  // 旧实现在会话失效时无条件 `PUT /json/new`，而会话**经常**失效
+  // （任何 CDP 命令超时都会把 s.dead 置真，见 send 的超时分支），
+  // 于是每投一个岗位就泄漏一个停在 job_detail 的标签 —— 实测 9223 堆到 16 个。
+  // 现在按优先级复用：
+  //   ① 上次该平台用过的那个 targetId 还在 → 直接接管（页面状态都还在，最理想）
+  //   ② 有「同主机名」的真实页面 → 接管
+  //   ③ 该端点下只有一个真实页面 → 接管
+  //   ④ 都没有 → 才新建
+  // ⚠️ 不直接用「任意第一个页面」：一个端点会承载多个平台（boss/bosschat 共用 9223，
+  //    official/offerbiu 共用 9227），随便接管会把别人的标签抢走、两个平台互相踩。
+  const remembered = lastTarget.get(platform);
+  const candidates = await listPageTargets(endpoint);
+  const sameHost = (url: string, host: string): boolean => {
+    try {
+      const h = new URL(url).hostname;
+      return h === host || h.endsWith('.' + host) || host.endsWith('.' + h);
+    } catch { return false; }
+  };
+  const picked =
+    (remembered?.id ? candidates.find((t) => t.id === remembered.id) : undefined) ||
+    (remembered?.host ? candidates.find((t) => sameHost(t.url, remembered.host!)) : undefined) ||
+    (candidates.length === 1 ? candidates[0] : undefined);
+
   let target: any;
-  try {
-    target = await httpReq('PUT', `${endpoint}/json/new?about:blank`);
-  } catch (e: any) {
-    throw new Error(`CDP 新建标签页失败（${endpoint}）：${e?.message || e}。请确认真实 Chrome 以 --remote-debugging-port=9222 启动。`);
+  if (picked) {
+    target = picked;
+  } else {
+    // 都没有才在真实 Chrome 中新建标签（绝不使用 Playwright connectOverCDP：会开启 Debugger 域触发反爬）
+    try {
+      target = await httpReq('PUT', `${endpoint}/json/new?about:blank`);
+    } catch (e: any) {
+      throw new Error(`CDP 新建标签页失败（${endpoint}）：${e?.message || e}。请确认真实 Chrome 以 --remote-debugging-port=9222 启动。`);
+    }
   }
   const ws = await connect(target.webSocketDebuggerUrl);
   const s = attachSession(ws, platform);
   s.targetId = target.id;
+  // 记住「本次接管/新建的是哪个标签」，供下次会话失效时复用
+  lastTarget.set(platform, { id: target.id, host: remembered?.host });
   // 关键：只开 Page 域，绝不开 Runtime.enable。
   // 实测证据：BOSS直聘/猎聘 会检测 `Runtime.enable`（启用 Runtime 事件通知），
   // 命中后数秒内把页面 navigate 回 about:blank（表现为空白页）。
@@ -330,9 +359,65 @@ async function okResult(s: PageSession): Promise<BrowserActionResult> {
       returnByValue: true,
     });
     const v = JSON.parse(r.result.value);
+    // 记录该平台会话最后停留的「主机名」，供会话失效后复用同域标签（见 ensureSession）
+    if (v?.url) rememberHost(s.platform, v.url);
     return { ok: true, url: v.url, title: v.title };
   } catch {
     return { ok: true };
+  }
+}
+
+/**
+ * 「上一次用过的标签」记忆（**跨会话失效保留**）。
+ *
+ * 为什么需要：`sessions` 会因 CDP 命令超时被标记 dead（见 send 的超时分支），
+ * 而旧实现里 dead 之后 `ensureSession` 会**无条件新建标签** ——
+ * 于是每投一个岗位就泄漏一个停在 job_detail 的标签（实测 9223 堆了 16 个）。
+ * 把「上次的 targetId + 主机名」单独记在这里，会话失效后就能**重新接管原标签**而不是再开一个。
+ */
+const lastTarget = new Map<string, { id?: string; host?: string }>();
+
+function rememberHost(platform: string, url: string): void {
+  try {
+    const host = new URL(url).hostname;
+    const prev = lastTarget.get(platform) || {};
+    lastTarget.set(platform, { id: prev.id, host });
+  } catch { /* 非 http(s) URL 忽略 */ }
+}
+
+/**
+ * 列出端点下所有「真实页面」标签（排除空白页）。
+ * ⚠️ 必须重试：`/json/list` 偶发失败时会返回空数组，而空数组会让调用方
+ * 「以为没有可复用的标签」→ 又去新建一个，重新走上泄漏老路（实测踩到：
+ * 清理后 9227 只剩 1 个标签，一次失败后就变成了 2 个）。
+ */
+async function listPageTargets(endpoint: string): Promise<Array<{ id: string; url: string; title?: string; webSocketDebuggerUrl: string }>> {
+  const pick = (list: any) => {
+    const arr: any[] = Array.isArray(list) ? list : [];
+    return arr.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl && t.id && t.url && t.url !== 'about:blank' && !/^chrome/i.test(t.url));
+  };
+  for (let i = 0; i < 2; i++) {
+    const list: any = await httpReq('GET', `${endpoint}/json/list`).catch(() => null);
+    if (Array.isArray(list)) return pick(list);
+    if (i === 0) await new Promise((r) => setTimeout(r, 300));
+  }
+  return [];
+}
+
+/** 把某平台的会话重新绑定到一个**已存在**的标签上（不新建标签） */
+async function rebindTo(endpoint: string, platform: string, target: any): Promise<BrowserActionResult> {
+  try {
+    const ws = await connect(target.webSocketDebuggerUrl);
+    const s = attachSession(ws, platform);
+    s.targetId = target.id;
+    await send(s, 'Page.enable');
+    await installStealth(s);
+    sessions.set(platform, s);
+    rememberHost(platform, target.url || '');
+    lastTarget.set(platform, { id: target.id, host: lastTarget.get(platform)?.host });
+    return await okResult(s);
+  } catch (error: any) {
+    return { ok: false, error: `重新绑定标签失败：${error?.message || error}` };
   }
 }
 
@@ -658,8 +743,55 @@ export async function execCdpAction(
         sessions.set(platform, ns);
         return await okResult(ns);
       }
+      /** 关闭「当前会话所在的标签页」并切回另一个标签。
+       *  旧实现是**空壳**（直接 return okResult，什么都没关），所以标签从来没有被回收过 ——
+       *  配合「会话失效就新建标签」，最终表现为「每投一个岗位多留一个窗口」。
+       *  安全约束：只剩一个标签时拒绝关闭（关掉最后一个会让整个 Chrome 进程退出）。 */
       case 'closeTab': {
-        return await okResult(s);
+        const all: any[] = await httpReq('GET', `${ep}/json/list`).catch(() => []);
+        const pages = (Array.isArray(all) ? all : []).filter((t: any) => t.type === 'page' && t.id);
+        if (pages.length <= 1) {
+          return { ok: false, error: '只剩一个标签页，关闭会导致 Chrome 退出，已跳过' };
+        }
+        const cur = s.targetId;
+        const next = pages.find((t: any) => t.id !== cur) || pages[0];
+        try { s.ws.close(); } catch { /* ignore */ }
+        sessions.delete(platform);
+        if (cur) await httpReq('GET', `${ep}/json/close/${cur}`).catch(() => undefined);
+        return await rebindTo(ep, platform, next);
+      }
+      /** 收拾「多余标签页」：只保留一个（默认当前平台所在的那个，或按 URL 关键字挑），其余全关。
+       *  用途：批量投递每完成一个岗位后调用一次，把历史泄漏的标签收敛掉，
+       *  避免「一个点击事件占一个窗口」越滚越多。
+       *  参数：
+       *    urlContains?: string  优先保留 URL 含该串的标签
+       *    sameHostOnly?: boolean 只关「与保留标签同主机名」的标签
+       *      ⚠️ 强烈建议开启：一个端点会承载多个平台（official/offerbiu 共用 9227），
+       *         不加这个限制会把**别的平台**的标签一起关掉
+       *    dryRun?: boolean */
+      case 'closeExtraTabs': {
+        const all: any[] = await httpReq('GET', `${ep}/json/list`).catch(() => []);
+        const pages = (Array.isArray(all) ? all : []).filter((t: any) => t.type === 'page' && t.id);
+        const sub = String(args.urlContains || '');
+        let keeper = pages.find((t: any) => t.id === s.targetId);
+        if (sub) keeper = pages.find((t: any) => String(t.url || '').includes(sub)) || keeper;
+        if (!keeper) keeper = pages[0];
+        let victims = pages.filter((t: any) => t.id !== keeper?.id);
+        if (args.sameHostOnly && keeper) {
+          const hostOf = (u: string) => { try { return new URL(u).hostname; } catch { return ''; } };
+          const kh = hostOf(String(keeper.url || ''));
+          if (kh) victims = victims.filter((t: any) => hostOf(String(t.url || '')) === kh);
+        }
+        if (args.dryRun) {
+          return { ...(await okResult(s)), data: { total: pages.length, kept: keeper?.url, wouldClose: victims.map((t: any) => t.url) } };
+        }
+        let closed = 0;
+        for (const v of victims) {
+          await httpReq('GET', `${ep}/json/close/${v.id}`).catch(() => undefined);
+          closed++;
+        }
+        // 若被关掉的正好包含当前会话标签（理论上不会，keeper 优先取会话），重新绑定一次更稳
+        return { ...(await okResult(s)), data: { total: pages.length, closed, kept: keeper?.url } };
       }
       /** 把本地 HTML 文件渲染成 PDF（用 Chrome 自己的排版引擎，Pages.printToPDF）。
        *

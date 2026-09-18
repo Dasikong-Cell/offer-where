@@ -446,7 +446,7 @@ export async function execAction(
         return {
           ok: false,
           error: `不支持的动作：${action}`,
-          hint: '支持：navigate / click / fill / type / press / select / check / upload / wait / text / html / screenshot / eval / newTab / closeTab / reload / close',
+          hint: '支持：navigate / click / fill / type / press / select / check / upload / wait / text / html / screenshot / eval / cookies / htmlToPdf / newTab / adoptPopup / closeTab / closeExtraTabs / reload / bringToFront / close',
         };
     }
   } catch (error: any) {

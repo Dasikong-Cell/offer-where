@@ -351,6 +351,14 @@ async function batchApply(input: ApplyInput, keyword: string, logs: ApplyLogger)
           if (oc.applied) applied++;
           else if (oc.needResume) { skipped++; needResume = true; } // 单个岗位缺简历不中断整批，继续下一个
           else skipped++;
+          // 每完成一个岗位回收多余标签页（同域只留一个）：
+          // 避免用户反馈的「一个点击事件占一个窗口」——会话失效时旧实现会新建标签且从不回收。
+          // 用 sameHostOnly 限定同域，防止误关同一端点上其它平台的标签。
+          try {
+            const rec: any = await bexec(platform, 'closeExtraTabs', { sameHostOnly: true }, logs, '回收多余标签页');
+            const closed = Number(rec?.data?.closed || 0);
+            if (closed > 0) logs.step('标签回收', true, `已关闭 ${closed} 个多余标签页（同域只保留 1 个）`);
+          } catch { /* 回收失败不影响投递 */ }
           // 岗位间留白，降低触发 51job 风控滑块的频率
           await sleep(3000);
         }
