@@ -17,6 +17,9 @@
 | 💬 **跟进（HR复聊）** | `autoReply.ts` / `bossChat.ts` | BOSS 自动读取会话、按意图生成回复、自动发送；识别拒聊/已读不回等状态 |
 | 🖥️ **全程 AI 托管** | `public/console.html` 单一控制台 | 多选平台 + 数量/间隔 + SSE 实时进度 + 一键启动，浏览器里完成全套操作 |
 | 📄 **简历解析** | `/api/resume/parse` | 解析 PDF/Word 简历为结构化文本与技能列表，供匹配与投递复用 |
+| 📄 **一岗一简历** | `/api/jobs/tailor` + `resumeTailor.ts` | 按目标岗位 JD 定制简历片段：技能按岗位相关度重排 + 定制「核心优势」+ 命中/待补分析；LLM 优先、本地规则兜底，**严禁编造**不存在的事实 |
+| 📊 **投递漏斗 + 匹配度看板** | `/api/stats/funnel` | 全池按状态/来源聚合（候选/已投/不可用/已隔离），匹配分覆盖度与高/中/低分布，控制台实时展示 |
+| 🔐 **平台 API 通道** | `platformApi/bossOpenApi.ts` | CDP 读取已登录会话 Cookie（含 httpOnly）做**登录态巡检**；逆向 JSON 只读检索提速。**结论：官方开放平台是 B 端，求职者侧无法用它投递**（详见 `BOSS_OPENAPI_PLAN.md`） |
 
 > 说明：**模拟面试 / 笔试题库 / 简历润色** 属于世纪云端另一产品「职达鸭」范畴，不在本仓库（job-apply-agent）范围内。
 
@@ -169,6 +172,11 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 | `healthcheck.ts` | 一键体检：后端可达性 / 各平台连接 / 岗位池数量 / 邮箱配置是否就绪 |
 | `check_logins.ts` | 并行检查各平台登录态（各平台独立 tab，互不干扰） |
 | `focus_login.ts <platform> [url]` | 把指定平台调试窗口导航到登录页并置顶，引导用户登录/收验证码 |
+| `probe_platform_api.ts` | 平台 API 通道自检：CDP 端点 + 登录态（关键鉴权 Cookie）+ 两条通道开关 |
+| `check_console_syntax.ts` | 校验 `public/console.html` 内联脚本语法（提交前拦下模板字面量笔误） |
+| `backfill_match.ts` | 回填岗位匹配分（本地规则，零 LLM 成本），让漏斗看板「匹配度」覆盖全池 |
+| `tailor_preview.ts <jobId>` \| `--source X --limit N` \| `--jd "..."` | 一岗一简历命令行预览（按 JD 定制简历片段） |
+| `test_quarantine.ts` | 自检 offerbiu 邮箱直投的「跨公司串号隔离」闸门（合成岗位，跑完自动清理） |
 
 ### 岗位采集
 
@@ -238,6 +246,38 @@ curl -s -X POST http://127.0.0.1:4400/api/browser/exec -H 'Content-Type: applica
 - 滑块验证码（如 51job 滑块风控）是**轨迹行为分析**，无法可靠自动绕过；本项目保持「人工介入」兜底，
   不实现会显著提高封号风险的轨迹伪造。反检测只降低「环境指纹」层面的误判，不解决人为滑块。
 - 会话 token 仍有服务端 TTL，长时间挂机后偶发需重新登录属正常，非缺陷。
+
+---
+
+## 一岗一简历（按 JD 定制）
+
+对标职得鸭核心卖点。`server/services/apply/resumeTailor.ts` → `tailorResume(profile, job)`：
+
+- **输出**：技能按岗位相关度重排（JD 命中项前置）+ 定制「核心优势/亮点」+ 命中/待补（gap）分析 + 匹配分 + 可直接渲染的 Markdown。
+- **策略**：LLM 优先（`chatJSON`），未配置或失败**自动回退本地规则** —— 与 `matchAi` 同款降级，离线可跑、绝不影响投递链路。
+- **防幻觉三条硬规则**：① 严禁编造简历中不存在的经历/数字/公司/证书；② LLM 只能改写与重排既有事实；③ LLM 返回的技能会与「档案真实技能」求交集，凭空新增一律丢弃。
+
+```bash
+# 命令行预览（无需起服务）
+./node/node.exe node_modules/tsx/dist/cli.mjs scripts/tailor_preview.ts --source boss --limit 3
+./node/node.exe node_modules/tsx/dist/cli.mjs scripts/tailor_preview.ts --position "Java开发工程师" --jd "要求 Spring Boot / MySQL / Redis"
+# HTTP：POST /api/jobs/tailor  { "jobId": "..." }  或 { "job": { "position","company","jd" } }
+```
+
+---
+
+## 平台 API 通道与「消验证码」路线
+
+```bash
+# 登录态巡检：打印 BOSS/猎聘 的 CDP 端点与关键鉴权 Cookie（含 httpOnly）
+./node/node.exe node_modules/tsx/dist/cli.mjs scripts/probe_platform_api.ts
+# HTTP：GET /api/platform-api/probe
+```
+
+实测（2026-09-18）：BOSS `wt2 / __zp_stoken__ / bst`、猎聘 `__gc_id / XSRF-TOKEN` 均读取成功 —— 此前只能靠截图肉眼判断登录态。
+
+**核心结论**（详见 [`BOSS_OPENAPI_PLAN.md`](./BOSS_OPENAPI_PLAN.md)）：BOSS/猎聘的「开放平台」**都是 B 端（招聘方/服务商）能力**（企业 IM、简历库、薪资元数据），需企业实名 + IP 白名单，**求职者个人无法用它投递简历**。因此「彻底消验证码」的正解不是找官方 API，而是**把平台登录会话搬出用户本机（云端执行）**——这正是职得鸭验证码无感的真正原因。
+本仓库当前策略：**CDP 整页链路负责投递**（签名由页面自算，最稳），**JSON 通道只负责检索提速与登录态诊断**，不做签名对抗军备竞赛。
 
 ---
 

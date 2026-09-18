@@ -86,6 +86,8 @@
   .badge { display: inline-block; font-size: 12px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); }
   .badge.ok { background: #ecfdf5; color: var(--ok); border-color: #a7f3d0; }
   .badge.warn { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+  .badge-quar { display: inline-block; margin-top: 4px; font-size: 12px; padding: 3px 8px; border-radius: 8px; background: #fef2f2; color: var(--err); border: 1px solid #fecaca; }
+  #forceWrap { color: var(--warn); font-size: 13px; }
   .checkline input { width: 16px; height: 16px; }
 
   .actions { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
@@ -114,6 +116,24 @@
 
   /* 我的档案：分组 + 用途条 + 强调边框 */
   .card.accent { border-left: 4px solid var(--brand); }
+
+  /* 投递漏斗 & 匹配度看板 */
+  .funnel { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .funnel-row { display: flex; align-items: center; gap: 10px; }
+  .flab { width: 56px; font-size: 12px; color: var(--muted); flex: none; }
+  .fbar { flex: 1; height: 18px; background: var(--bg-soft); border-radius: 6px; overflow: hidden; }
+  .fbar i { display: block; height: 100%; background: #93c5fd; transition: width .4s ease; }
+  .fbar.ok i { background: #34d399; }
+  .fbar.warn i { background: #fbbf24; }
+  .funnel-row b { width: 48px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .kpis { display: flex; gap: 10px; margin: 4px 0 2px; }
+  .kpi { flex: 1; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 10px; text-align: center; }
+  .kpi span { display: block; font-size: 20px; font-weight: 600; color: var(--brand); }
+  .kpi label { font-size: 11px; color: var(--muted); }
+  .funnel-src { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+  .src-tile { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: 12px; }
+  .src-tile .st { display: flex; justify-content: space-between; color: var(--muted); margin-top: 4px; }
+  .src-tile .st b { color: var(--text); font-weight: 600; }
   .usage {
     font-size: 12px; line-height: 1.6; background: var(--brand-soft); color: var(--brand);
     border: 1px solid #bfdbfe; border-radius: 9px; padding: 9px 12px; margin-bottom: 16px;
@@ -140,6 +160,24 @@
       <span class="pill" id="pillAi">AI 检测中</span>
     </div>
   </header>
+
+  <div class="card accent">
+    <h2>📊 投递漏斗 &amp; 匹配度（数据洞察）</h2>
+    <div class="funnel" id="funnelOverall">
+      <div class="funnel-row"><span class="flab">候选</span><div class="fbar"><i id="fCandidate" style="width:0%"></i></div><b id="nCandidate">0</b></div>
+      <div class="funnel-row"><span class="flab">已投</span><div class="fbar ok"><i id="fApplied" style="width:0%"></i></div><b id="nApplied">0</b></div>
+      <div class="funnel-row"><span class="flab">不可用</span><div class="fbar warn"><i id="fUnavailable" style="width:0%"></i></div><b id="nUnavailable">0</b></div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><span id="kAppliedRate">0%</span><label>投递率</label></div>
+      <div class="kpi"><span id="kMatchAvg">0</span><label>匹配分均值</label></div>
+      <div class="kpi"><span id="kMatchCov">0%</span><label>匹配分覆盖</label></div>
+      <div class="kpi"><span id="kQuar">0</span><label>跨公司隔离</label></div>
+    </div>
+    <div class="sub" style="margin:10px 0 6px">各平台漏斗</div>
+    <div id="funnelBySource" class="funnel-src"></div>
+    <div class="sub" style="margin-top:8px;color:var(--muted)">匹配分：高≥70 / 中40-69 / 低&lt;40（高 <b id="kHigh">0</b> · 中 <b id="kMid">0</b> · 低 <b id="kLow">0</b>）。未覆盖岗位可点「② 投递设置」后用 <code>/api/jobs/match</code> 精准打分。</div>
+  </div>
 
   <div class="card">
     <h2>① 选择投递平台（可多选）</h2>
@@ -242,6 +280,10 @@
     <div class="actions" style="margin-top:10px">
       <button id="btnScanEmails">扫描招聘邮箱</button>
       <button class="primary" id="btnEmailApply" disabled>批量邮箱直投（选中 0 个）</button>
+      <label class="checkline" id="forceWrap" style="display:none;gap:6px;align-items:center">
+        <input type="checkbox" id="chkForceApply" />
+        <span>强制投递（忽略跨公司隔离标记）</span>
+      </label>
       <span class="sub" id="scanTip" style="margin-left:8px"></span>
     </div>
     <div id="emailResults" style="margin-top:12px"><div class="sub">尚未扫描。点「扫描招聘邮箱」开始。</div></div>
@@ -771,6 +813,34 @@ $('#btnReplyStop').onclick = () => {
 };
 
 // ===== 自动回复常驻监视器 =====
+// 投递漏斗 & 匹配度看板
+async function renderFunnel() {
+  try {
+    const d = await (await fetch(API_BASE + '/api/stats/funnel')).json();
+    const t = d.total || 1;
+    const setW = (id, n) => { const el = document.getElementById(id); if (el) el.style.width = Math.max(2, Math.round((n / t) * 100)) + '%'; };
+    setW('fCandidate', d.byStatus.candidate); setW('fApplied', d.byStatus.applied); setW('fUnavailable', d.byStatus.unavailable);
+    document.getElementById('nCandidate').textContent = d.byStatus.candidate;
+    document.getElementById('nApplied').textContent = d.byStatus.applied;
+    document.getElementById('nUnavailable').textContent = d.byStatus.unavailable;
+    document.getElementById('kAppliedRate').textContent = (d.appliedRate || 0) + '%';
+    document.getElementById('kMatchAvg').textContent = d.matchScore.avg;
+    document.getElementById('kMatchCov').textContent = (d.matchScore.coverage || 0) + '%';
+    document.getElementById('kQuar').textContent = d.quarantined || 0;
+    document.getElementById('kHigh').textContent = d.matchScore.high;
+    document.getElementById('kMid').textContent = d.matchScore.mid;
+    document.getElementById('kLow').textContent = d.matchScore.low;
+    const box = document.getElementById('funnelBySource');
+    box.innerHTML = (d.bySource || []).map(s => `
+      <div class="src-tile">
+        <div><b>${s.source}</b> · 共 ${s.total}</div>
+        <div class="st"><span>候选</span><b>${s.candidate}</b></div>
+        <div class="st"><span>已投</span><b>${s.applied}</b></div>
+        <div class="st"><span>不可用</span><b>${s.unavailable}</b></div>
+      </div>`).join('');
+  } catch (_) { /* ignore */ }
+}
+
 function renderWatchStatus(s) {
   const badge = $('#watchBadge');
   if (!s) { badge.textContent = '监视器：未知'; badge.className = 'badge'; return; }
@@ -930,6 +1000,8 @@ refreshWatchStatus();
 
 pollStatus();
 setInterval(pollStatus, 5000);
+renderFunnel();
+setInterval(renderFunnel, 15000);
 
 // AI 回复来源标记（如「[AI·懒懒]」），用于日志直观区分 AI / 规则回复与署名身份
 function aiTag(ev) {
@@ -1073,18 +1145,22 @@ function updateEmailApplyBtn() {
 }
 function renderEmailHits() {
   const box = $('#emailResults');
+  const anyQuar = emailHits.some(h => h.quarantine);
+  $('#forceWrap').style.display = anyQuar ? 'inline-flex' : 'none';
   if (!emailHits.length) {
     box.innerHTML = '<div class="sub">未发现带招聘邮箱的岗位。可加大扫描数量或换起始偏移再试。</div>';
     updateEmailApplyBtn();
     return;
   }
-  box.innerHTML = `<div class="sub" style="margin-bottom:6px">发现 ${emailHits.length} 个可邮箱直投的岗位（默认全选）：</div>`
+  const qn = emailHits.filter(h => h.quarantine).length;
+  box.innerHTML = `<div class="sub" style="margin-bottom:6px">发现 ${emailHits.length} 个可邮箱直投的岗位（默认全选；其中 <b style="color:var(--warn)">${qn}</b> 个被「跨公司串号」隔离，默认不勾选，需勾选下方「强制投递」才发）：</div>`
     + emailHits.map((h, i) => `
       <label class="checkline" style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)">
-        <input type="checkbox" class="emailChk" data-i="${i}" checked />
+        <input type="checkbox" class="emailChk" data-i="${i}" ${h.quarantine ? '' : 'checked'} />
         <span style="flex:1">
           <b>${esc(h.company)}</b> <span class="sub">· ${esc(h.position || '')}</span><br/>
           <span class="sub">📧 ${esc(h.email)}</span>
+          ${h.quarantine ? `<br/><span class="badge-quar">⚠ 跨公司串号 · ${esc(h.quarantine)}</span>` : ''}
         </span>
       </label>`).join('');
   box.querySelectorAll('.emailChk').forEach(el => el.addEventListener('change', updateEmailApplyBtn));
@@ -1160,7 +1236,7 @@ $('#btnEmailApply').onclick = async () => {
   try {
     const res = await fetch(API_BASE + '/api/offerbiu/email-apply', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobIds: ids, intervalMs: 8000 }),
+      body: JSON.stringify({ jobIds: ids, intervalMs: 8000, force: !!$('#chkForceApply')?.checked }),
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     await readSse(res, (ev) => {

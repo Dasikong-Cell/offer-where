@@ -13,6 +13,7 @@ import { execAction, listSessions, closeAll } from "./services/browser.js";
 import { probePlatformConnections } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
+import { tailorResume } from "./services/apply/resumeTailor.js";
 import { isAiEnabled, getAiConfig } from "./services/apply/aiClient.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
@@ -23,6 +24,7 @@ import { runAutoReply } from "./services/apply/autoReplyRunner.js";
 import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
 import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuCollect.js";
+import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
@@ -81,6 +83,59 @@ const defaultModel = "claude-sonnet-4";
 // 健康检查
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
+});
+
+// 投递漏斗 + 匹配度看板（对照职得鸭「数据洞察」补齐的可视化数据层）
+app.get("/api/stats/funnel", (_req, res) => {
+  try {
+    const rows = db.query<{ source: string; status: string; c: number }>(
+      "SELECT source, status, COUNT(*) c FROM jobs GROUP BY source, status"
+    );
+    const scored = db.query<{ c: number; avg: number }>(
+      "SELECT COUNT(*) c, AVG(match_score) avg FROM jobs WHERE match_score IS NOT NULL"
+    )[0] || { c: 0, avg: 0 };
+    const buckets = db.query<{ b: string; c: number }>(
+      `SELECT CASE WHEN match_score>=70 THEN 'high' WHEN match_score>=40 THEN 'mid' ELSE 'low' END b, COUNT(*) c
+       FROM jobs WHERE match_score IS NOT NULL GROUP BY b`
+    );
+    const quarantined = (db.query<{ c: number }>("SELECT COUNT(*) c FROM jobs WHERE quarantine IS NOT NULL")[0] || { c: 0 }).c;
+    const bySource: Record<string, any> = {};
+    let total = 0, applied = 0, candidate = 0, unavailable = 0;
+    for (const r of rows) {
+      bySource[r.source] = bySource[r.source] || { source: r.source, candidate: 0, applied: 0, unavailable: 0, total: 0 };
+      bySource[r.source][r.status] = (bySource[r.source][r.status] || 0) + r.c;
+      bySource[r.source].total += r.c;
+      total += r.c;
+      if (r.status === 'applied') applied += r.c; else if (r.status === 'candidate') candidate += r.c; else if (r.status === 'unavailable') unavailable += r.c;
+    }
+    const bucketMap = { high: 0, mid: 0, low: 0 };
+    for (const b of buckets) bucketMap[b.b as 'high' | 'mid' | 'low'] = b.c;
+    res.json({
+      total,
+      byStatus: { applied, candidate, unavailable },
+      appliedRate: total ? Math.round((applied / total) * 100) : 0,
+      quarantined,
+      bySource: Object.values(bySource).sort((a: any, b: any) => b.total - a.total),
+      matchScore: {
+        scored: scored.c,
+        coverage: total ? Math.round((scored.c / total) * 100) : 0,
+        avg: scored.avg ? Math.round(scored.avg) : 0,
+        high: bucketMap.high, mid: bucketMap.mid, low: bucketMap.low,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "统计失败" });
+  }
+});
+
+/** 平台 API 通道自检：CDP 端点 / 登录态（关键鉴权 Cookie）/ 两条通道开关。
+ *  用途：会话掉线巡检、诊断「登在本机日常 Chrome 而非调试窗口」的经典问题。 */
+app.get("/api/platform-api/probe", async (_req, res) => {
+  try {
+    res.json(await probePlatformApi());
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "探测失败" });
+  }
 });
 
 // AI 能力状态（自动回复话术是否走大模型）：enabled=已配置 LLM_*；model=当前模型
@@ -556,6 +611,26 @@ app.post("/api/jobs/match", async (req, res) => {
   }
 });
 
+/** 一岗一简历：按目标岗位 JD 定制简历片段（LLM 优先，失败回退本地规则）。
+ *  入参：{ jobId } 取岗位池中的岗位；或直接传 { job: {position, company, jd, requirements} }。
+ *  产出：定制「核心优势」+ 技能按岗位相关度重排 + 命中/待补分析 + Markdown。 */
+app.post("/api/jobs/tailor", async (req, res) => {
+  try {
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    let job = req.body?.job;
+    if (!job && req.body?.jobId) {
+      const j = db.getJob(String(req.body.jobId));
+      if (!j) return res.status(404).json({ error: "岗位不存在" });
+      job = { id: j.id, company: j.company, position: j.position, jd: j.jd, requirements: j.requirements };
+    }
+    if (!job) return res.status(400).json({ error: "请提供 jobId 或 job 对象" });
+    const result = await tailorResume(profile, job);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "定制失败" });
+  }
+});
+
 // 从 Offerbiu 校招信息库采集岗位（需用户已在该浏览器上下文登录；采集结果入库为岗位池）
 app.post("/api/offerbiu/collect", async (req, res) => {
   try {
@@ -654,6 +729,11 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
     for (let i = 0; i < jobIds.length; i++) {
       const job = db.getJob(jobIds[i]);
       if (!job) { fail++; send({ type: 'result', jobId: jobIds[i], status: 'error', message: '岗位不存在' }); continue; }
+      // 跨公司串号隔离：扫描阶段已标记的 quarantine 默认跳过，避免简历发错公司（force 可强制）
+      if (job.quarantine && !req.body?.force) {
+        fail++; send({ type: 'result', jobId: job.id, status: 'skipped', message: `已隔离（${job.quarantine}）；如需投递请勾选强制` });
+        continue;
+      }
       send({ type: 'progress', index: i, total: jobIds.length, jobId: job.id, company: job.company, position: job.position });
       try {
         const r = await runApply({

@@ -22,6 +22,11 @@ const db: import('better-sqlite3').Database = new Database(dbPath);
 // 启用 WAL 模式以提高性能
 db.pragma('journal_mode = WAL');
 
+// 通用只读查询助手（供统计/漏斗等即席聚合使用）
+export function query<T = any>(sql: string, params: any[] = []): T[] {
+  return db.prepare(sql).all(...params) as T[];
+}
+
 // 初始化数据库表
 db.exec(`
   -- 会话表
@@ -99,6 +104,7 @@ db.exec(`
     deadline TEXT,
     match_score REAL,
     match_detail TEXT,
+    quarantine TEXT,
     status TEXT NOT NULL DEFAULT 'candidate',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -162,6 +168,17 @@ try {
   if (!cols.includes('ai_source')) {
     db.exec("ALTER TABLE hr_conversations ADD COLUMN ai_source TEXT");
     console.log("[DB] Added ai_source column to hr_conversations");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 quarantine 列（跨公司串号隔离标记）
+try {
+  const jc = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jc.some((c) => c.name === 'quarantine')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN quarantine TEXT");
+    console.log("[DB] Added quarantine column to jobs");
   }
 } catch (e) {
   // 忽略错误（列可能已存在）
@@ -536,7 +553,7 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'status'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];

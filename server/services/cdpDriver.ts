@@ -661,6 +661,36 @@ export async function execCdpAction(
       case 'closeTab': {
         return await okResult(s);
       }
+      /** 读取当前 Chrome 会话可见的 Cookie（**含 httpOnly**，如 BOSS 的 `__zp_stoken__`、
+       *  猎聘的 `X-XSRF-TOKEN` 配套 cookie）。文档中 `document.cookie` 读不到 httpOnly，
+       *  必须走 CDP。用途：
+       *   1) 走平台 JSON 接口直连时复用已登录会话（见 services/platformApi/bossOpenApi.ts）；
+       *   2) 诊断「到底登没登录」。
+       *  实现顺序：Storage.getCookies（浏览器级，无需 enable，最安全）→ Network.getCookies(urls) 回退。
+       *  参数：{ url?: string, filterDomain?: string }。 */
+      case 'cookies': {
+        let list: any[] = [];
+        try {
+          const r: any = await send(s, 'Storage.getCookies', {});
+          list = r?.cookies || [];
+        } catch {
+          try {
+            await send(s, 'Network.enable', {}).catch(() => undefined);
+            const one = String(args.url || '');
+            const r: any = await send(s, 'Network.getCookies', one ? { urls: [one] } : {});
+            list = r?.cookies || [];
+          } catch { /* 读不到就当空 */ }
+        }
+        let cookies = list.map((c: any) => ({
+          name: c.name, value: c.value, domain: c.domain, path: c.path,
+          httpOnly: !!c.httpOnly, secure: !!c.secure, expires: c.expires,
+        }));
+        if (args.filterDomain) {
+          const fd = String(args.filterDomain).toLowerCase();
+          cookies = cookies.filter((c) => String(c.domain || '').toLowerCase().includes(fd));
+        }
+        return { ...(await okResult(s)), data: cookies };
+      }
       case 'close': {
         try { s.ws.close(); } catch { /* ignore */ }
         sessions.delete(platform);

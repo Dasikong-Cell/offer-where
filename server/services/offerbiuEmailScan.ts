@@ -59,6 +59,8 @@ export interface EmailHit {
   city?: string | null;
   email: string;
   applyUrl: string;
+  /** 跨公司串号隔离原因（扫描阶段判定）；存在时默认跳过投递，需 force 才发 */
+  quarantine?: string;
 }
 
 export interface ScanProgress {
@@ -130,7 +132,21 @@ async function scanOne(
     if (hrLikeOnly) mails = mails.filter((m) => HR_LIKE.test(m) || COMMON_MAIL_HOST.test(m));
     if (mails.length) {
       onProgress?.({ type: 'progress', index: idx, total, company, message: `  ✓ 发现招聘邮箱 ${mails[0]}${mails.length > 1 ? `（另有 ${mails.length - 1} 个）` : ''}` });
-      return { jobId: j.id, company, position: j.position || '', city: j.city, email: mails[0], applyUrl: j.apply_url };
+      const email = mails[0];
+      const emailDomain = (email.split('@')[1] || '').toLowerCase();
+      const siteRoot = rootDomain(j.apply_url || '');
+      // 跨公司串号隔离：邮箱是「企业自有域名」且与岗位投递页注册域不一致 → 极可能是别家邮箱串号，默认 quarantine
+      const corporateMail = !COMMON_MAIL_HOST.test(email) && !/^(hr|zhaopin|recruit|campus|job|career|talent|apply|offer|resume)[\.-]/i.test(email);
+      const crossCompany = !!emailDomain && !!siteRoot && corporateMail && emailDomain !== siteRoot;
+      if (crossCompany) {
+        const reason = `cross-company: 邮箱域 ${emailDomain} ≠ 岗位域 ${siteRoot}`;
+        db.updateJob(j.id, { quarantine: reason });
+        onProgress?.({ type: 'progress', index: idx, total, company, message: `  ⚠ 跨公司串号，已隔离：${emailDomain} ≠ ${siteRoot}` });
+        return { jobId: j.id, company, position: j.position || '', city: j.city, email, applyUrl: j.apply_url, quarantine: reason };
+      }
+      // 同域或常见邮箱主机（163/qq 等个人邮箱）视为可信，清除历史隔离标记
+      db.updateJob(j.id, { quarantine: null });
+      return { jobId: j.id, company, position: j.position || '', city: j.city, email, applyUrl: j.apply_url };
     }
     onProgress?.({ type: 'progress', index: idx, total, company, message: '  未发现招聘邮箱（该岗位需人工/官网表单）' });
     return null;
