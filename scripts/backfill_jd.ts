@@ -85,8 +85,17 @@ const EXTRACT = (jdSels: string[]) => `(() => {
     }
     return '';
   };
+  const body = (document.body ? (document.body.innerText || '') : '');
+  // 风控识别：51job 等在触发反爬时会整页替换成「访问验证 / 滑动验证」页，
+  // 此时所有 JD 选择器都命中 null —— 早期版本把这种情况误报成「岗位已下架」，
+  // 会让人以为数据没了、并继续无意义地刷（反而加重风控）。这里显式识别并让调用方中止。
+  const BLOCK = /(访问验证|滑动验证|安全验证|人机验证|请按住滑块|拖动到最右边|verify)/i;
+  const blocked = document.title ? BLOCK.test(document.title) : false;
   return {
     url: location.href,
+    docTitle: document.title || '',
+    blocked: blocked || (body.length < 400 && BLOCK.test(body)),
+    bodyLen: body.length,
     title: ((document.querySelector('.job-name, .name') || {}).innerText || '').trim().slice(0, 60),
     jd: pick(${JSON.stringify(jdSels)}, 20),
     company: pick(${JSON.stringify(COMPANY_SELECTORS)}, 2).slice(0, 40),
@@ -117,7 +126,7 @@ const EXTRACT = (jdSels: string[]) => `(() => {
   console.log(`  本次回填 ${batch.length} 个（间隔 ${INTERVAL}ms，预计约 ${Math.round(batch.length * (INTERVAL + 4500) / 60000)} 分钟）\n`);
 
   const jdSels = JD_SELECTORS[SOURCE] || JD_SELECTORS.boss;
-  let okJd = 0, okCo = 0, failed = 0;
+  let okJd = 0, okCo = 0, failed = 0, emptyPage = 0, blocked = false;
 
   for (let i = 0; i < batch.length; i++) {
     const j = batch[i];
@@ -128,17 +137,29 @@ const EXTRACT = (jdSels: string[]) => `(() => {
       await sleep(4200);
       const r: any = await ex(SOURCE, { action: 'eval', script: EXTRACT(jdSels) });
       const d = r?.data || {};
+
+      // 命中风控验证页 → 立即中止整批（继续刷只会加重风控，且数据一条也拿不到）
+      if (d.blocked) {
+        blocked = true;
+        console.log(`${tag} 🛑 触发风控验证页（标题「${d.docTitle}」）—— 已中止本批`);
+        break;
+      }
+
       const jdText = String(d.jd || '');
       const patch: Record<string, any> = {};
       if (jdText.length >= 20) { patch.jd = jdText.slice(0, 4000); okJd++; }
-      // 公司名为空时顺带补（测评发现 BOSS 有 154 条 company 为空）
+      // 公司名为空时顺带补（测评发现大量岗位 company 为空）
       if ((!j.company || !String(j.company).trim()) && d.company) { patch.company = String(d.company); okCo++; }
       if (Object.keys(patch).length) {
         db.updateJob(j.id, patch);
         console.log(`${tag} ✅ JD ${jdText.length} 字${patch.company ? ` · 公司「${patch.company}」` : ''}  ${j.position || ''}`);
+      } else if (String(d.bodyLen || 0) < 400) {
+        // 页面几乎是空壳（非验证页）→ 多为岗位已下架/要求登录
+        emptyPage++; failed++;
+        console.log(`${tag} ⚠️ 页面空白（${d.bodyLen} 字，疑似已下架或需登录）  ${j.position || j.apply_url}`);
       } else {
         failed++;
-        console.log(`${tag} ⚠️ 未取到 JD（可能岗位已下架）  ${j.position || j.apply_url}`);
+        console.log(`${tag} ⚠️ 页面正常但未命中 JD 选择器  ${j.position || j.apply_url}`);
       }
     } catch (e: any) {
       failed++;
@@ -148,7 +169,12 @@ const EXTRACT = (jdSels: string[]) => `(() => {
   }
 
   console.log('\n══════ 回填汇总 ══════');
-  console.log(`  JD 补全 ${okJd} 个 ｜ 公司名补全 ${okCo} 个 ｜ 失败/跳过 ${failed} 个（共处理 ${batch.length}）`);
+  console.log(`  JD 补全 ${okJd} 个 ｜ 公司名补全 ${okCo} 个 ｜ 失败/跳过 ${failed} 个（其中页面空白 ${emptyPage}）`);
+  if (blocked) {
+    console.log(`  🛑 因触发风控验证页提前中止（本次未处理完 ${batch.length} 个）`);
+    console.log(`     处理办法：在该平台的调试浏览器窗口里人工过一次滑块/短信验证，稍等冷却后再跑本脚本；`);
+    console.log(`     同一时间不要同时跑采集/投递，避免叠加触发风控。`);
+  }
 
   // 剩余待回填
   const remain = targets.length - okJd - (batch.length - okJd);
