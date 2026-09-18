@@ -1,4 +1,12 @@
-# 职得鸭本地取证 + 官网确认（确定版）
+# 职得鸭本地取证 + 官网确认（**已被推翻，见更正**）
+
+> ⚠️ **2026-09-19 更正**：本文档只看了 `AppData\Roaming\gagajob\`（用户数据目录），**没有解包安装体的 `resources/app.asar`**，
+> 因而得出「纯云端 SaaS、用户不登录平台、验证码由服务端处理」的**错误结论**。
+> 解包 `D:\新建文件夹\gagajob\resources\app.asar` 后证实：职得鸭是
+> **「Electron 薄壳 + 本机真实 Chrome + Puppeteer(rebrowser 反检测补丁) + 云端 AI」**混合架构，
+> **用户必须在自己电脑的可见 Chrome 窗口里登录平台账号、手动过验证码**。
+> 详见 **[ZHIDEYA_DEEP_ANALYSIS.md](./ZHIDEYA_DEEP_ANALYSIS.md)**（全功能实现深度解析）。
+> 本文档保留作为「只看用户数据目录会得出什么错误结论」的记录，**结论部分请以 DEEP_ANALYSIS 为准**。
 
 > 方法：解析本机 `AppData` 中 `gagajob` 客户端文件 + 抓取 `gagajob.cn` 官网，核实产品身份、技术形态与投递逻辑。结论标【已确认】/【推断】。
 
