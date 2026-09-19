@@ -1077,6 +1077,68 @@ export async function execCdpAction(
           sessions.delete(`${platform}__img`);
         }
       }
+      /** 抓取远程页面中某个元素区域为长图 PNG（用于微信推文 JD 长图等「JD 是图片」场景）。
+       *  与 htmlToPdf/htmlToImage 同样用临时标签页，绝不占用平台主标签。
+       *  做法：临时标签打开 url → 等待 load → 量出 selector 元素在文档坐标系的绝对位置与尺寸 →
+       *  设设备视口等于该元素尺寸 → captureScreenshot(clip=元素区域) 存盘。
+       *  参数：{ url, selector='#js_content', outPath, maxHeight=24000, scale=1, timeout }
+       *  返回：{ data: { path, bytes, width, height, truncated } } */
+      case 'captureUrlElement': {
+        const url = String(args.url || '');
+        const selector = String(args.selector || '#js_content');
+        const outPath = String(args.outPath || '');
+        if (!url) return { ok: false, error: 'captureUrlElement 需要 url' };
+        if (!outPath) return { ok: false, error: 'captureUrlElement 需要 outPath' };
+        const maxH = Number(args.maxHeight) || 24000;
+        const scale = Number(args.scale) || 1;
+        let tmpTargetId = '';
+        let tmpWs: WebSocket | undefined;
+        try {
+          const t: any = await httpReq('PUT', `${ep}/json/new?about:blank`);
+          tmpTargetId = t?.id || '';
+          if (!t?.webSocketDebuggerUrl) return { ok: false, error: 'captureUrlElement 无法新建临时标签' };
+          tmpWs = await connect(t.webSocketDebuggerUrl);
+          const ts = attachSession(tmpWs, `${platform}__cap`);
+          ts.targetId = tmpTargetId;
+          await send(ts, 'Page.enable');
+          await send(ts, 'Page.navigate', { url });
+          await waitForLoad(ts, args.timeout || 20000);
+          await new Promise((r) => setTimeout(r, 600));
+          // 同时抽取元素文本：供调用方判断「文字 JD」还是「图片 JD」（一次导航两用，避免重复导航触发限流）
+          const txtR: any = await send(ts, 'Runtime.evaluate', {
+            expression: `(function(){ var el=document.querySelector(${JSON.stringify(selector)}); return el ? (el.innerText||el.textContent||'') : ''; })()`,
+            returnByValue: true,
+          }).catch(() => null);
+          const elText = String(txtR?.result?.value || '');
+          const rectR: any = await send(ts, 'Runtime.evaluate', {
+            expression: `(function(){ var el=document.querySelector(${JSON.stringify(selector)}); if(!el) return JSON.stringify({found:false}); var r=el.getBoundingClientRect(); return JSON.stringify({found:true, top:r.top+window.scrollY, left:r.left+window.scrollX, w:r.width, h:r.height}); })()`,
+            returnByValue: true,
+          }).catch(() => null);
+          const rect = rectR?.result?.value ? JSON.parse(rectR.result.value) : null;
+          if (!rect || !rect.found) return { ok: false, error: `captureUrlElement: 未找到元素 ${selector}` };
+          const captureH = Math.min(Math.max(Math.round(rect.h), 1), maxH);
+          const captureW = Math.max(Math.round(rect.w), 1);
+          if (captureH < rect.h - 1) console.log(`[CDP] ${platform} 元素高 ${Math.round(rect.h)} 超 maxHeight ${maxH}，截取顶部 ${captureH}px`);
+          await send(ts, 'Emulation.setDeviceMetricsOverride', { width: captureW, height: captureH, deviceScaleFactor: scale, mobile: false }).catch(() => undefined);
+          await new Promise((r) => setTimeout(r, 350));
+          const r: any = await send(ts, 'Page.captureScreenshot', {
+            format: 'png',
+            captureBeyondViewport: true,
+            clip: { x: Math.max(0, Math.round(rect.left)), y: Math.max(0, Math.round(rect.top)), width: captureW, height: captureH, scale },
+          });
+          if (!r?.data) return { ok: false, error: 'captureUrlElement 未返回数据' };
+          const buf = Buffer.from(r.data, 'base64');
+          fs.mkdirSync(path.dirname(outPath), { recursive: true });
+          fs.writeFileSync(outPath, buf);
+          return { ok: true, data: { path: outPath, bytes: buf.length, width: captureW, height: captureH, truncated: captureH < rect.h - 1, text: elText } };
+        } catch (error: any) {
+          return { ok: false, error: `captureUrlElement 失败：${error?.message || error}` };
+        } finally {
+          if (tmpTargetId) { try { await httpReq('GET', `${ep}/json/close/${tmpTargetId}`); } catch { /* 忽略 */ } }
+          try { tmpWs?.close(); } catch { /* 忽略 */ }
+          sessions.delete(`${platform}__cap`);
+        }
+      }
       /** 读取当前 Chrome 会话可见的 Cookie（**含 httpOnly**，如 BOSS 的 `__zp_stoken__`、
        *  猎聘的 `X-XSRF-TOKEN` 配套 cookie）。文档中 `document.cookie` 读不到 httpOnly，
        *  必须走 CDP。用途：

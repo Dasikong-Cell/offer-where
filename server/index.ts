@@ -122,12 +122,13 @@ app.get("/api/stats/funnel", (_req, res) => {
     //    实测「BOSS 246 个高分里 242 个是兜底」，按匹配度排序等于随机排序）。
     // 所以现在是三档：真 JD / 卡片摘要（不是 JD，曾伪装成 JD）/ 完全无 JD。
     // 只报一个笼统的「JD 覆盖率」会让数字虚高（首轮就报过 89%，真实只有 26%）。
-    const basis = db.query<{ title_only: number; jd_based: number; card_only: number }>(
+    const basis = db.query<{ title_only: number; jd_based: number; card_only: number; image_jd: number }>(
       `SELECT SUM(CASE WHEN jd IS NULL OR TRIM(jd)='' THEN 1 ELSE 0 END) title_only,
               SUM(CASE WHEN jd IS NOT NULL AND TRIM(jd)<>'' THEN 1 ELSE 0 END) jd_based,
-              SUM(CASE WHEN (jd IS NULL OR TRIM(jd)='') AND card_text IS NOT NULL AND TRIM(card_text)<>'' THEN 1 ELSE 0 END) card_only
+              SUM(CASE WHEN (jd IS NULL OR TRIM(jd)='') AND card_text IS NOT NULL AND TRIM(card_text)<>'' THEN 1 ELSE 0 END) card_only,
+              SUM(CASE WHEN jd_source='image' THEN 1 ELSE 0 END) image_jd
        FROM jobs`
-    )[0] || { title_only: 0, jd_based: 0, card_only: 0 };
+    )[0] || { title_only: 0, jd_based: 0, card_only: 0, image_jd: 0 };
     const highWithJd = (db.query<{ c: number }>(
       "SELECT COUNT(*) c FROM jobs WHERE match_score>=70 AND jd IS NOT NULL AND TRIM(jd)<>''"
     )[0] || { c: 0 }).c;
@@ -180,6 +181,8 @@ app.get("/api/stats/funnel", (_req, res) => {
         jdBased: basis.jd_based,
         /** 其中：虽有"看起来像 JD"的文本、实为列表卡片摘要的（不是岗位描述） */
         cardTextOnly: basis.card_only,
+        /** JD 为长图的岗位（微信校招推文：JD 是图片，已抓取可查看，但无法文本匹配） */
+        imageJd: basis.image_jd,
         /** 真 JD 覆盖率（jdBased / total）—— 这是唯一可信的覆盖率口径 */
         realJdRate: total ? Math.round((basis.jd_based / total) * 100) : 0,
         /** 高匹配里真正基于 JD 的数量（这才是可信的高匹配） */
@@ -635,6 +638,23 @@ app.get("/api/jobs", (req, res) => {
     res.json({ jobs: list, total: list.length });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "获取岗位失败" });
+  }
+});
+
+/** 已抓取 JD 长图的岗位列表（微信校招推文：JD 是图片，供人工查看真实岗位内容） */
+app.get("/api/jobs/image-jd", (_req, res) => {
+  try {
+    const rows = db.query<{ id: string; company: string | null; position: string | null; jd_images: string | null }>(
+      "SELECT id, company, position, jd_images FROM jobs WHERE jd_source='image' AND jd_images IS NOT NULL AND TRIM(jd_images)<>'' ORDER BY updated_at DESC LIMIT 500",
+    );
+    const items = rows.map((r) => {
+      let image = '';
+      try { image = (JSON.parse(r.jd_images || '[]') as Array<{ local?: string }>)[0]?.local || ''; } catch { /* ignore */ }
+      return { id: r.id, company: r.company, position: r.position, image };
+    }).filter((x) => x.image);
+    res.json({ total: items.length, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "查询失败" });
   }
 });
 

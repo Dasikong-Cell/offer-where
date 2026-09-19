@@ -490,6 +490,22 @@
     <div id="advInterviewOut" class="sub" style="margin-top:8px;white-space:pre-wrap"></div>
 
     <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
+    <div class="sub" style="margin-bottom:6px"><b>JD 长图</b>：微信校招推文的 JD 是<b>图片长图</b>（无法文本匹配），已自动抓取存档 —— 在此查看真实岗位内容，作为投递前的人工判断依据。</div>
+    <div class="fields">
+      <div class="field">
+        <label>岗位（已抓取 JD 长图）</label>
+        <select id="advImageJob"><option value="">加载中…</option></select>
+      </div>
+      <div class="field" style="align-self:end">
+        <button id="btnViewImageJd">查看长图</button>
+      </div>
+    </div>
+    <div id="advImageJdBox" style="margin-top:8px;display:none">
+      <div class="sub" id="advImageJdMeta" style="margin-bottom:4px"></div>
+      <img id="advImageJdImg" style="max-width:100%;border:1px solid var(--line);border-radius:8px" alt="JD 长图" />
+    </div>
+
+    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
     <div class="sub" style="margin-bottom:6px"><b>运行时间段</b>：只在你配置的时间段内跑，到点自动停；更像真人作息，也降低风控概率。</div>
     <div class="fields">
       <div class="field">
@@ -974,7 +990,7 @@ async function renderFunnel() {
     document.getElementById('kHigh').textContent = d.matchScore.high;
     document.getElementById('kMid').textContent = d.matchScore.mid;
     document.getElementById('kLow').textContent = d.matchScore.low;
-    // 如实标注匹配依据（三分口径）：真 JD / 卡片摘要 / 无 JD。
+    // 如实标注匹配依据：真 JD / 图片 JD（微信长图，可看不可匹配）/ 卡片摘要 / 无 JD。
     // ⚠️ 只报一个笼统的「JD 覆盖率」会让数字虚高（首轮报过 89%，真实只有 26%）。
     const ms = d.matchScore;
     const noteEl = document.getElementById('matchBasisNote');
@@ -982,8 +998,10 @@ async function renderFunnel() {
       const noJd = ms.titleOnly || 0;
       const card = ms.cardTextOnly || 0;
       const real = ms.jdBased || 0;
+      const img = ms.imageJd || 0;
       const parts = [];
       parts.push(`真 JD ${real} 个（${ms.realJdRate || 0}%）`);
+      if (img) parts.push(`图片 JD ${img} 个（微信长图，已抓取可查看，不参与匹配）`);
       if (card) parts.push(`卡片摘要 ${card} 个（不是岗位描述，已迁出 jd）`);
       if (noJd) parts.push(`无 JD ${noJd} 个（不给分，不参与按分数排序）`);
       noteEl.textContent = `⚠️ 覆盖口径：${parts.join(' · ')}。`
@@ -1635,7 +1653,35 @@ $('#btnSaveExchange').onclick = async () => {
   line('⑤ 猎聘交换联系方式已保存（' + (actions.length || 0) + ' 项）', 'info');
 };
 
+// —— JD 长图查看 ——
+async function loadAdvImageJobs() {
+  const sel = $('#advImageJob');
+  try {
+    const d = await advApi('/api/jobs/image-jd');
+    const items = (d && d.items) || [];
+    if (!items.length) {
+      sel.innerHTML = '<option value="">（暂无已抓取长图的岗位 —— 可运行 scripts/capture_wechat_jd_images.ts）</option>';
+      return;
+    }
+    sel.innerHTML = items.map(x =>
+      '<option value="' + esc(x.id) + '" data-img="' + esc(x.image) + '" data-co="' + esc(x.company || '') + '" data-po="' + esc(x.position || '') + '">'
+      + esc((x.company || '?') + ' · ' + (x.position || '?')) + '</option>').join('');
+  } catch (_) {
+    sel.innerHTML = '<option value="">（长图岗位加载失败，后端可能离线）</option>';
+  }
+}
+$('#btnViewImageJd').onclick = () => {
+  const sel = $('#advImageJob');
+  const opt = sel.selectedOptions[0];
+  const img = opt && opt.getAttribute('data-img');
+  if (!img) { line('⑤ 没有可查看的 JD 长图（先运行抓图脚本）', 'warn'); return; }
+  $('#advImageJdImg').src = img;
+  $('#advImageJdMeta').textContent = (opt.getAttribute('data-co') || '') + ' · ' + (opt.getAttribute('data-po') || '');
+  $('#advImageJdBox').style.display = 'block';
+};
+
 loadAdvJobs();
+loadAdvImageJobs();
 loadResumeVersion();
 loadLetterTpl();
 loadExchange();

@@ -110,6 +110,11 @@ db.exec(`
     -- ⚠️ 它不是岗位描述：曾整批塞进 jd，导致「JD 覆盖率 89%」虚高、
     -- 匹配分与求职信/定制简历/面试攻略全部失效。单独存此列保留信息，jd 只放真岗位描述。
     card_text TEXT,
+    -- 微信推文等「JD 是图片长图」的岗位：把抓取到的长图路径(相对 data/ 的 URL)与来源图 URL 存这里。
+    -- jd 列保持空（无文本），jd_source='image' 标记「真实 JD 以图片形式存在，可查看但不可文本匹配」。
+    jd_images TEXT,
+    -- 'text' = jd 列有真岗位描述；'image' = JD 为长图(见 jd_images)；'none'/NULL = 无 JD。
+    jd_source TEXT,
     status TEXT NOT NULL DEFAULT 'candidate',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -228,6 +233,21 @@ try {
   if (!jc3.some((c) => c.name === 'card_text')) {
     db.exec("ALTER TABLE jobs ADD COLUMN card_text TEXT");
     console.log("[DB] Added card_text column to jobs");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 jd_images / jd_source 列（微信推文 JD 长图抓取，阶段 1 抓图方案）
+try {
+  const jc4 = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jc4.some((c) => c.name === 'jd_images')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN jd_images TEXT");
+    console.log("[DB] Added jd_images column to jobs");
+  }
+  if (!jc4.some((c) => c.name === 'jd_source')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN jd_source TEXT");
+    console.log("[DB] Added jd_source column to jobs");
   }
 } catch (e) {
   // 忽略错误（列可能已存在）
@@ -618,6 +638,10 @@ export interface JobRow {
   skip_reason: string | null;
   /** 列表页卡片摘要（非岗位描述）。与 jd 分离，避免它被当成 JD 参与匹配/AI 文案 */
   card_text: string | null;
+  /** JD 长图路径数组(JSON)：[{local, url, w, h}]。jd_source='image' 时有效 */
+  jd_images: string | null;
+  /** 'text'=jd 有真描述；'image'=JD 为长图(见 jd_images)；'none'/NULL=无 JD */
+  jd_source: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -754,6 +778,10 @@ export function upsertJob(job: {
   deadline?: string | null;
   /** 列表页卡片摘要（非岗位描述）。调用方若只有卡片文本，应传这里而**不要**传 jd */
   card_text?: string | null;
+  /** JD 长图路径数组(JSON)。jd_source='image' 时配套写入 */
+  jd_images?: string | null;
+  /** 'text'|'image'|'none'：标记 JD 形态 */
+  jd_source?: string | null;
 }): JobRow {
   // 写库口统一清洗（员工 见 sanitizeJobText 注释）
   job = {
@@ -779,8 +807,8 @@ export function upsertJob(job: {
       : undefined;
   const id = existing?.id || job.id || randomUUID();
   db.prepare(`
-    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, status, created_at, updated_at)
-    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, 'candidate', @created_at, @updated_at)
+    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, status, created_at, updated_at)
+    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       company = excluded.company,
       position = excluded.position,
@@ -791,6 +819,8 @@ export function upsertJob(job: {
       apply_url = excluded.apply_url,
       deadline = excluded.deadline,
       card_text = excluded.card_text,
+      jd_images = excluded.jd_images,
+      jd_source = excluded.jd_source,
       updated_at = excluded.updated_at
   `).run({
     id,
@@ -800,6 +830,8 @@ export function upsertJob(job: {
     city: job.city ?? null,
     jd: job.jd ?? null,
     card_text: job.card_text ?? null,
+    jd_images: job.jd_images ?? null,
+    jd_source: job.jd_source ?? null,
     requirements: job.requirements ?? null,
     salary: job.salary ?? null,
     apply_url: job.apply_url ?? null,
@@ -811,7 +843,7 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'card_text' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'status'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];
