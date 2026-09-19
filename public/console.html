@@ -1479,13 +1479,20 @@ async function advPost(path, body) {
   return advApi(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
 }
 
-/** 载入「有 JD」的岗位：没有 JD 就做不了定制简历与面试攻略 */
+/** 一段"JD"是否其实只是列表卡片摘要（offerbiu 列表页抓的就是这个），不是岗位描述 */
+function isCardSummary(jd) {
+  const t = String(jd || '');
+  return t.includes('投递入口') || t.includes('尽快投递') || /更新\s*\d+\s*月\s*\d+\s*日/.test(t);
+}
+/** 载入「有真 JD」的岗位：没有真 JD 就做不了定制简历与面试攻略。
+ *  ⚠️ 不能只看长度 —— offerbiu 的卡片摘要也有 80~120 字，
+ *  但内容是「更新 9月2日 / 2027届 / 投递入口」，拿它生成求职信只会产出垃圾。 */
 async function loadAdvJobs() {
   const sel = $('#advJob');
   try {
     const j = await advApi('/api/jobs?status=candidate&limit=60');
     const list = (j && (j.jobs || j)) || [];
-    const usable = list.filter(x => x && x.id && String(x.jd || '').length > 50);
+    const usable = list.filter(x => x && x.id && String(x.jd || '').length > 50 && !isCardSummary(x.jd));
     if (!usable.length) {
       sel.innerHTML = '<option value="">（暂无带 JD 的候选岗位）</option>';
       return;

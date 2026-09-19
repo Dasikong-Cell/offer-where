@@ -64,8 +64,14 @@ console.log('\n══════ 6. 数据质量检查 ══════');
 const q = {
   '重复岗位(同源+公司+职位)': (db.prepare("SELECT COUNT(*) c FROM (SELECT 1 FROM jobs GROUP BY source,company,position HAVING COUNT(*)>1)").get() as any).c,
   '空 JD 的岗位': (db.prepare("SELECT COUNT(*) c FROM jobs WHERE jd IS NULL OR TRIM(jd)=''").get() as any).c,
+  // 「卡片摘要被当成 JD」：offerbiu 列表页抓的是卡片 innerText（含「更新 9月2日 / 2027届 / 投递入口」等），
+  // 不是岗位描述。这类 JD 会让"覆盖率"虚高、并让匹配分失去意义，必须单独统计。
+  '疑似卡片摘要(非真JD)': (db.prepare("SELECT COUNT(*) c FROM jobs WHERE jd IS NOT NULL AND TRIM(jd)<>'' AND (jd LIKE '%投递入口%' OR jd LIKE '%尽快投递%' OR jd LIKE '%更新 %月%日%')").get() as any).c,
   '空 apply_url 的岗位': (db.prepare("SELECT COUNT(*) c FROM jobs WHERE apply_url IS NULL OR TRIM(apply_url)=''").get() as any).c,
-  '已投但无投递记录': (db.prepare("SELECT COUNT(*) c FROM jobs j WHERE j.status='applied' AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.company=j.company AND a.position=j.position)").get() as any).c,
+  // 关联键必须用 apply_url ↔ job_url：company+position 是**精确文本比较**，
+  // 采集与投递两条路径的空白折叠不一致（1 空格 vs 3 空格）就会误判成"无记录"（实测 122 → 16）。
+  '已投但无投递记录(按URL)': (db.prepare("SELECT COUNT(*) c FROM jobs j WHERE j.status='applied' AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.job_url=j.apply_url)").get() as any).c,
+  '…按公司+职位文本(参考)': (db.prepare("SELECT COUNT(*) c FROM jobs j WHERE j.status='applied' AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.company=j.company AND a.position=j.position)").get() as any).c,
   '已隔离岗位(quarantine)': (db.prepare("SELECT COUNT(*) c FROM jobs WHERE quarantine IS NOT NULL").get() as any).c,
   'applications 无 job_url': (db.prepare("SELECT COUNT(*) c FROM applications WHERE job_url IS NULL OR TRIM(job_url)=''").get() as any).c,
   '岗位仍为 candidate': (db.prepare("SELECT COUNT(*) c FROM jobs WHERE status='candidate'").get() as any).c,
