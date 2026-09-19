@@ -5,1686 +5,824 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>简历投递 Agent</title>
 <style>
-  :root {
-    --bg: #f5f6f8;
-    --card: #ffffff;
-    --line: #e5e7eb;
-    --text: #1f2328;
-    --muted: #6b7280;
-    --brand: #2563eb;
-    --brand-soft: #eff6ff;
-    --ok: #059669;
-    --err: #dc2626;
-    --warn: #d97706;
+  :root{
+    --brand:#ff7a45; --brand2:#ff5e3a; --brand-soft:#fff1ea;
+    --side:#1c2333; --side2:#161c29; --side-text:#aeb6c6; --side-active:#ffffff;
+    --bg:#f4f5f8; --card:#ffffff; --line:#e8ebf0; --line2:#eef1f5;
+    --ink:#1f2733; --muted:#6b7484; --muted2:#9aa3b2;
+    --ok:#1fab66; --ok-soft:#e8f7ef; --warn:#e8941a; --warn-soft:#fdf3e3;
+    --bad:#e5484d; --bad-soft:#fdecec; --info:#3b7ef0; --info-soft:#eaf1fe;
+    --shadow:0 1px 3px rgba(20,30,50,.06),0 6px 22px rgba(20,30,50,.06);
+    --r:14px; --r-sm:9px;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px 16px 48px;
-    background: var(--bg); color: var(--text);
-    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-  }
-  .wrap { max-width: 880px; margin: 0 auto; }
-  header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-  .logo {
-    width: 40px; height: 40px; border-radius: 10px;
-    background: var(--brand); color: #fff;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; font-weight: 700;
-  }
-  h1 { font-size: 20px; margin: 0; }
-  .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
-  .status { margin-left: auto; display: flex; gap: 8px; font-size: 12px; }
-  .pill {
-    padding: 4px 10px; border-radius: 999px;
-    background: #eef0f3; color: var(--muted); border: 1px solid var(--line);
-  }
-  .pill.on { background: #ecfdf5; color: var(--ok); border-color: #a7f3d0; }
-  .pill.off { background: #fef2f2; color: var(--err); border-color: #fecaca; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer}
+  a{color:var(--info);text-decoration:none}
 
-  .card {
-    background: var(--card); border: 1px solid var(--line);
-    border-radius: 14px; padding: 18px; margin-bottom: 16px;
-  }
-  .card h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); font-weight: 600; }
+  .shell{display:flex;min-height:100vh}
+  /* ---------- sidebar ---------- */
+  .side{width:228px;flex:0 0 228px;background:linear-gradient(180deg,var(--side),var(--side2));
+    color:var(--side-text);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:center;gap:11px;padding:20px 20px 16px}
+  .brand .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--brand),var(--brand2));
+    display:flex;align-items:center;justify-content:center;font-size:19px;box-shadow:0 4px 12px rgba(255,94,58,.4)}
+  .brand .name{color:#fff;font-weight:700;font-size:15px;letter-spacing:.3px}
+  .brand .name small{display:block;color:var(--side-text);font-weight:500;font-size:11px;letter-spacing:.5px}
+  .nav{padding:8px 12px;flex:1;overflow:auto}
+  .nav .grp{font-size:11px;color:#5d6678;padding:14px 10px 6px;letter-spacing:1px}
+  .nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--side-text);
+    font-size:13.5px;margin:2px 0;transition:.15s;position:relative}
+  .nav a svg{width:18px;height:18px;flex:0 0 18px;opacity:.85}
+  .nav a:hover{background:rgba(255,255,255,.06);color:#fff}
+  .nav a.active{background:rgba(255,122,69,.16);color:#fff}
+  .nav a.active::before{content:"";position:absolute;left:-12px;top:9px;bottom:9px;width:3px;border-radius:3px;background:var(--brand)}
+  .side-foot{padding:14px 18px;border-top:1px solid rgba(255,255,255,.07);font-size:11.5px;color:#6b7484}
+  .side-foot .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3a4150;margin-right:7px;vertical-align:middle}
+  .side-foot .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(31,171,102,.2)}
+  .side-foot .dot.off{background:var(--bad)}
 
-  .platforms { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-  .pf {
-    border: 1.5px solid var(--line); border-radius: 12px; padding: 12px 14px;
-    cursor: pointer; user-select: none; transition: .15s; background: #fff;
-    display: flex; align-items: center; gap: 10px;
-  }
-  .pf:hover { border-color: #c7d2fe; }
-  .pf.sel { border-color: var(--brand); background: var(--brand-soft); }
-  .pf .dot {
-    width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid #cbd5e1; flex: 0 0 18px;
-    display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff;
-  }
-  .pf.sel .dot { background: var(--brand); border-color: var(--brand); }
-  .pf .nm { font-size: 14px; font-weight: 600; }
-  .pf .hint { font-size: 11px; color: var(--muted); }
-  .pf .conn { font-size: 11px; margin-top: 3px; display: flex; align-items: center; gap: 4px; }
-  .pf .conn.on { color: var(--ok); }
-  .pf .conn.off { color: var(--muted); }
-  .pf.off { opacity: .62; }
-  .connbar { margin-top: 12px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .connbar button { padding: 6px 14px; font-size: 13px; }
-  .conn-summary { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+  /* ---------- main ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{height:62px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;
+    justify-content:space-between;padding:0 26px;position:sticky;top:0;z-index:20}
+  .topbar h1{font-size:17px;margin:0;font-weight:700}
+  .topbar .sub{color:var(--muted);font-size:12.5px;margin-top:1px}
+  .topbar .right{display:flex;align-items:center;gap:12px}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;font-size:12.5px;font-weight:600}
+  .pill.ok{background:var(--ok-soft);color:var(--ok)} .pill.warn{background:var(--warn-soft);color:var(--warn)}
+  .pill.bad{background:var(--bad-soft);color:var(--bad)} .pill.info{background:var(--info-soft);color:var(--info)}
+  .pill .d{width:7px;height:7px;border-radius:50%;background:currentColor}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink);padding:8px 14px;border-radius:10px;font-size:13px;font-weight:600;transition:.15s}
+  .btn:hover{border-color:#cfd6e0;background:#fafbfc}
+  .btn.primary{background:linear-gradient(135deg,var(--brand),var(--brand2));border:none;color:#fff;box-shadow:0 4px 12px rgba(255,94,58,.28)}
+  .btn.primary:hover{filter:brightness(1.04)}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--info)}
+  .btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .icon-btn{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:#fff;display:inline-flex;align-items:center;justify-content:center}
+  .icon-btn:hover{background:#fafbfc}
 
-  .fields { display: flex; gap: 16px; flex-wrap: wrap; }
-  .field { flex: 1 1 160px; }
-  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-  .field input {
-    width: 100%; padding: 9px 11px; font-size: 14px;
-    border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text);
-  }
-  .field input:focus { outline: 2px solid #bfdbfe; border-color: var(--brand); }
-  .field select {
-    width: 100%; padding: 9px 11px; font-size: 14px;
-    border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text);
-  }
-  .checkline { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
-  .badge { display: inline-block; font-size: 12px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); }
-  .badge.ok { background: #ecfdf5; color: var(--ok); border-color: #a7f3d0; }
-  .badge.warn { background: #fffbeb; color: #b45309; border-color: #fde68a; }
-  .badge-quar { display: inline-block; margin-top: 4px; font-size: 12px; padding: 3px 8px; border-radius: 8px; background: #fef2f2; color: var(--err); border: 1px solid #fecaca; }
-  #forceWrap { color: var(--warn); font-size: 13px; }
-  .checkline input { width: 16px; height: 16px; }
+  .view-wrap{padding:24px 26px 60px;max-width:1240px;width:100%}
+  .view{display:none} .view.active{display:block;animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
-  .actions { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
-  button {
-    padding: 10px 20px; font-size: 14px; border-radius: 10px; cursor: pointer;
-    border: 1px solid var(--line); background: #fff; color: var(--text); transition: .15s;
-    font-weight: 600;
-  }
-  button:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
-  button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
-  button.primary:hover:not(:disabled) { opacity: .9; color: #fff; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
+  /* ---------- cards / grid ---------- */
+  .grid{display:grid;gap:16px}
+  .cols-2{grid-template-columns:repeat(2,1fr)} .cols-3{grid-template-columns:repeat(3,1fr)}
+  .cols-4{grid-template-columns:repeat(4,1fr)} .cols-5{grid-template-columns:repeat(5,1fr)}
+  @media(max-width:1080px){.cols-4,.cols-5{grid-template-columns:repeat(2,1fr)}.cols-3{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:760px){.cols-2,.cols-3,.cols-4,.cols-5{grid-template-columns:1fr}.side{display:none}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--shadow)}
+  .card h2{font-size:14px;margin:0 0 14px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:8px}
+  .card h2 .tag{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--muted2)}
+  .card.accent{border-left:4px solid var(--brand)}
 
-  .log {
-    background: #0f172a; color: #cbd5e1; border-radius: 12px; padding: 14px;
-    height: 320px; overflow-y: auto; font-family: ui-monospace, Consolas, monospace;
-    font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
-  }
-  .log .t { color: #64748b; }
-  .log .ok { color: #4ade80; }
-  .log .err { color: #f87171; }
-  .log .warn { color: #fbbf24; }
-  .log .info { color: #93c5fd; }
-  .log .dim { color: #64748b; }
-  .row-between { display: flex; align-items: center; justify-content: space-between; }
+  .stat{display:flex;flex-direction:column;gap:4px}
+  .stat .v{font-size:26px;font-weight:800;letter-spacing:-.5px;line-height:1}
+  .stat .l{font-size:12.5px;color:var(--muted)}
+  .stat .v.sm{font-size:20px}
 
-  /* 我的档案：分组 + 用途条 + 强调边框 */
-  .card.accent { border-left: 4px solid var(--brand); }
+  /* platform cards */
+  .pf{display:flex;flex-direction:column;gap:10px}
+  .pf .top{display:flex;align-items:center;gap:10px}
+  .pf .ava{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:15px}
+  .pf .nm{font-weight:700;font-size:14px}
+  .pf .st{margin-left:auto;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px}
+  .pf .row{display:flex;gap:8px}
+  .pf .row .btn{flex:1;justify-content:center;text-align:center}
 
-  /* 投递漏斗 & 匹配度看板 */
-  .funnel { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  .funnel-row { display: flex; align-items: center; gap: 10px; }
-  .flab { width: 56px; font-size: 12px; color: var(--muted); flex: none; }
-  .fbar { flex: 1; height: 18px; background: var(--bg-soft); border-radius: 6px; overflow: hidden; }
-  .fbar i { display: block; height: 100%; background: #93c5fd; transition: width .4s ease; }
-  .fbar.ok i { background: #34d399; }
-  .fbar.warn i { background: #fbbf24; }
-  .funnel-row b { width: 48px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
-  .kpis { display: flex; gap: 10px; margin: 4px 0 2px; }
-  .kpi { flex: 1; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 10px; text-align: center; }
-  .kpi span { display: block; font-size: 20px; font-weight: 600; color: var(--brand); }
-  .kpi label { font-size: 11px; color: var(--muted); }
-  .funnel-src { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
-  .src-tile { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: 12px; }
-  .src-tile .st { display: flex; justify-content: space-between; color: var(--muted); margin-top: 4px; }
-  .src-tile .st b { color: var(--text); font-weight: 600; }
-  .health-list { display: flex; flex-wrap: wrap; gap: 8px; }
-  .hchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: help;
-           padding: 5px 10px; border-radius: 9px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
-  .hchip .p { font-weight: 600; color: var(--text); }
-  .hchip.ok { background: #ecfdf5; border-color: #a7f3d0; }
-  .hchip.bad { background: #fef2f2; border-color: #fecaca; }
-  .hchip.warn { background: #fffbeb; border-color: #fde68a; }
-  .usage {
-    font-size: 12px; line-height: 1.6; background: var(--brand-soft); color: var(--brand);
-    border: 1px solid #bfdbfe; border-radius: 9px; padding: 9px 12px; margin-bottom: 16px;
-  }
-  .grp { margin-bottom: 14px; }
-  .grp:last-of-type { margin-bottom: 4px; }
-  .grp-cap {
-    font-size: 12px; font-weight: 600; color: var(--muted);
-    margin: 2px 0 10px; padding-left: 9px; border-left: 3px solid var(--brand);
-  }
+  /* funnel */
+  .funnel{display:flex;height:30px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+  .funnel span{display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;min-width:0}
+  .seg-jd{background:var(--info)} .seg-img{background:#7c5cff} .seg-card{background:var(--warn)} .seg-none{background:#c2c9d6}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;font-size:12px;color:var(--muted)}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:middle}
+
+  /* table */
+  .tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;padding:10px 12px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:11px 12px;border-bottom:1px solid var(--line2);vertical-align:middle}
+  .tbl tr:hover td{background:#fafbfc}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600}
+  .b-ok{background:var(--ok-soft);color:var(--ok)} .b-info{background:var(--info-soft);color:var(--info)}
+  .b-warn{background:var(--warn-soft);color:var(--warn)} .b-mut{background:#eef1f5;color:var(--muted)}
+  .b-pur{background:#f0ebff;color:#6d4bff} .b-bad{background:var(--bad-soft);color:var(--bad)}
+
+  /* form */
+  label.f{display:block;font-size:12.5px;color:var(--muted);font-weight:600;margin:12px 0 6px}
+  input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;font:inherit;color:var(--ink);background:#fff}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+  textarea{resize:vertical;min-height:70px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--ink)}
+  .toggle input{width:auto}
+
+  .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:16px}
+  .tabs button{border:none;background:none;padding:10px 14px;font-size:13.5px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent}
+  .tabs button.active{color:var(--brand);border-bottom-color:var(--brand)}
+
+  .note{font-size:12.5px;color:var(--muted);background:#fafbfc;border:1px solid var(--line2);border-radius:9px;padding:10px 12px;margin-top:10px}
+  .note.warn{background:var(--warn-soft);border-color:#f6e3c0;color:#9a6512}
+  .note.ok{background:var(--ok-soft);border-color:#cdeede;color:#177a47}
+  .note.bad{background:var(--bad-soft);border-color:#f6cccc;color:#a3272b}
+  .out{margin-top:12px;white-space:pre-wrap;font-size:13px;background:#0f1420;color:#d6e2f0;border-radius:10px;padding:14px;max-height:340px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.6}
+  .out:empty{display:none}
+  .progress{height:8px;border-radius:999px;background:var(--line2);overflow:hidden;margin-top:12px}
+  .progress>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--brand),var(--brand2));transition:width .3s}
+
+  .modal{position:fixed;inset:0;background:rgba(15,20,32,.55);display:none;align-items:center;justify-content:center;z-index:50;padding:24px}
+  .modal.open{display:flex}
+  .modal .box{background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+  .modal .box .hd{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .modal .box .hd h3{margin:0;font-size:16px}
+  .modal .box .bd{padding:18px 20px}
+  .modal .box img{max-width:100%;border:1px solid var(--line);border-radius:10px}
+
+  .empty{text-align:center;color:var(--muted2);padding:40px 0;font-size:13px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .muted{color:var(--muted)} .small{font-size:12px} .right{text-align:right}
+  .kv{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--line2);font-size:13px}
+  .kv:last-child{border:none} .kv b{color:var(--ink)} .kv span{color:var(--muted)}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="logo">投</div>
-    <div>
-      <h1>简历投递 Agent</h1>
-      <div class="sub">选择平台 → 设置数量 → 一键投递</div>
+<div class="shell">
+  <!-- ===== Sidebar ===== -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">🦆</div>
+      <div class="name">投递 Agent<small>RESUME DELIVERY</small></div>
     </div>
-    <div class="status">
-      <span class="pill" id="pillApi">后端 检测中</span>
-      <span class="pill" id="pillCdp">CDP 检测中</span>
-      <span class="pill" id="pillAi">AI 检测中</span>
+    <nav class="nav" id="nav">
+      <div class="grp">总览</div>
+      <a data-view="dashboard" class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>首页看板</a>
+      <div class="grp">投递</div>
+      <a data-view="deliver">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>投递中心</a>
+      <a data-view="records">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg>职位记录</a>
+      <div class="grp">简历</div>
+      <a data-view="resume">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>简历中心</a>
+      <div class="grp">进阶</div>
+      <a data-view="advanced">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 17l-6.3 4 2.3-7.2-6-4.4h7.6z"/></svg>高级功能</a>
+      <a data-view="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>运行日志</a>
+    </nav>
+    <div class="side-foot">
+      <div><span class="dot" id="svcDot"></span><span id="svcTxt">后端连接中…</span></div>
+      <div style="margin-top:6px">v1.0 · job-apply-agent</div>
     </div>
-  </header>
+  </aside>
 
-  <div class="card accent">
-    <h2>📊 投递漏斗 &amp; 匹配度（数据洞察）</h2>
-    <div class="funnel" id="funnelOverall">
-      <div class="funnel-row"><span class="flab">候选</span><div class="fbar"><i id="fCandidate" style="width:0%"></i></div><b id="nCandidate">0</b></div>
-      <div class="funnel-row"><span class="flab">已投</span><div class="fbar ok"><i id="fApplied" style="width:0%"></i></div><b id="nApplied">0</b></div>
-      <div class="funnel-row"><span class="flab">不可用</span><div class="fbar warn"><i id="fUnavailable" style="width:0%"></i></div><b id="nUnavailable">0</b></div>
-    </div>
-    <div class="kpis">
-      <div class="kpi"><span id="kAppliedRate">0%</span><label>投递率</label></div>
-      <div class="kpi"><span id="kMatchAvg">0</span><label>匹配分均值</label></div>
-      <div class="kpi"><span id="kMatchCov">0%</span><label>匹配分覆盖</label></div>
-      <div class="kpi"><span id="kQuar">0</span><label>跨公司隔离</label></div>
-    </div>
-    <div class="sub" style="margin:10px 0 6px">各平台漏斗</div>
-    <div id="funnelBySource" class="funnel-src"></div>
-    <div class="sub" style="margin-top:8px;color:var(--muted)">匹配分：高≥70 / 中40-69 / 低&lt;40（高 <b id="kHigh">0</b> · 中 <b id="kMid">0</b> · 低 <b id="kLow">0</b>）。未覆盖岗位可点「② 投递设置」后用 <code>/api/jobs/match</code> 精准打分。</div>
-    <div class="sub" id="matchBasisNote" style="margin-top:6px;color:var(--warn)"></div>
-  </div>
-
-  <div class="card">
-    <div class="row-between" style="margin-bottom:10px">
-      <h2 style="margin:0">🩺 平台可用性（连接 / 登录态 / 风控）</h2>
-      <button id="btnHealth" style="padding:6px 12px">重新巡检</button>
-    </div>
-    <div class="sub" id="healthSummary" style="margin-bottom:8px">尚未巡检。投递/采集前建议先点「重新巡检」，避免「跑完 50 个却投出 0 个」。</div>
-    <div id="healthList" class="health-list"></div>
-  </div>
-
-  <div class="card">
-    <h2>① 选择投递平台（可多选）</h2>
-    <p class="conn-summary" id="connSummary">正在检测各平台浏览器连接…</p>
-    <div class="platforms" id="platforms"></div>
-    <div class="connbar">
-      <label class="checkline"><input type="checkbox" id="onlyConnected" checked /> 仅投递已连接的平台（自动跳过未连接）</label>
-      <button id="btnRefreshConn">刷新连接状态</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>② 投递设置</h2>
-    <div class="fields">
-      <div class="field">
-        <label>每平台投递数量（份）</label>
-        <input type="number" id="limit" value="20" min="1" max="200" />
+  <!-- ===== Main ===== -->
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <h1 id="viewTitle">首页看板</h1>
+        <div class="sub" id="viewSub">平台状态 · 投递漏斗 · AI 能力总览</div>
       </div>
-      <div class="field">
-        <label>每次投递间隔（秒）</label>
-        <input type="number" id="interval" value="20" min="1" max="300" />
-      </div>
-      <div class="field">
-        <label>只投最近发布的岗位（分钟，0=不限）</label>
-        <input type="number" id="since" value="0" min="0" />
-      </div>
-      <div class="field" style="flex-basis:100%">
-        <label>目标职位（逗号分隔，如「Java,前端开发」；留空=不限职位，按这些词筛选投递）</label>
-        <input type="text" id="expectedPositions" placeholder="Java,前端开发,Java开发工程师" />
-      </div>
-    </div>
-  </div>
-
-  <div class="card accent">
-    <h2>📇 我的档案</h2>
-    <div class="usage">👉 这些字段用于：官网投递「自动填表」建议值 · 邮箱投递【基本信息】 · 简历匹配个人背景。填一次即持久化到后端档案；官网遇自定义字段（如籍贯 / 政治面貌）留空时，你补填一次后按域名自动记忆。</div>
-
-    <div class="grp">
-      <div class="grp-cap">基本资料</div>
-      <div class="fields">
-        <div class="field"><label>姓名</label><input type="text" id="pfName" placeholder="张三" /></div>
-        <div class="field"><label>手机号</label><input type="text" id="pfPhone" placeholder="13800000000" /></div>
-        <div class="field"><label>邮箱</label><input type="text" id="pfEmail" placeholder="name@example.com（读登录验证码用）" /></div>
-        <div class="field"><label>学校</label><input type="text" id="pfSchool" placeholder="XX 大学" /></div>
-        <div class="field"><label>专业</label><input type="text" id="pfMajor" placeholder="计算机科学与技术" /></div>
-        <div class="field"><label>学历</label><input type="text" id="pfEducation" placeholder="本科 / 硕士" /></div>
-        <div class="field"><label>意向城市</label><input type="text" id="pfCity" placeholder="北京 / 上海" /></div>
-        <div class="field"><label>技能（逗号分隔）</label><input type="text" id="pfSkills" placeholder="Java,Spring,MySQL" /></div>
+      <div class="right">
+        <span class="pill info" id="aiPill"><span class="d"></span>AI 状态</span>
+        <button class="icon-btn" id="refreshBtn" title="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 12a9 9 0 11-3-6.7M21 3v6h-6"/></svg>
+        </button>
       </div>
     </div>
 
-    <div class="grp">
-      <div class="grp-cap">简历文件</div>
-      <div class="fields">
-        <div class="field" style="flex-basis:100%">
-          <label>简历文件路径（绝对路径 PDF；官网 / 邮箱投递附件用）</label>
-          <input type="text" id="pfResume" placeholder="C:/Users/xxx/Desktop/简历.pdf" />
+    <div class="view-wrap">
+      <!-- ============ Dashboard ============ -->
+      <section class="view active" id="view-dashboard">
+        <div class="grid cols-4" style="margin-bottom:16px">
+          <div class="card"><div class="stat"><div class="v" id="dTotal">–</div><div class="l">岗位总数</div></div></div>
+          <div class="card"><div class="stat"><div class="v" id="dApplied">–</div><div class="l">已投递 / 投递率</div></div></div>
+          <div class="card"><div class="stat"><div class="v sm" id="dRealJd">–</div><div class="l">真实 JD（可匹配）</div></div></div>
+          <div class="card"><div class="stat"><div class="v sm" id="dImgJd">–</div><div class="l">JD 长图（可查看）</div></div></div>
         </div>
-      </div>
-    </div>
 
-    <div class="actions" style="margin-top:6px">
-      <button id="btnSaveProfile">保存档案</button>
-      <span class="sub" id="pfSavedTip" style="margin-left:8px"></span>
-    </div>
-  </div>
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="card accent" style="grid-column:span 2">
+            <h2>投递漏斗 · 四向覆盖口径 <span class="tag">如实标注，不虚报覆盖率</span></h2>
+            <div class="funnel" id="funnelBar"></div>
+            <div class="legend" id="funnelLegend"></div>
+            <div class="note warn" id="matchBasisNote" style="margin-top:14px"></div>
+          </div>
+          <div class="card">
+            <h2>AI 能力</h2>
+            <div id="aiBox"></div>
+          </div>
+        </div>
 
-  <div class="card">
-    <h2>🖊 官网表单记忆（人工补填后记录）</h2>
-    <div class="sub" style="margin-bottom:12px">官网投递时，简历 / 档案里没有的字段（如籍贯、政治面貌、身高）会留空。你在官网窗口手填完并停留在该表单页后，点下面按钮把当前页面字段按域名记录到记忆，下次同一网站自动填写。</div>
-    <div class="actions">
-      <button id="btnRememberForm">记录当前官网表单</button>
-      <span class="sub" id="rememberTip" style="margin-left:8px"></span>
-    </div>
-  </div>
+        <div class="card">
+          <h2>平台通道 <span class="tag">点击「检查登录」在调试 Chrome 窗口手动过验证码</span></h2>
+          <div class="grid cols-5" id="pfGrid"></div>
+        </div>
+      </section>
 
-  <div class="card accent">
-    <h2>📧 邮箱直投（无需登录）</h2>
-    <div class="usage">👉 offerbiu 岗位里写着招聘邮箱的，可直接把简历发到 HR 邮箱 —— <b>无需任何登录</b>。这是 offerbiu 上唯一能全自动跑通的投递方式（官网表单通道多被手机/微信登录挡住）。三步：①「采集关键词岗位」扩池 → ②「扫描招聘邮箱」筛选 → ③ 勾选后「批量邮箱直投」。</div>
-    <div class="fields" style="margin-bottom:10px">
-      <div class="field" style="flex-basis:100%">
-        <label>① 采集关键词岗位（逗号分隔。offerbiu 匿名只能翻 3 页，用搜索框按关键词精准扩池）</label>
-        <input type="text" id="collectKeywords" value="软件,Java,前端,后端,测试,算法,数据,AI,全栈,运维,Python" />
-      </div>
-    </div>
-    <div class="actions" style="margin-bottom:14px">
-      <button id="btnCollectKeywords">采集关键词岗位</button>
-      <span class="sub" id="collectTip" style="margin-left:8px"></span>
-    </div>
-    <div class="fields">
-      <div class="field">
-        <label>② 扫描数量（个岗位）</label>
-        <input type="number" id="scanLimit" value="20" min="1" max="100" />
-      </div>
-      <div class="field">
-        <label>起始偏移（跳过前 N 个）</label>
-        <input type="number" id="scanOffset" value="0" min="0" />
-      </div>
-    </div>
-    <div class="actions" style="margin-top:10px">
-      <button id="btnScanEmails">扫描招聘邮箱</button>
-      <button class="primary" id="btnEmailApply" disabled>批量邮箱直投（选中 0 个）</button>
-      <button id="btnPreviewTailor">预览定制简历</button>
-      <label class="checkline" id="forceWrap" style="display:none;gap:6px;align-items:center">
-        <input type="checkbox" id="chkForceApply" />
-        <span>强制投递（忽略跨公司隔离标记）</span>
-      </label>
-      <label class="checkline" style="display:inline-flex;gap:6px;align-items:center">
-        <input type="checkbox" id="chkTailor" />
-        <span>一岗一简历（按 JD 定制简历附件）</span>
-      </label>
-      <span class="sub" id="scanTip" style="margin-left:8px"></span>
-    </div>
-    <div id="emailResults" style="margin-top:12px"><div class="sub">尚未扫描。点「扫描招聘邮箱」开始。</div></div>
-  </div>
+      <!-- ============ Deliver ============ -->
+      <section class="view" id="view-deliver">
+        <div class="card">
+          <div class="tabs" id="deliverTabs">
+            <button data-tab="batch" class="active">批量投递</button>
+            <button data-tab="reply">自动回复</button>
+            <button data-tab="email">邮箱直投</button>
+          </div>
 
-  <div class="card">
-    <div class="actions">
-      <button class="primary" id="btnStart">开始投递</button>
-      <button id="btnStop" disabled>停止</button>
-      <button id="btnClear">清空日志</button>
-      <button id="btnOpen">打开调试浏览器</button>
-    </div>
-  </div>
+          <!-- batch -->
+          <div class="tabpane" id="tab-batch">
+            <div class="row2">
+              <div><label class="f">平台</label>
+                <select id="batchPlatform"></select></div>
+              <div><label class="f">来源（source）</label>
+                <select id="batchSource"></select></div>
+            </div>
+            <label class="f">职位关键词（逗号分隔，留空=全部）</label>
+            <input id="batchKeywords" placeholder="如：Java,后端,实习" />
+            <div style="margin-top:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+              <label class="toggle"><input type="checkbox" id="batchExclude" checked /> 排除已投递</label>
+              <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
+              <button class="btn primary" id="batchRun">开始投递</button>
+            </div>
+            <div class="progress"><i id="batchBar"></i></div>
+            <div class="out" id="batchOut"></div>
+          </div>
 
-  <div class="card">
-    <div class="row-between" style="margin-bottom:10px">
-      <h2 style="margin:0">③ 实时进度</h2>
-      <span class="sub" id="progressText">空闲</span>
-    </div>
-    <div class="log" id="log"></div>
-  </div>
+          <!-- reply -->
+          <div class="tabpane" id="tab-reply" style="display:none">
+            <div class="row2">
+              <div><label class="f">平台</label><select id="replyPlatform"></select></div>
+              <div><label class="f">模式</label>
+                <select id="replyMode"><option value="preview">预览（不发送）</option><option value="real">真实发送</option></select></div>
+            </div>
+            <label class="toggle" style="margin-top:12px"><input type="checkbox" id="replyUnread" checked /> 仅处理未读消息</label>
+            <div style="margin-top:14px;display:flex;gap:10px">
+              <button class="btn primary" id="replyRun">开始自动回复</button>
+              <button class="btn" id="replyStop">停止</button>
+              <span class="muted small" id="replyStatus" style="align-self:center"></span>
+            </div>
+            <div class="out" id="replyOut"></div>
+          </div>
 
-  <div class="card">
-    <h2>④ 自动回复 / 消息跟进</h2>
-    <div class="sub" style="margin-bottom:12px">HR 发来消息时自动识别意图并回复，像职得鸭一样托管沟通。建议先用「预览」观察效果，确认无误再切「真实发送」。</div>
-    <div id="aiStatusBadge" class="badge" style="margin-bottom:10px">AI 话术：检测中…</div>
-    <div class="fields">
-      <div class="field">
-        <label>平台</label>
-        <select id="replyPlatform">
-          <option value="boss">BOSS 直聘</option>
-          <option value="liepin">猎聘</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>处理会话数量（0 = 全部）</label>
-        <input type="number" id="replyLimit" value="0" min="0" max="100" />
-      </div>
-      <div class="field">
-        <label>模式</label>
-        <select id="replyMode">
-          <option value="preview">预览（仅生成回复，不发送）</option>
-          <option value="send">真实发送</option>
-        </select>
-      </div>
-    </div>
-    <div class="actions" style="margin-top:12px">
-      <label class="checkline"><input type="checkbox" id="replyUnread" checked /> 仅处理未读会话</label>
-      <label class="checkline"><input type="checkbox" id="replyUseAi" checked /> AI 生成话术（未配置模型时自动用规则）</label>
-      <button class="primary" id="btnReplyStart">开始自动回复</button>
-      <button id="btnReplyStop" disabled>停止</button>
-    </div>
-    <div class="fields" style="margin-top:12px">
-      <div class="field">
-        <label>AI 助手名称（标记「这是 AI 回复」用）</label>
-        <input type="text" id="aiName" value="懒懒" />
-      </div>
-      <div class="field" style="align-self:end">
-        <label class="checkline"><input type="checkbox" id="signAi" checked /> 在回复中标注 AI 身份（如「【懒懒】」）</label>
-      </div>
-    </div>
-    <div class="sub" style="margin-top:10px">仅回复与「目标职位」相关的 HR（职位设置见上方②）；不相关职位不自动回复。AI 名称与署名会随开始投递/自动回复时自动保存到档案。</div>
+          <!-- email -->
+          <div class="tabpane" id="tab-email" style="display:none">
+            <div class="grid cols-3" style="gap:14px">
+              <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">① 采集关键词</h2>
+                <div class="out" id="emailStep1" style="max-height:120px"></div>
+                <button class="btn primary sm" id="emailCollect" style="margin-top:8px">采集校招关键词</button></div>
+              <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">② 扫描招聘邮箱</h2>
+                <div class="out" id="emailStep2" style="max-height:120px"></div>
+                <button class="btn primary sm" id="emailScan" style="margin-top:8px">扫描邮箱</button></div>
+              <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">③ 批量直投</h2>
+                <div class="out" id="emailStep3" style="max-height:120px"></div>
+                <button class="btn primary sm" id="emailApply" style="margin-top:8px">开始投递</button></div>
+            </div>
+            <div class="note warn">邮箱直投走 offerbiu 微信推文 / 官网表单通道，<b>无需登录平台</b>。真实发送前请先预览，并人工剔除「跨公司串号」候选（个人 QQ / HR-SaaS 平台邮箱已自动隔离）。</div>
+            <div class="progress"><i id="emailBar"></i></div>
+          </div>
+        </div>
+      </section>
 
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:8px"><b>自动监视（后台按时效回复）</b>：开启后后端每间隔一段时间自动检查未读/未回的 HR 消息并回复，HR 来消息不必手动点。</div>
-    <div id="watchBadge" class="badge" style="margin-bottom:8px">监视器：检测中…</div>
-    <div class="fields">
-      <div class="field">
-        <label>监视平台（逗号分隔）</label>
-        <input type="text" id="watchPlatforms" value="boss,liepin" />
-      </div>
-      <div class="field">
-        <label>检查间隔（秒）</label>
-        <input type="number" id="watchInterval" value="180" min="30" max="3600" />
-      </div>
-      <div class="field">
-        <label>发送间隔（秒·防风控）</label>
-        <input type="number" id="watchThrottle" value="45" min="3" max="600" />
-      </div>
-      <div class="field">
-        <label>单轮上限（0=不限）</label>
-        <input type="number" id="watchMaxPerRun" value="20" min="0" max="200" />
-      </div>
-      <div class="field">
-        <label>同HR冷却（秒）</label>
-        <input type="number" id="watchHrCooldown" value="3600" min="0" max="86400" />
-      </div>
-    </div>
-    <div class="actions" style="margin-top:10px">
-      <label class="checkline"><input type="checkbox" id="watchRealSend" checked /> 直接真实发送（否则仅记录）</label>
-      <label class="checkline"><input type="checkbox" id="watchUseAi" checked /> AI 生成话术</label>
-      <button class="primary" id="btnWatchStart">开启监视</button>
-      <button id="btnWatchStop" disabled>关闭监视</button>
-      <button id="btnWatchStatus">刷新状态</button>
-    </div>
-    <div id="watchStatusLine" class="sub" style="margin-top:8px"></div>
+      <!-- ============ Records ============ -->
+      <section class="view" id="view-records">
+        <div class="card" style="margin-bottom:16px">
+          <h2>覆盖漏斗</h2>
+          <div class="funnel" id="recFunnel"></div>
+          <div class="legend" id="recLegend"></div>
+        </div>
+        <div class="card">
+          <h2>岗位列表 <span class="tag" id="recCount"></span></h2>
+          <div class="row2" style="margin-bottom:12px">
+            <div><select id="recSource"><option value="">全部来源</option></select></div>
+            <div><select id="recStatus"><option value="">全部状态</option><option value="applied">已投递</option><option value="candidate">候选</option><option value="unavailable">不可用</option></div>
+          </div>
+          <div style="overflow:auto">
+            <table class="tbl" id="recTbl">
+              <thead><tr><th>公司</th><th>职位</th><th>平台</th><th>JD</th><th>匹配</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:8px"><b>自动投递监视（后台自动连投）</b>：开启后后端每间隔一段时间自动对该平台投一批岗位（默认每轮 10 个、已投过自动跳过）。与「自动回复监视」互斥占用浏览器，互不打架——一方运行时另一方自动让路。</div>
-    <div id="applyWatchBadge" class="badge" style="margin-bottom:8px">投递监视器：检测中…</div>
-    <div class="fields">
-      <div class="field">
-        <label>投递平台（逗号分隔）</label>
-        <input type="text" id="applyWatchPlatforms" value="boss" />
-      </div>
-      <div class="field">
-        <label>筛选关键词（空=全部）</label>
-        <input type="text" id="applyWatchKeyword" placeholder="如 Java 后端" />
-      </div>
-      <div class="field">
-        <label>每轮投递数</label>
-        <input type="number" id="applyWatchLimit" value="10" min="1" max="100" />
-      </div>
-      <div class="field">
-        <label>检查间隔（秒）</label>
-        <input type="number" id="applyWatchInterval" value="600" min="60" max="7200" />
-      </div>
-    </div>
-    <div class="actions" style="margin-top:10px">
-      <button class="primary" id="btnApplyWatchStart">开启自动投递</button>
-      <button id="btnApplyWatchStop" disabled>关闭自动投递</button>
-      <button id="btnApplyWatchStatus">刷新状态</button>
-    </div>
-    <div id="applyWatchStatusLine" class="sub" style="margin-top:8px"></div>
+      <!-- ============ Resume ============ -->
+      <section class="view" id="view-resume">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>候选人档案</h2>
+            <div id="profileBox"></div>
+            <label class="f">上传 / 解析简历（PDF）</label>
+            <input type="file" id="resumeFile" accept="application/pdf" />
+            <button class="btn primary sm" id="resumeParse" style="margin-top:8px">解析简历</button>
+            <div class="out" id="resumeParseOut"></div>
+          </div>
+          <div class="card">
+            <h2>简历版本</h2>
+            <div class="kv"><span>当前使用</span><b id="resVerNow">–</b></div>
+            <div style="margin-top:12px;display:flex;gap:10px">
+              <button class="btn" data-ver="original">用原始简历</button>
+              <button class="btn" data-ver="optimized">用优化简历</button>
+            </div>
+            <div class="note" id="resVerNote">双版本切换：每个投递/求职信接口都会带上所选底稿。</div>
 
-    <div class="divider" style="margin:16px 0 12px;border-top:1px dashed #d8dee4"></div>
-    <h2 style="margin-top:0">⑤ 高级功能（对标职得鸭 · 全部免费本地跑）</h2>
-    <div class="sub" style="margin-bottom:10px">
-      求职信模板 · 简历版本 · 运行时间段 · 猎聘交换联系方式 · 一岗一简历（PDF/PNG 双通道）· 面试攻略。
-      全部走<b>本地 LLM</b>，没有金币、套餐、充值这类概念。
-    </div>
+            <h2 style="margin-top:20px">JD 长图查看器</h2>
+            <select id="jdImgJob" style="margin-bottom:10px"><option value="">选择岗位…</option></select>
+            <div id="jdImgWrap"></div>
+          </div>
+        </div>
 
-    <div class="fields">
-      <div class="field">
-        <label>目标岗位（求职信 / 定制简历 / 面试攻略用）</label>
-        <select id="advJob"><option value="">加载中…</option></select>
-      </div>
-      <div class="field">
-        <label>简历版本</label>
-        <select id="advResumeVersion">
-          <option value="original">原始简历</option>
-          <option value="optimized">优化后的简历</option>
-          <option value="tailored">一岗一简历（按 JD 定制）</option>
-        </select>
-      </div>
-      <div class="field" style="align-self:end">
-        <button id="btnSaveResumeVersion">保存简历版本</button>
-      </div>
-    </div>
-    <div id="advResumeVersionNote" class="sub" style="margin-top:6px"></div>
+        <div class="card" style="margin-top:16px">
+          <h2>求职信模板 <span class="tag">支持变量 {职位名称}{公司名称}{工作地点}{我的姓名}{期望岗位}</span></h2>
+          <div class="row2">
+            <div><input id="clName" placeholder="模板名称，如：通用求职信" /></div>
+            <div><button class="btn primary sm" id="clAdd">新增模板</button></div>
+          </div>
+          <textarea id="clBody" rows="3" placeholder="如：您好，我是{我的姓名}，应聘{职位名称}…"></textarea>
+          <div id="clList" style="margin-top:12px"></div>
+        </div>
+      </section>
 
-    <div class="divider" style="margin:12px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:6px"><b>求职信模板</b>：留空则由 AI 按 JD 生成；填了就用你的模板（<b>不消耗任何额度</b>）。</div>
-    <div class="fields">
-      <div class="field">
-        <label>模板名称</label>
-        <input type="text" id="advLetterName" placeholder="如：通用求职信模板" />
-      </div>
-    </div>
-    <textarea id="advLetterBody" rows="4" placeholder="可用变量：{职位名称} {公司名称} {工作地点} {我的姓名} {期望岗位}" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:8px;font:inherit"></textarea>
-    <div class="actions" style="margin-top:8px">
-      <button class="primary" id="btnSaveLetterTpl">保存模板</button>
-      <button id="btnClearLetterTpl">清空模板</button>
-      <button id="btnGenLetter">按当前岗位生成求职信</button>
-    </div>
-    <div id="advLetterOut" class="sub" style="margin-top:8px;white-space:pre-wrap"></div>
+      <!-- ============ Advanced ============ -->
+      <section class="view" id="view-advanced">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>一岗一简历（定制）</h2>
+            <div class="row2">
+              <div><label class="f">岗位</label><select id="advJob"><option value="">加载中…</option></select></div>
+              <div><label class="f">简历版本</label><select id="advResumeVersion"><option value="original">原始</option><option value="optimized">优化</option></select></div>
+            </div>
+            <button class="btn primary" id="advTailor" style="margin-top:14px">生成定制简历</button>
+            <div class="out" id="advResumeOut"></div>
+          </div>
+          <div class="card">
+            <h2>面试攻略</h2>
+            <div class="row2">
+              <div><label class="f">岗位</label><select id="advIvJob"><option value="">加载中…</option></select></div>
+              <div><label class="f">公司</label><input id="advIvCompany" placeholder="如：字节跳动" /></div>
+            </div>
+            <button class="btn primary" id="advInterview" style="margin-top:14px">生成攻略</button>
+            <div class="out" id="advInterviewOut"></div>
+          </div>
+        </div>
 
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:6px"><b>一岗一简历（双通道）</b>：有 HR 邮箱走 PDF 邮件（可解析）；没有就走聊天 PNG 图（HR 在对话里直接看到）。</div>
-    <div class="actions">
-      <button id="btnChannelDecide">判断当前岗位走哪条通道</button>
-      <button class="primary" id="btnGenResume">生成定制简历</button>
-      <button id="btnGenChatPng">生成聊天用 PNG 简历</button>
-    </div>
-    <div id="advResumeOut" class="sub" style="margin-top:8px"></div>
+        <div class="grid cols-2" style="margin-top:16px">
+          <div class="card">
+            <h2>运行时间段 <span class="tag">到点自动启停，更像真人</span></h2>
+            <div id="schedBox"></div>
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <input id="schedStart" type="time" style="width:auto" /> <span class="muted" style="align-self:center">至</span>
+              <input id="schedEnd" type="time" style="width:auto" />
+              <button class="btn primary sm" id="schedAdd">添加时段</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>交换联系方式 <span class="tag">猎聘：发简历 / 换微信 / 换电话</span></h2>
+            <div id="exBox"></div>
+            <button class="btn primary" id="exRun" style="margin-top:12px">执行交换动作</button>
+            <div class="out" id="exOut"></div>
+          </div>
+        </div>
+      </section>
 
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:6px"><b>面试攻略</b>：按 JD + 你的简历生成考察重点与高概率面试题（含答题要点，不会编造简历里没有的经历）。</div>
-    <div class="actions">
-      <button class="primary" id="btnGenInterview">生成面试攻略</button>
+      <!-- ============ Logs ============ -->
+      <section class="view" id="view-logs">
+        <div class="card">
+          <h2>近期投递 / 申请记录</h2>
+          <div style="overflow:auto">
+            <table class="tbl" id="logTbl">
+              <thead><tr><th>公司</th><th>职位</th><th>平台</th><th>方式</th><th>状态</th><th>时间</th></tr></thead>
+              <tbody><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </div>
-    <div id="advInterviewOut" class="sub" style="margin-top:8px;white-space:pre-wrap"></div>
-
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:6px"><b>JD 长图</b>：微信校招推文的 JD 是<b>图片长图</b>（无法文本匹配），已自动抓取存档 —— 在此查看真实岗位内容，作为投递前的人工判断依据。</div>
-    <div class="fields">
-      <div class="field">
-        <label>岗位（已抓取 JD 长图）</label>
-        <select id="advImageJob"><option value="">加载中…</option></select>
-      </div>
-      <div class="field" style="align-self:end">
-        <button id="btnViewImageJd">查看长图</button>
-      </div>
-    </div>
-    <div id="advImageJdBox" style="margin-top:8px;display:none">
-      <div class="sub" id="advImageJdMeta" style="margin-bottom:4px"></div>
-      <img id="advImageJdImg" style="max-width:100%;border:1px solid var(--line);border-radius:8px" alt="JD 长图" />
-    </div>
-
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:6px"><b>运行时间段</b>：只在你配置的时间段内跑，到点自动停；更像真人作息，也降低风控概率。</div>
-    <div class="fields">
-      <div class="field">
-        <label>平台</label>
-        <select id="advSchedPlatform">
-          <option value="boss">BOSS 直聘</option>
-          <option value="liepin">猎聘</option>
-          <option value="job51">51job</option>
-          <option value="zhilian">智联招聘</option>
-          <option value="offerbiu">企业官网</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>时间段（逗号分隔，如 09:30-12:00,14:00-18:00）</label>
-        <input type="text" id="advSchedSlots" placeholder="留空=全天运行" />
-      </div>
-      <div class="field" style="align-self:end">
-        <label class="checkline"><input type="checkbox" id="advSchedEnabled" /> 启用</label>
-      </div>
-    </div>
-    <div class="actions" style="margin-top:8px">
-      <button class="primary" id="btnSaveSchedule">保存时间段</button>
-      <button id="btnLoadSchedule">读取当前平台配置</button>
-    </div>
-    <div id="advScheduleOut" class="sub" style="margin-top:8px"></div>
-
-    <div class="divider" style="margin:14px 0 10px;border-top:1px dashed #d8dee4"></div>
-    <div class="sub" style="margin-bottom:6px"><b>猎聘交换联系方式</b>：复聊后自动点「发简历 / 换手机号 / 换微信号」；对方已发起时自动点同意，索要中则不重复点。</div>
-    <div class="actions">
-      <label class="checkline"><input type="checkbox" class="advExchange" value="sendResume" /> 发简历</label>
-      <label class="checkline"><input type="checkbox" class="advExchange" value="changePhone" /> 交换手机号</label>
-      <label class="checkline"><input type="checkbox" class="advExchange" value="changeWechat" /> 交换微信号</label>
-      <button class="primary" id="btnSaveExchange">保存</button>
-    </div>
-    <div id="advExchangeOut" class="sub" style="margin-top:8px"></div>
   </div>
 </div>
 
+<!-- modal -->
+<div class="modal" id="modal"><div class="box">
+  <div class="hd"><h3 id="modalTitle">详情</h3><button class="icon-btn" id="modalClose">✕</button></div>
+  <div class="bd" id="modalBody"></div>
+</div></div>
+
 <script>
+"use strict";
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const PLATFORMS = [
-  { id: 'boss',     name: 'BOSS 直聘', hint: '沟通效率高' },
-  { id: 'job51',    name: '51job',     hint: '岗位库大' },
-  { id: 'liepin',   name: '猎聘',       hint: '中高端' },
-  { id: 'zhilian',  name: '智联招聘',   hint: '综合' },
-  { id: 'offerbiu', name: '企业官网',   hint: 'Offerbiu·校招' },
+  {id:'boss', name:'BOSS直聘', color:'#16c2a3'},
+  {id:'liepin', name:'猎聘', color:'#0a64ee'},
+  {id:'job51', name:'51job', color:'#ff5e00'},
+  {id:'zhilian', name:'智联招聘', color:'#ff4d4f'},
+  {id:'offerbiu', name:'offerbiu', color:'#7c5cff'},
 ];
-const NAME = Object.fromEntries(PLATFORMS.map(p => [p.id, p.name]));
-const selected = new Set(['boss']);
+const pfName = id => (PLATFORMS.find(p=>p.id===id)||{}).name || id;
 
-// 各平台连接状态（来自 /api/browser/connections）与「仅投已连接」开关
-let connections = {};
-let onlyConnected = true;
-let autoApplied = false;
+async function api(path, opts={}){
+  const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts));
+  let data=null; try{ data = await res.json(); }catch(e){}
+  if(!res.ok) throw new Error((data&&data.error)||('HTTP '+res.status));
+  return data;
+}
+async function apiText(path, opts={}){
+  const res = await fetch(path, opts);
+  return res.text();
+}
+function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-// API 基地址：页面若不是从 4400 打开的（如文件预览/其它端口），仍直连后端 4400
-const API_BASE = (location.protocol.startsWith('http') && location.port === '4400')
-  ? ''
-  : 'http://127.0.0.1:4400';
+/* ---------- sidebar nav ---------- */
+const VIEW_META = {
+  dashboard:{t:'首页看板', s:'平台状态 · 投递漏斗 · AI 能力总览'},
+  deliver:{t:'投递中心', s:'批量投递 · 自动回复 · 邮箱直投'},
+  records:{t:'职位记录', s:'投递漏斗 · 岗位列表 · JD 长图'},
+  resume:{t:'简历中心', s:'候选人档案 · 简历版本 · 求职信模板'},
+  advanced:{t:'高级功能', s:'定制简历 · 面试攻略 · 时间段 · 交换联系'},
+  logs:{t:'运行日志', s:'近期投递与申请记录'},
+};
+$$('#nav a').forEach(a=>a.addEventListener('click',()=>navigate(a.dataset.view)));
+function navigate(view){
+  $$('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.view===view));
+  $$('.view').forEach(v=>v.classList.toggle('active', v.id==='view-'+view));
+  $('#viewTitle').textContent = VIEW_META[view].t;
+  $('#viewSub').textContent = VIEW_META[view].s;
+  if(view==='dashboard') loadDashboard();
+  if(view==='records') loadRecords();
+  if(view==='resume') loadResume();
+  if(view==='advanced') loadAdvanced();
+  if(view==='logs') loadLogs();
+}
+$('#refreshBtn').addEventListener('click', ()=>{ loadDashboard(); if($('#view-records').classList.contains('active')) loadRecords(); });
 
-const $ = (s) => document.querySelector(s);
-const logEl = $('#log');
+/* ---------- service health ---------- */
+async function checkSvc(){
+  try{
+    const r = await api('/api/health');
+    $('#svcDot').className='dot on'; $('#svcTxt').textContent='后端在线';
+    return true;
+  }catch(e){
+    $('#svcDot').className='dot off'; $('#svcTxt').textContent='后端离线'; return false;
+  }
+}
+async function loadAi(){
+  try{
+    const r = await api('/api/ai-status');
+    const on = !!r && (r.ok || r.enabled || r.configured);
+    $('#aiPill').className = 'pill ' + (on?'ok':'warn');
+    $('#aiPill').innerHTML = '<span class="d"></span>' + (on?'AI 已配置':'AI 未配置');
+    $('#aiBox').innerHTML = '<div class="kv"><span>模型</span><b>'+(esc(r&&r.model)||'–')+'</b></div>'
+      + '<div class="kv"><span>状态</span><b>'+(on?'可用':'需配置')+'</b></div>'
+      + '<div class="note small" style="margin-top:10px">'+(esc(r&&r.note)||'本地调用 LLM（deepseek），无计费')+'</div>';
+  }catch(e){
+    $('#aiPill').className='pill warn'; $('#aiPill').innerHTML='<span class="d"></span>AI 未知';
+    $('#aiBox').innerHTML='<div class="note bad">获取 AI 状态失败：'+esc(e.message)+'</div>';
+  }
+}
 
-function renderPlatforms() {
-  $('#platforms').innerHTML = PLATFORMS.map(p => {
-    const conn = connections[p.id];
-    const connOn = !!(conn && conn.connected);
-    const connCls = conn ? (connOn ? 'on' : 'off') : '';
-    const connLabel = conn ? (connOn ? '● 已连接' : '○ 未连接') : '· 检测中';
-    const offCls = conn && !connOn ? 'off' : '';
-    return `
-    <div class="pf ${selected.has(p.id) ? 'sel' : ''} ${offCls}" data-id="${p.id}">
-      <div class="dot">${selected.has(p.id) ? '✓' : ''}</div>
-      <div>
-        <div class="nm">${p.name}</div>
-        <div class="hint">${p.hint}</div>
-        <div class="conn ${connCls}">${connLabel}</div>
-      </div>
-    </div>`;
+/* ---------- dashboard ---------- */
+function renderFunnel(box, legend, ms, total){
+  const jd = ms.jdBased||0, img = ms.imageJd||0, card = ms.cardTextOnly||0, none = Math.max(0,(ms.titleOnly||0));
+  const segs = [['seg-jd',jd,'真JD'],['seg-img',img,'长图'],['seg-card',card,'卡片'],['seg-none',none,'无JD']];
+  const sum = jd+img+card+none || 1;
+  box.innerHTML = segs.filter(s=>s[1]>0).map(s=>{
+    const pct = (s[1]/sum*100).toFixed(1);
+    return '<span class="'+s[0]+'" style="width:'+pct+'%" title="'+s[2]+': '+s[1]+'">'+ (pct>8? s[1] : '') +'</span>';
   }).join('');
-  $('#platforms').querySelectorAll('.pf').forEach(el => {
-    el.onclick = () => {
-      const id = el.dataset.id;
-      selected.has(id) ? selected.delete(id) : selected.add(id);
-      renderPlatforms();
-    };
+  legend.innerHTML = segs.map(s=>'<span><i class="'+s[0]+'"></i>'+s[2]+' '+s[1]+'</span>').join('');
+}
+async function loadDashboard(){
+  let f=null;
+  try{ f = await api('/api/stats/funnel'); }catch(e){}
+  if(f){
+    $('#dTotal').textContent = f.total||0;
+    const ap = f.byStatus? (f.byStatus.applied||0):0;
+    $('#dApplied').textContent = ap + ' / ' + (f.appliedRate||0) + '%';
+    const ms = f.matchScore||{};
+    $('#dRealJd').textContent = ms.jdBased||0;
+    $('#dImgJd').textContent = ms.imageJd||0;
+    renderFunnel($('#funnelBar'), $('#funnelLegend'), ms, f.total);
+    const real = ms.jdBased||0, img = ms.imageJd||0, card = ms.cardTextOnly||0, nojd = ms.titleOnly||0;
+    $('#matchBasisNote').textContent = '⚠️ 覆盖口径：真 JD '+real+'（'+(ms.realJdRate||0)+'%）· 长图 '+img+'（可看不可匹配）· 卡片摘要 '+card+'（非岗位描述）· 无 JD '+nojd+'（不参与排序）。只有真 JD 那 '+real+' 个能用于匹配 / 求职信 / 定制简历。';
+  }
+  loadAi();
+  // platform cards
+  const grid = $('#pfGrid'); grid.innerHTML='';
+  let health = {};
+  try{ const h = await api('/api/platforms/health'); if(h && typeof h==='object') health = h; }catch(e){}
+  PLATFORMS.forEach(p=>{
+    const st = health[p.id]||{};
+    let label='未知', cls='b-mut';
+    if(st.connected===false && !st.endpoint){ label='未配置'; cls='b-mut'; }
+    else if(st.status==='logged'||st.logged){ label='已登录'; cls='b-ok'; }
+    else if(st.status==='offline'||st.connected===false){ label='离线'; cls='b-bad'; }
+    else if(st.status==='blocked'){ label='风控'; cls='b-warn'; }
+    else if(st.status==='anon'||st.status==='not-logged-in'){ label='未登录'; cls='b-warn'; }
+    else if(st.connected){ label='已连接'; cls='b-info'; }
+    const c = el('div','card pf');
+    c.innerHTML = '<div class="top"><div class="ava" style="background:'+p.color+'">'+esc(p.name[0])+'</div>'
+      + '<div class="nm">'+esc(p.name)+'</div><span class="st '+cls+'">'+label+'</span></div>'
+      + '<div class="row"><button class="btn sm" data-check="'+p.id+'">检查登录</button>'
+      + '<button class="btn sm" data-open="'+p.id+'">打开窗口</button></div>';
+    grid.appendChild(c);
   });
+  $$('#pfGrid [data-check]').forEach(b=>b.addEventListener('click', async ()=>{
+    b.textContent='检查中…'; b.disabled=true;
+    try{ const r = await api('/api/check-login?platform='+b.dataset.check); b.textContent = (r&&r.logged)?'已登录':'未登录'; }
+    catch(e){ b.textContent='失败'; }
+    setTimeout(()=>{ b.textContent='检查登录'; b.disabled=false; }, 1500);
+  }));
+  $$('#pfGrid [data-open]').forEach(b=>b.addEventListener('click', ()=>{
+    api('/api/browser/exec', {method:'POST', body:JSON.stringify({platform:b.dataset.open, action:'focus'})}).catch(()=>{});
+  }));
 }
 
-/** 拉取各平台连接状态：自动选中已连接平台（仅首次），并更新卡片状态 */
-async function updateConnections() {
-  try {
-    const r = await fetch(API_BASE + '/api/browser/connections');
-    const j = await r.json();
-    connections = (j && j.connections) || {};
-    const connIds = PLATFORMS.filter(p => connections[p.id] && connections[p.id].connected).map(p => p.id);
-    if (!autoApplied) {
-      autoApplied = true;
-      if (connIds.length) {
-        selected.clear();
-        connIds.forEach(id => selected.add(id));
-        line(`已自动选中已连接的平台：${connIds.map(id => NAME[id]).join('、')}`, 'info');
-      } else {
-        line('暂未检测到任何已连接的平台。请双击桌面「投递Agent」启动各平台调试 Chrome 窗口。', 'warn');
+/* ---------- deliver: platforms selects ---------- */
+function fillPlatformSelects(){
+  const opts = '<option value="">全部平台</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
+  ['#batchPlatform','#replyPlatform'].forEach(s=>{ if($(s)) $(s).innerHTML = opts; });
+  $('#batchSource').innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
+}
+$('#deliverTabs').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  $$('#deliverTabs button').forEach(x=>x.classList.toggle('active', x===b));
+  ['batch','reply','email'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
+});
+
+/* batch apply */
+$('#batchRun').addEventListener('click', async ()=>{
+  const btn=$('#batchRun'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>投递中';
+  $('#batchOut').textContent=''; $('#batchBar').style.width='0%';
+  try{
+    const body = {
+      platform: $('#batchPlatform').value || undefined,
+      source: $('#batchSource').value || undefined,
+      criteria: {
+        excludeApplied: $('#batchExclude').checked,
+        keywords: $('#batchKeywords').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
+        realJdOnly: $('#batchReal').checked,
       }
-    }
-    renderPlatforms();
-    const total = PLATFORMS.length;
-    $('#connSummary').textContent = `已连接 ${connIds.length} / ${total} 个平台`;
-  } catch (_) {
-    $('#connSummary').textContent = '连接状态检测失败（后端可能离线）';
-  }
-}
-renderPlatforms();
-
-function now() {
-  const d = new Date();
-  return d.toTimeString().slice(0, 8);
-}
-function line(text, cls = 'dim') {
-  const el = document.createElement('div');
-  el.innerHTML = `<span class="t">[${now()}]</span> <span class="${cls}">${text}</span>`;
-  logEl.appendChild(el);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-function esc(s) {
-  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
-$('#btnClear').onclick = () => { logEl.innerHTML = ''; };
-$('#btnOpen').onclick = () => {
-  fetch(API_BASE + '/api/browser/exec', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ platform: 'boss', action: 'bringToFront' })
-  }).then(() => line('已尝试把调试浏览器窗口置顶（若未启动请先启动服务）。', 'info'))
-    .catch(e => line('置顶失败：' + e.message, 'err'));
-};
-
-let controller = null;
-let running = false;
-let officialRealSend = false; // 官网(offerbiu)真实投递确认标志：开始前需 explicit 确认
-
-$('#btnStop').onclick = () => {
-  if (controller) controller.abort();
-  running = false;
-  $('#btnStart').disabled = false;
-  $('#btnStop').disabled = true;
-  $('#progressText').textContent = '已请求停止';
-  line('已请求停止（服务端会完成当前这一条后停下）。', 'warn');
-};
-
-function handleEvent(e, pfName) {
-  switch (e.type) {
-    case 'start':
-      // total=0 时后端会给出「为什么没有岗位」的原因说明，用警示色突出，避免用户以为脚本坏了
-      line(`${pfName}：${esc(e.message)}`, e.total ? 'info' : 'warn');
-      $('#progressText').textContent = e.total ? `${pfName} 0/${e.total}` : `${pfName} 无岗位`;
-      break;
-    case 'progress':
-      $('#progressText').textContent = `${pfName} ${e.index}/${e.total}`;
-      line(`→ [${e.index}/${e.total}] ${esc(e.company || '')} ${esc(e.position || '')}`, 'dim');
-      break;
-    case 'result': {
-      const s = e.status || '';
-      const cls = s === 'applied' ? 'ok' : (s === 'error' ? 'err' : (s === 'skipped' ? 'dim' : 'warn'));
-      line(`✔ [${e.index}] ${s} — ${esc(e.message || '')}`, cls);
-      break;
-    }
-    case 'need_input':
-      line(`⚠ 需要人工处理（${e.inputType}）：${esc(e.message || '')} —— 请在调试浏览器里完成后继续`, 'warn');
-      break;
-    case 'done': {
-      const s = e.summary || {};
-      // 批量结果里的失败计数字段是 error（此前误写成 failed，导致「失败」恒显示 0）
-      const failed = s.error ?? s.failed ?? 0;
-      line(`${pfName} 完成：成功 ${s.applied ?? 0}，跳过 ${s.skipped ?? 0}，失败 ${failed}`, 'ok');
-      break;
-    }
-    case 'error':
-      line(`✖ ${esc(e.message || '未知错误')}`, 'err');
-      break;
-    default:
-      // 流尾会收到一个空对象（event: end），忽略以免打印无意义的 "{}"
-      if (e && Object.keys(e).length) line(esc(JSON.stringify(e)), 'dim');
-  }
-}
-
-async function runPlatform(pf, limit, intervalMs, sinceMinutes) {
-  controller = new AbortController();
-  // 目标职位 → 投递筛选关键词
-  const kwRaw = ($('#expectedPositions').value || '').split(/[,，、;；]+/).map(s => s.trim()).filter(Boolean);
-  const res = await fetch(API_BASE + '/api/apply/batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      // source 必须一起传：引擎按 source 过滤岗位库，只传 platform 会串平台
-      platform: pf, source: pf, limit, intervalMs, stream: true,
-      // 官网(offerbiu)：投递前先自动采集 offerbiu.com 岗位池并按匹配筛选；真实投递开关仅在用户确认后传 true；其余平台忽略此字段
-      ...(pf === 'offerbiu' ? { collect: 'offerbiu', realSend: officialRealSend === true } : {}),
-      criteria: { excludeApplied: true, ...(kwRaw.length ? { keywords: kwRaw } : {}) },
-      ...(sinceMinutes > 0 ? { sinceMinutes } : {}),
-    }),
-    signal: controller.signal,
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
-  }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const parts = buf.split('\n\n');
-    buf = parts.pop() || '';
-    for (const p of parts) {
-      for (const l of p.split('\n')) {
-        if (l.startsWith('data: ')) {
-          try { handleEvent(JSON.parse(l.slice(6)), NAME[pf] || pf); } catch (_) {}
-        }
-      }
-    }
-  }
-}
-
-$('#btnStart').onclick = async () => {
-  if (!selected.size) { line('请先选择至少一个平台。', 'warn'); return; }
-  onlyConnected = $('#onlyConnected').checked;
-  // 自动识别有连接的投递：勾选「仅投递已连接的平台」时，只跑已连接平台，自动跳过未连接
-  const runSet = onlyConnected
-    ? [...selected].filter(p => connections[p] && connections[p].connected)
-    : [...selected];
-  const skipped = onlyConnected
-    ? [...selected].filter(p => !(connections[p] && connections[p].connected))
-    : [];
-  if (!runSet.length) {
-    line('没有已连接的平台可投递。请先启动对应平台的调试 Chrome 窗口（双击桌面「投递Agent」），或取消勾选「仅投递已连接的平台」。', 'warn');
-    return;
-  }
-  if (skipped.length) {
-    line(`将跳过未连接平台：${skipped.map(p => NAME[p]).join('、')}`, 'warn');
-  }
-  const limit = Number($('#limit').value) || 20;
-  const intervalMs = (Number($('#interval').value) || 20) * 1000;
-  const sinceMinutes = Number($('#since').value) || 0;
-
-  // 官网(Offerbiu)真实投递闸门：开始批量前必须显式确认，否则仅预览不提交（防批量误投）
-  if (runSet.includes('offerbiu')) {
-    officialRealSend = window.confirm(
-      '⚠️ 即将对「企业官网(Offerbiu)」真实投递，流程为：\n'
-      + '① 自动采集 offerbiu.com 岗位 → ② 按你的目标职位筛选匹配岗位 → ③ 逐条打开官网投递入口；\n'
-      + '④ 需登录的官网用邮箱验证码自动登录 → ⑤ 按档案/记忆自动填表 + 上传简历并提交。\n\n'
-      + '• 表单字段会按你的档案与历史记忆自动填写；\n'
-      + '• 首次遇到未记忆的字段会标 need_manual，你在官网窗口手填一次后，下次同站自动复用；\n'
-      + '• 点「确定」= 真实投递；点「取消」= 仅采集+筛选预览，不真实提交。'
-    );
-    line(officialRealSend ? '已确认官网真实投递（将真实提交并附简历）。' : '官网投递未确认：将仅预览，不真实提交。', officialRealSend ? 'warn' : 'info');
-  } else {
-    officialRealSend = false;
-  }
-
-  running = true;
-  $('#btnStart').disabled = true;
-  $('#btnStop').disabled = false;
-  line(`开始任务：平台 ${runSet.map(p => NAME[p]).join('、')}，每平台 ${limit} 份，间隔 ${intervalMs / 1000}s`, 'info');
-
-  for (const pf of runSet) {
-    if (!running) break;
-    try {
-      await runPlatform(pf, limit, intervalMs, sinceMinutes);
-    } catch (e) {
-      if (e.name === 'AbortError') { line(`${NAME[pf]}：已停止。`, 'warn'); break; }
-      line(`${NAME[pf]} 失败：${esc(e.message)}`, 'err');
-    }
-  }
-  running = false;
-  $('#btnStart').disabled = false;
-  $('#btnStop').disabled = true;
-  $('#progressText').textContent = '全部完成';
-  line('本轮任务结束。', 'ok');
-};
-
-async function pollStatus() {
-  try {
-    const r = await fetch(API_BASE + '/api/health');
-    const j = await r.json();
-    const el = $('#pillApi');
-    el.textContent = '后端 在线';
-    el.className = 'pill on';
-    const aiEl = $('#pillAi');
-    if (j && j.ai) { aiEl.textContent = 'AI 已启用'; aiEl.className = 'pill on'; }
-    else { aiEl.textContent = 'AI 未启用(规则模式)'; aiEl.className = 'pill'; }
-  } catch (_) {
-    const el = $('#pillApi');
-    el.textContent = '后端 离线';
-    el.className = 'pill off';
-    const aiEl = $('#pillAi');
-    aiEl.textContent = 'AI 未知';
-    aiEl.className = 'pill';
-  }
-  try {
-    const r = await fetch(API_BASE + '/api/browser/sessions');
-    const j = await r.json();
-    const n = (j.sessions || []).length;
-    const el = $('#pillCdp');
-    el.textContent = `CDP ${n} 个会话`;
-    el.className = 'pill ' + (n > 0 ? 'on' : '');
-  } catch (_) {
-    const el = $('#pillCdp');
-    el.textContent = 'CDP 未知';
-    el.className = 'pill';
-  }
-  // 各平台浏览器连接状态（供「自动识别有连接的投递」）
-  updateConnections();
-}
-
-$('#onlyConnected').onchange = (e) => {
-  onlyConnected = e.target.checked;
-  line(`已${onlyConnected ? '开启' : '关闭'}「仅投递已连接的平台」：${onlyConnected ? '将自动跳过未连接平台' : '将按手动勾选执行'}`, 'info');
-};
-$('#btnRefreshConn').onclick = () => {
-  line('手动刷新各平台连接状态…', 'info');
-  updateConnections();
-};
-// ===== 自动回复 / 消息跟进（SSE 实时）=====
-let replyController = null;
-let replyRunning = false;
-
-function handleReplyEvent(ev) {
-  switch (ev.type) {
-    case 'start':
-      line(`自动回复引擎启动：平台=${ev.platform || 'boss'} mode=${ev.realSend ? '真实发送' : '预览'} unreadOnly=${ev.unreadOnly} limit=${ev.limit}`, 'info');
-      break;
-    case 'list':
-      line(`会话总数 ${ev.total}｜未读 ${ev.unread}｜本次处理 ${ev.will}`, 'info');
-      break;
-    case 'conv':
-      line(`— ${ev.name} @ ${ev.company || '?'} | ${(ev.lastMsg || '').slice(0, 40)}`, '');
-      break;
-    case 'skipped':
-      line(`  跳过(${ev.reason}) ${ev.name || ''}`, 'warn');
-      break;
-    case 'intent':
-      line(`  意图=${ev.intent} 轮次=${ev.round}${aiTag(ev)}${ev.stop ? ` ｜停止: ${ev.stop}` : ''}`, 'info');
-      line(`  回复: ${ev.reply || '(无)'}`, '');
-      break;
-    case 'dry':
-      line(`  [预览] 不发送 ${ev.name || ''}${aiTag(ev)}`, 'warn');
-      break;
-    case 'send-resume':
-      line(`  发简历 ${ev.ok ? 'ok' : 'fail'} ${ev.name || ''}`, ev.ok ? 'ok' : 'err');
-      break;
-    case 'send-text':
-      line(`  发文本 ${ev.ok ? 'ok' : 'fail'} ${ev.name || ''}${aiTag(ev)}`, ev.ok ? 'ok' : 'err');
-      break;
-    case 'sent':
-      line(`  ✓ 已回复 ${ev.name}${aiTag(ev)}`, 'ok');
-      break;
-    case 'aborted':
-      line('已手动停止', 'warn');
-      break;
-    case 'done':
-      line(`自动回复完成：发送 ${ev.sent}，跳过 ${ev.skipped}`, 'ok');
-      break;
-    case 'error':
-      line('自动回复错误: ' + ev.message, 'err');
-      break;
-  }
-}
-
-async function runAutoReply() {
-  const platform = $('#replyPlatform').value;
-  const unreadOnly = $('#replyUnread').checked;
-  const useAi = $('#replyUseAi').checked;
-  const limit = Number($('#replyLimit').value) || 0;
-  const realSend = $('#replyMode').value === 'send';
-  const aiName = ($('#aiName').value || '懒懒').trim() || '懒懒';
-  const signAi = $('#signAi').checked;
-  // 把 AI 名称 / 署名开关 / 目标职位持久化到档案，便于后端 runner 读取
-  await saveProfileFields({ aiName, signAi, expectedPositions: ($('#expectedPositions').value || '').trim() }).catch(() => {});
-  const params = new URLSearchParams({
-    platform,
-    unreadOnly: unreadOnly ? '1' : '0',
-    limit: String(limit),
-    realSend: realSend ? '1' : '0',
-    useAi: useAi ? '1' : '0',
-    ...(signAi ? {} : { signAi: '0' }),
-  });
-
-  replyController = new AbortController();
-  replyRunning = true;
-  $('#btnReplyStart').disabled = true;
-  $('#btnReplyStop').disabled = false;
-  line(`开始自动回复：平台=${platform} mode=${realSend ? '真实发送' : '预览'} 仅未读=${unreadOnly} 数量=${limit}${useAi ? ' AI话术' : ' 规则话术'}`, 'info');
-
-  try {
-    const res = await fetch(API_BASE + '/api/auto-reply/run?' + params.toString(), { signal: replyController.signal });
-    if (!res.ok) {
-      const t = await res.text();
-      let msg = t;
-      try { msg = JSON.parse(t).error || t; } catch (_) { /* keep raw */ }
-      throw new Error(`HTTP ${res.status}: ${msg}`);
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const parts = buf.split('\n\n');
-      buf = parts.pop() || '';
-      for (const p of parts) {
-        for (const l of p.split('\n')) {
-          if (l.startsWith('data: ')) {
-            try { handleReplyEvent(JSON.parse(l.slice(6))); } catch (_) { /* ignore malformed */ }
-          }
-        }
-      }
-    }
-  } catch (e) {
-    if (e.name !== 'AbortError') line('自动回复失败：' + esc(e.message), 'err');
-  } finally {
-    replyRunning = false;
-    replyController = null;
-    $('#btnReplyStart').disabled = false;
-    $('#btnReplyStop').disabled = true;
-    line('自动回复结束。', 'ok');
-  }
-}
-
-$('#btnReplyStart').onclick = () => { if (!replyRunning) runAutoReply(); };
-$('#btnReplyStop').onclick = () => {
-  if (replyController) replyController.abort();
-  fetch(API_BASE + '/api/auto-reply/stop', { method: 'POST' }).catch(() => {});
-  line('已请求停止自动回复。', 'warn');
-};
-
-// ===== 平台可用性巡检（连接 / 登录态 / 风控）=====
-const HEALTH_ICON = { ok: '✅', 'not-logged-in': '❌', blocked: '🛑', offline: '🔌', unknown: '⚠️' };
-async function renderHealth() {
-  const btn = $('#btnHealth');
-  const sum = $('#healthSummary');
-  const old = btn.textContent;
-  btn.disabled = true; btn.textContent = '巡检中…';
-  sum.style.color = 'var(--muted)';
-  sum.textContent = '巡检中（会依次打开各平台首页做权威判定，约 8s/平台）…';
-  try {
-    const d = await (await fetch(API_BASE + '/api/platforms/health')).json();
-    if (d.error) throw new Error(d.error);
-    sum.textContent = d.summary || '';
-    $('#healthList').innerHTML = (d.platforms || []).map(h => {
-      const cls = h.verdict === 'ok' ? 'ok'
-        : (h.verdict === 'blocked' || h.verdict === 'not-logged-in' || h.verdict === 'offline') ? 'bad' : 'warn';
-      const tip = `${h.detail || ''}\n→ ${h.action || ''}`;
-      return `<span class="hchip ${cls}" title="${esc(tip)}">${HEALTH_ICON[h.verdict] || '❔'} <span class="p">${esc(h.platform)}</span> ${esc(h.verdict)}</span>`;
-    }).join('');
-  } catch (e) {
-    sum.textContent = '巡检失败：' + (e.message || e);
-    sum.style.color = 'var(--err)';
-  }
-  btn.disabled = false; btn.textContent = old;
-}
-$('#btnHealth').onclick = renderHealth;
-
-// ===== 自动回复常驻监视器 =====
-// 投递漏斗 & 匹配度看板
-async function renderFunnel() {
-  try {
-    const d = await (await fetch(API_BASE + '/api/stats/funnel')).json();
-    const t = d.total || 1;
-    const setW = (id, n) => { const el = document.getElementById(id); if (el) el.style.width = Math.max(2, Math.round((n / t) * 100)) + '%'; };
-    setW('fCandidate', d.byStatus.candidate); setW('fApplied', d.byStatus.applied); setW('fUnavailable', d.byStatus.unavailable);
-    document.getElementById('nCandidate').textContent = d.byStatus.candidate;
-    document.getElementById('nApplied').textContent = d.byStatus.applied;
-    document.getElementById('nUnavailable').textContent = d.byStatus.unavailable;
-    document.getElementById('kAppliedRate').textContent = (d.appliedRate || 0) + '%';
-    document.getElementById('kMatchAvg').textContent = d.matchScore.avg;
-    document.getElementById('kMatchCov').textContent = (d.matchScore.coverage || 0) + '%';
-    document.getElementById('kQuar').textContent = d.quarantined || 0;
-    document.getElementById('kHigh').textContent = d.matchScore.high;
-    document.getElementById('kMid').textContent = d.matchScore.mid;
-    document.getElementById('kLow').textContent = d.matchScore.low;
-    // 如实标注匹配依据：真 JD / 图片 JD（微信长图，可看不可匹配）/ 卡片摘要 / 无 JD。
-    // ⚠️ 只报一个笼统的「JD 覆盖率」会让数字虚高（首轮报过 89%，真实只有 26%）。
-    const ms = d.matchScore;
-    const noteEl = document.getElementById('matchBasisNote');
-    if (noteEl) {
-      const noJd = ms.titleOnly || 0;
-      const card = ms.cardTextOnly || 0;
-      const real = ms.jdBased || 0;
-      const img = ms.imageJd || 0;
-      const parts = [];
-      parts.push(`真 JD ${real} 个（${ms.realJdRate || 0}%）`);
-      if (img) parts.push(`图片 JD ${img} 个（微信长图，已抓取可查看，不参与匹配）`);
-      if (card) parts.push(`卡片摘要 ${card} 个（不是岗位描述，已迁出 jd）`);
-      if (noJd) parts.push(`无 JD ${noJd} 个（不给分，不参与按分数排序）`);
-      noteEl.textContent = `⚠️ 覆盖口径：${parts.join(' · ')}。`
-        + `只有真 JD 那 ${real} 个能用匹配度排序 / 求职信 / 定制简历 / 面试攻略。`;
-    }
-    const box = document.getElementById('funnelBySource');
-    box.innerHTML = (d.bySource || []).map(s => `
-      <div class="src-tile">
-        <div><b>${s.source}</b> · 共 ${s.total}</div>
-        <div class="st"><span>候选</span><b>${s.candidate}</b></div>
-        <div class="st"><span>已投</span><b>${s.applied}</b></div>
-        <div class="st"><span>不可用</span><b>${s.unavailable}</b></div>
-      </div>`).join('');
-  } catch (_) { /* ignore */ }
-}
-
-function renderWatchStatus(s) {
-  const badge = $('#watchBadge');
-  if (!s) { badge.textContent = '监视器：未知'; badge.className = 'badge'; return; }
-  if (s.running) { badge.textContent = '监视器：运行中'; badge.className = 'badge ok'; }
-  else { badge.textContent = '监视器：已关闭'; badge.className = 'badge'; }
-  let txt = `状态=${s.running ? '运行' : '关闭'} 间隔=${s.intervalSec}s 平台=${s.platforms.join(',')} 真实发送=${s.realSend ? '是' : '否'} AI=${s.useAi ? '是' : '否'} 间隔=${s.throttleSec ?? 45}s 上限=${s.maxPerRun ?? 20} 冷却=${s.hrCooldownSec ?? 3600}s`;
-  const lr = s.lastRun || {};
-  const parts = Object.keys(lr).map((p) => `${p}:${lr[p].error ? '错误' : `发${lr[p].sent}/跳${lr[p].skipped}`}`);
-  if (parts.length) txt += ` ｜ 上次[${parts.join('  ')}]`;
-  $('#watchStatusLine').textContent = txt;
-}
-
-async function refreshWatchStatus() {
-  try {
-    const r = await fetch(API_BASE + '/api/auto-reply/watch/status');
-    renderWatchStatus(await r.json());
-  } catch (e) {
-    $('#watchBadge').textContent = '监视器：连接失败';
-    $('#watchBadge').className = 'badge err';
-  }
-}
-
-$('#btnWatchStart').onclick = async () => {
-  const platforms = ($('#watchPlatforms').value || 'boss,liepin').split(',').map((s) => s.trim()).filter(Boolean);
-  const intervalSec = Number($('#watchInterval').value) || 180;
-  const realSend = $('#watchRealSend').checked;
-  const useAi = $('#watchUseAi').checked;
-  const throttleSec = Number($('#watchThrottle').value) || 45;
-  const maxPerRun = Number($('#watchMaxPerRun').value) || 0;
-  const hrCooldownSec = Number($('#watchHrCooldown').value) || 3600;
-  try {
-    await fetch(API_BASE + '/api/auto-reply/watch/config', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platforms, intervalSec, realSend, useAi, throttleSec, maxPerRun, hrCooldownSec }),
-    });
-    const r = await fetch(API_BASE + '/api/auto-reply/watch/start', { method: 'POST' });
-    const j = await r.json();
-    renderWatchStatus(j.status);
-    line(`已开启自动监视：平台=${platforms.join(',')} 间隔=${intervalSec}s 发送间隔=${throttleSec}s 单轮上限=${maxPerRun} 同HR冷却=${hrCooldownSec}s 真实发送=${realSend}`, 'ok');
-    $('#btnWatchStart').disabled = true;
-    $('#btnWatchStop').disabled = false;
-  } catch (e) {
-    line('开启监视失败：' + esc(e.message), 'err');
-  }
-};
-
-$('#btnWatchStop').onclick = async () => {
-  try {
-    const r = await fetch(API_BASE + '/api/auto-reply/watch/stop', { method: 'POST' });
-    const j = await r.json();
-    renderWatchStatus(j.status);
-    line('已关闭自动监视。', 'warn');
-    $('#btnWatchStart').disabled = false;
-    $('#btnWatchStop').disabled = true;
-  } catch (e) {
-    line('关闭监视失败：' + esc(e.message), 'err');
-  }
-};
-
-$('#btnWatchStatus').onclick = refreshWatchStatus;
-
-// 订阅监视器实时日志（SSE），写入同一日志区
-(function watchSse() {
-  try {
-    const es = new EventSource(API_BASE + '/api/auto-reply/watch');
-    es.onmessage = (ev) => {
-      try {
-        const d = JSON.parse(ev.data);
-        if (d.type === 'status') { renderWatchStatus(d); return; }
-        if (d.type === 'tick') {
-          if (d.kind === 'start') line(`[监视] 开始检查：${d.platforms ? d.platforms.join(',') : ''}`, 'info');
-          else if (d.kind === 'platform-done') line(`[监视] ${d.platform} 完成：发${d.sent}/跳${d.skipped}`, 'ok');
-          else if (d.kind === 'platform-error') line(`[监视] ${d.platform} 出错：${d.error}`, 'err');
-          else if (d.kind === 'end') line('[监视] 本轮检查结束', 'info');
-        }
-      } catch (_) { /* ignore */ }
     };
-    es.onerror = () => { /* 断线由浏览器自动重连，无需处理 */ };
-  } catch (_) { /* 不支持则忽略 */ }
-})();
+    const r = await api('/api/apply/batch', {method:'POST', body:JSON.stringify(body)});
+    $('#batchOut').textContent = JSON.stringify(r, null, 2);
+    $('#batchBar').style.width='100%';
+  }catch(e){ $('#batchOut').textContent='错误：'+e.message; }
+  btn.disabled=false; btn.textContent='开始投递';
+});
 
-// ===== 自动投递常驻监视器 =====
-function renderApplyWatchStatus(s) {
-  const badge = $('#applyWatchBadge');
-  if (!s) { badge.textContent = '投递监视器：未知'; badge.className = 'badge'; return; }
-  if (s.running) { badge.textContent = '投递监视器：运行中'; badge.className = 'badge ok'; }
-  else { badge.textContent = '投递监视器：已关闭'; badge.className = 'badge'; }
-  let txt = `状态=${s.running ? '运行' : '关闭'} 间隔=${s.intervalSec}s 平台=${s.platforms.join(',')} 每轮=${s.limit} 关键词=${s.keyword || '(全部)'}`;
-  const lr = s.lastRun || {};
-  const parts = Object.keys(lr).map((p) => `${p}:${lr[p].error ? '错误' : `投${lr[p].applied}/跳${lr[p].skipped}`}`);
-  if (parts.length) txt += ` ｜ 上次[${parts.join('  ')}]`;
-  $('#applyWatchStatusLine').textContent = txt;
-}
-async function refreshApplyWatchStatus() {
-  try {
-    const r = await fetch(API_BASE + '/api/auto-apply/watch/status');
-    renderApplyWatchStatus(await r.json());
-  } catch (e) {
-    $('#applyWatchBadge').textContent = '投递监视器：连接失败';
-    $('#applyWatchBadge').className = 'badge err';
-  }
-}
-$('#btnApplyWatchStart').onclick = async () => {
-  const platforms = ($('#applyWatchPlatforms').value || 'boss').split(',').map((s) => s.trim()).filter(Boolean);
-  const intervalSec = Number($('#applyWatchInterval').value) || 600;
-  const limit = Number($('#applyWatchLimit').value) || 10;
-  const keyword = ($('#applyWatchKeyword').value || '').trim();
-  try {
-    await fetch(API_BASE + '/api/auto-apply/watch/config', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platforms, intervalSec, limit, keyword }),
-    });
-    const r = await fetch(API_BASE + '/api/auto-apply/watch/start', { method: 'POST' });
-    const j = await r.json();
-    renderApplyWatchStatus(j.status);
-    line(`已开启自动投递监视：平台=${platforms.join(',')} 间隔=${intervalSec}s 每轮=${limit}`, 'ok');
-    $('#btnApplyWatchStart').disabled = true;
-    $('#btnApplyWatchStop').disabled = false;
-  } catch (e) {
-    line('开启自动投递失败：' + esc(e.message), 'err');
-  }
-};
-$('#btnApplyWatchStop').onclick = async () => {
-  try {
-    const r = await fetch(API_BASE + '/api/auto-apply/watch/stop', { method: 'POST' });
-    const j = await r.json();
-    renderApplyWatchStatus(j.status);
-    line('已关闭自动投递监视。', 'warn');
-    $('#btnApplyWatchStart').disabled = false;
-    $('#btnApplyWatchStop').disabled = true;
-  } catch (e) {
-    line('关闭自动投递失败：' + esc(e.message), 'err');
-  }
-};
-$('#btnApplyWatchStatus').onclick = refreshApplyWatchStatus;
-(function applyWatchSse() {
-  try {
-    const es = new EventSource(API_BASE + '/api/auto-apply/watch');
-    es.onmessage = (ev) => {
-      try {
-        const d = JSON.parse(ev.data);
-        if (d.type === 'status') { renderApplyWatchStatus(d); return; }
-        if (d.type === 'tick') {
-          if (d.kind === 'start') line(`[投递监视] 开始：${d.platforms ? d.platforms.join(',') : ''}`, 'info');
-          else if (d.kind === 'platform-done') line(`[投递监视] ${d.platform} 完成：投${d.applied}/跳${d.skipped}`, 'ok');
-          else if (d.kind === 'platform-error') line(`[投递监视] ${d.platform} 出错：${d.error}`, 'err');
-          else if (d.kind === 'end') line('[投递监视] 本轮投递结束', 'info');
-        }
-      } catch (_) { /* ignore */ }
-    };
-    es.onerror = () => {};
-  } catch (_) { /* ignore */ }
-})();
-refreshApplyWatchStatus();
+/* auto reply */
+let replyTimer=null;
+$('#replyRun').addEventListener('click', async ()=>{
+  const btn=$('#replyRun'); btn.disabled=true;
+  $('#replyOut').textContent=''; $('#replyStatus').textContent='运行中…';
+  try{
+    const url = '/api/auto-reply/run?platform='+($('#replyPlatform').value||'')
+      + '&unread='+$('#replyUnread').checked+'&mode='+$('#replyMode').value;
+    const r = await api(url);
+    $('#replyOut').textContent = (r&&r.log)||JSON.stringify(r,null,2);
+    $('#replyStatus').textContent = (r&&r.stopped)?'已停止':'完成';
+  }catch(e){ $('#replyOut').textContent='错误：'+e.message; $('#replyStatus').textContent='失败'; }
+  btn.disabled=false;
+});
+$('#replyStop').addEventListener('click', async ()=>{
+  try{ await api('/api/auto-reply/stop', {method:'POST'}); $('#replyStatus').textContent='已发送停止信号'; }
+  catch(e){ $('#replyStatus').textContent='停止失败：'+e.message; }
+});
 
-refreshWatchStatus();
-
-pollStatus();
-setInterval(pollStatus, 5000);
-renderFunnel();
-setInterval(renderFunnel, 15000);
-
-// AI 回复来源标记（如「[AI·懒懒]」），用于日志直观区分 AI / 规则回复与署名身份
-function aiTag(ev) {
-  const base = ev.ai === 'ai' ? 'AI' : ev.ai === 'rule' ? '规则' : '';
-  if (!base) return '';
-  return ev.aiName ? ` [${base}·${ev.aiName}]` : ` [${base}]`;
-}
-
-// 把 AI 名称 / 署名开关 / 目标职位持久化到档案（后端 runner / 批量投递都读档案）
-async function saveProfileFields(patch) {
-  const cur = await (await fetch(API_BASE + '/api/profile')).json().catch(() => ({ profile: {} }));
-  const merged = { ...(cur.profile || {}), ...patch };
-  const r = await fetch(API_BASE + '/api/profile', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ profile: merged }),
-  });
-  if (!r.ok) throw new Error('保存档案失败 ' + r.status);
-}
-
-// 加载档案，预填「目标职位 / AI 名称 / 署名开关 / 我的档案字段」
-async function loadProfile() {
-  try {
-    const cur = await (await fetch(API_BASE + '/api/profile')).json().catch(() => ({ profile: {} }));
-    const p = cur.profile || {};
-    if (p.expectedPositions != null) $('#expectedPositions').value = p.expectedPositions;
-    if (p.aiName) $('#aiName').value = p.aiName;
-    if (typeof p.signAi === 'boolean') $('#signAi').checked = p.signAi;
-    // 我的档案字段预填
-    const pf = {
-      pfName: p.name, pfPhone: p.phone, pfEmail: p.email, pfSchool: p.school,
-      pfMajor: p.major, pfEducation: p.education, pfCity: p.city, pfSkills: p.skills, pfResume: p.resume_path,
-    };
-    for (const id in pf) {
-      const v = pf[id];
-      if (v != null && v !== '') { const el = document.getElementById(id); if (el) el.value = v; }
+/* ---------- email apply (offerbiu) ---------- */
+async function emailStream(path, body, outEl, barEl){
+  outEl.textContent=''; if(barEl) barEl.style.width='0%';
+  const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let buf=''; let n=0;
+  while(true){
+    const {done, value} = await reader.read(); if(done) break;
+    buf += dec.decode(value, {stream:true});
+    const lines = buf.split('\n'); buf = lines.pop();
+    for(const line of lines){
+      if(!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim(); if(!payload) continue;
+      try{
+        const ev = JSON.parse(payload);
+        if(ev.type==='progress'||ev.type==='scan'){ n++; outEl.textContent += (ev.msg||JSON.stringify(ev))+'\n'; if(barEl) barEl.style.width=Math.min(100,(n%100)).toFixed(0)+'%'; }
+        else if(ev.type==='done'){ outEl.textContent += '✅ 完成：'+JSON.stringify(ev.result||ev)+'\n'; if(barEl) barEl.style.width='100%'; }
+        else if(ev.type==='error'){ outEl.textContent += '❌ '+ev.msg+'\n'; }
+        else outEl.textContent += JSON.stringify(ev)+'\n';
+      }catch(_){ outEl.textContent += payload+'\n'; }
     }
-  } catch (_) { /* 忽略，使用默认值 */ }
+    outEl.scrollTop = outEl.scrollHeight;
+  }
 }
-loadProfile();
+$('#emailCollect').addEventListener('click', async ()=>{
+  const b=$('#emailCollect'); b.disabled=true; $('#emailStep1').textContent='采集中…';
+  try{ const r = await api('/api/offerbiu/collect-keywords', {method:'POST', body:'{}'}); $('#emailStep1').textContent=JSON.stringify(r,null,2); }
+  catch(e){ $('#emailStep1').textContent='错误：'+e.message; } b.disabled=false;
+});
+$('#emailScan').addEventListener('click', ()=> emailStream('/api/offerbiu/scan-emails', {workers:4, settleMs:1200}, $('#emailStep2'), $('#emailBar')).catch(e=>$('#emailStep2').textContent='错误：'+e.message));
+$('#emailApply').addEventListener('click', async ()=>{
+  if(!confirm('确认真实发送邮箱直投？请先预览并人工剔除串号候选。')) return;
+  await emailStream('/api/offerbiu/email-apply', {channel:'email', realSend:true, tailor:true}, $('#emailStep3'), $('#emailBar'))
+    .catch(e=>$('#emailStep3').textContent='错误：'+e.message);
+});
 
-// 收集「我的档案」字段 → 后端档案补丁（自动清空为空的字段，避免覆盖已有值）
-function gatherProfilePatch() {
-  const get = (id) => (document.getElementById(id)?.value || '').trim();
-  const patch = {
-    name: get('pfName'),
-    phone: get('pfPhone'),
-    email: get('pfEmail'),
-    school: get('pfSchool'),
-    major: get('pfMajor'),
-    education: get('pfEducation'),
-    city: get('pfCity'),
-    skills: get('pfSkills'),
-    resume_path: get('pfResume'),
-    expectedPositions: get('expectedPositions'),
+/* ---------- records ---------- */
+async function loadRecords(){
+  let f=null; try{ f = await api('/api/stats/funnel'); }catch(e){}
+  if(f) renderFunnel($('#recFunnel'), $('#recLegend'), f.matchScore||{}, f.total);
+  // source filter
+  const sf = $('#recSource');
+  if(!sf.dataset.filled){ sf.innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join(''); sf.dataset.filled='1'; }
+  loadRecList();
+}
+async function loadRecList(){
+  const src=$('#recSource').value, st=$('#recStatus').value;
+  const q = new URLSearchParams(); if(src) q.set('source',src); if(st) q.set('status',st);
+  let jobs=[]; try{ const r = await api('/api/jobs?'+q.toString()); jobs = (r&&r.jobs)||[]; }catch(e){}
+  $('#recCount').textContent = jobs.length+' 个';
+  const tb = $('#recTbl tbody');
+  if(!jobs.length){ tb.innerHTML='<tr><td colspan="7" class="empty">无数据</td></tr>'; return; }
+  tb.innerHTML = jobs.slice(0,200).map(j=>{
+    let jd='<span class="badge b-mut">无</span>';
+    if(j.jd && (j.jd+'').trim()) jd='<span class="badge b-info">真JD</span>';
+    else if(j.jd_source==='image'||(j.jd_images&&j.jd_images!=='[]'&&j.jd_images)) jd='<span class="badge b-pur">长图</span>';
+    else if(j.card_text && (j.card_text+'').trim()) jd='<span class="badge b-warn">卡片</span>';
+    const sc = (j.match_score!=null)? j.match_score : '–';
+    const stt = j.status==='applied'?'<span class="badge b-ok">已投</span>': j.status==='unavailable'?'<span class="badge b-bad">不可用</span>':'<span class="badge b-mut">候选</span>';
+    const hasImg = (j.jd_source==='image'||(j.jd_images&&j.jd_images!=='[]'&&j.jd_images));
+    return '<tr><td>'+esc(j.company||'–')+'</td><td>'+esc(j.position||'–')+'</td>'
+      + '<td><span class="badge b-info">'+esc(pfName(j.source))+'</span></td><td>'+jd+'</td>'
+      + '<td>'+sc+'</td><td>'+stt+'</td>'
+      + '<td>'+(hasImg?'<button class="btn sm" data-jdimg="'+esc(j.id)+'">看长图</button> ':'')
+      + '<button class="btn sm" data-jd="'+esc(j.id)+'">详情</button></td></tr>';
+  }).join('');
+  $$('#recTbl [data-jd]').forEach(b=>b.addEventListener('click', ()=>showJob(b.dataset.jd)));
+  $$('#recTbl [data-jdimg]').forEach(b=>b.addEventListener('click', ()=>showJdImage(b.dataset.jdimg)));
+}
+$('#recSource').addEventListener('change', loadRecList);
+$('#recStatus').addEventListener('change', loadRecList);
+
+async function showJob(id){
+  let j=null; try{ const r = await api('/api/jobs'); j=(r.jobs||[]).find(x=>x.id===id); }catch(e){}
+  openModal('岗位详情', '<div class="kv"><span>公司</span><b>'+esc(j&&j.company)+'</b></div>'
+    + '<div class="kv"><span>职位</span><b>'+esc(j&&j.position)+'</b></div>'
+    + '<div class="kv"><span>平台</span><b>'+esc(j&&pfName(j.source))+'</b></div>'
+    + '<div class="kv"><span>城市</span><b>'+esc(j&&j.city)+'</b></div>'
+    + '<div class="kv"><span>薪资</span><b>'+esc(j&&j.salary)+'</b></div>'
+    + '<div class="kv"><span>匹配分</span><b>'+esc(j&&j.match_score)+'</b></div>'
+    + (j&&j.jd?'<div style="margin-top:10px"><b>JD：</b></div><div class="note" style="white-space:pre-wrap;max-height:240px;overflow:auto">'+esc(j.jd)+'</div>':'')
+    + (j&&j.card_text?'<div class="note warn" style="margin-top:10px">卡片摘要（非岗位描述）：'+esc(j.card_text.slice(0,200))+'</div>':'')
+  );
+}
+async function showJdImage(id){
+  let imgs=[]; try{ const r = await api('/api/jobs/image-jd'); imgs=(r.jobs||[]).filter(x=>x.id===id); }catch(e){}
+  const j = imgs[0];
+  const list = j&&j.jd_images ? JSON.parse(j.jd_images||'[]') : [];
+  if(!list.length){ openModal('JD 长图', '<div class="empty">该岗位无 JD 长图</div>'); return; }
+  openModal(pfName(j.source)+' · '+esc(j.company||'')+' · '+esc(j.position||''),
+    list.map(u=>'<img src="'+esc(u)+'" style="margin-bottom:12px" />').join(''));
+}
+
+/* ---------- resume ---------- */
+async function loadResume(){
+  try{
+    const r = await api('/api/profile'); const p = r.profile||{};
+    $('#profileBox').innerHTML = '<div class="kv"><span>姓名</span><b>'+esc(p.name)+'</b></div>'
+      + '<div class="kv"><span>手机</span><b>'+esc(p.phone)+'</b></div>'
+      + '<div class="kv"><span>邮箱</span><b>'+esc(p.email)+'</b></div>'
+      + '<div class="kv"><span>期望城市</span><b>'+esc(p.expectedCity)+'</b></div>'
+      + '<div class="kv" style="display:block"><span>期望岗位</span><div class="small muted" style="margin-top:4px">'+esc(p.expectedPositions)+'</div></div>';
+  }catch(e){ $('#profileBox').innerHTML='<div class="note bad">加载失败：'+esc(e.message)+'</div>'; }
+  try{ const r = await api('/api/resume/version'); $('#resVerNow').textContent = (r.version==='optimized'?'优化简历':'原始简历'); }catch(e){}
+  loadClTemplates();
+  loadJdImgSelect();
+}
+$('#resumeFile').addEventListener('change', ()=>{});
+$('#resumeParse').addEventListener('click', async ()=>{
+  const f = $('#resumeFile').files[0]; if(!f){ $('#resumeParseOut').textContent='请先选择 PDF'; return; }
+  const fd = new FormData(); fd.append('file', f);
+  $('#resumeParseOut').textContent='解析中…';
+  try{
+    const res = await fetch('/api/resume/parse', {method:'POST', body:fd});
+    const r = await res.json(); $('#resumeParseOut').textContent=JSON.stringify(r,null,2);
+  }catch(e){ $('#resumeParseOut').textContent='错误：'+e.message; }
+});
+$$('[data-ver]').forEach(b=>b.addEventListener('click', async ()=>{
+  try{ const r = await api('/api/resume/version', {method:'POST', body:JSON.stringify({version:b.dataset.ver})}); $('#resVerNow').textContent=(r.version==='optimized'?'优化简历':'原始简历'); $('#resVerNote').textContent='已切换为：'+(r.version==='optimized'?'优化简历':'原始简历'); }
+  catch(e){ $('#resVerNote').textContent='切换失败：'+e.message; }
+}));
+async function loadClTemplates(){
+  let list=[]; try{ const r = await api('/api/cover-letter/template'); list=r.templates||[]; }catch(e){}
+  $('#clList').innerHTML = list.length? list.map(t=>'<div class="kv"><span><b>'+esc(t.name)+'</b><div class="small muted">'+esc((t.body||'').slice(0,60))+'…</div></span>'
+    + '<span><button class="btn sm" data-cl-del="'+esc(t.id)+'">删</button></span></div>').join('')
+    : '<div class="empty">暂无模板</div>';
+  $$('#clList [data-cl-del]').forEach(b=>b.addEventListener('click', async ()=>{
+    try{ await api('/api/cover-letter/template', {method:'DELETE', body:JSON.stringify({id:b.dataset.clDel})}); loadClTemplates(); }catch(e){ alert('删除失败：'+e.message); }
+  }));
+}
+$('#clAdd').addEventListener('click', async ()=>{
+  const name=$('#clName').value.trim(); const body=$('#clBody').value.trim();
+  if(!name||!body){ alert('请填写名称和正文'); return; }
+  try{ await api('/api/cover-letter/template', {method:'POST', body:JSON.stringify({name, body})}); $('#clName').value=''; $('#clBody').value=''; loadClTemplates(); }
+  catch(e){ alert('新增失败：'+e.message); }
+});
+async function loadJdImgSelect(){
+  let jobs=[]; try{ const r = await api('/api/jobs/image-jd'); jobs=r.jobs||[]; }catch(e){}
+  $('#jdImgJob').innerHTML = '<option value="">选择岗位…</option>' + jobs.map(j=>'<option value="'+esc(j.id)+'">'+esc(pfName(j.source)+' · '+(j.company||'')+' · '+(j.position||''))+'</option>').join('');
+  $('#jdImgJob').onchange = ()=>{
+    const j = jobs.find(x=>x.id===$('#jdImgJob').value); const list = j&&j.jd_images?JSON.parse(j.jd_images||'[]'):[];
+    $('#jdImgWrap').innerHTML = list.map(u=>'<img src="'+esc(u)+'" style="margin-bottom:10px" />').join('') || '<div class="empty">无长图</div>';
   };
-  for (const k of Object.keys(patch)) if (patch[k] === '') delete patch[k];
-  return patch;
 }
 
-// 保存「我的档案」：合并到后端档案（自动填表 / 邮箱投递 / 简历匹配共用）
-$('#btnSaveProfile').addEventListener('click', async () => {
-  const tip = $('#pfSavedTip');
-  try {
-    await saveProfileFields(gatherProfilePatch());
-    tip.textContent = '✅ 已保存';
-    tip.style.color = 'var(--ok, #2e9e5b)';
-  } catch (e) {
-    tip.textContent = '❌ 保存失败：' + (e.message || e);
-    tip.style.color = 'var(--err, #d23)';
-  }
-  setTimeout(() => { tip.textContent = ''; }, 3000);
+/* ---------- advanced ---------- */
+async function fillJobSelect(sel){
+  let jobs=[]; try{ const r = await api('/api/jobs?status=candidate'); jobs=(r.jobs||[]).slice(0,200); }catch(e){}
+  sel.innerHTML = '<option value="">选择岗位…</option>' + jobs.map(j=>'<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('');
+  return jobs;
+}
+async function loadAdvanced(){
+  await fillJobSelect($('#advJob')); await fillJobSelect($('#advIvJob'));
+  loadSchedule(); loadExchange();
+}
+$('#advTailor').addEventListener('click', async ()=>{
+  const id=$('#advJob').value; if(!id){ $('#advResumeOut').textContent='请选择岗位'; return; }
+  $('#advResumeOut').textContent='生成中…';
+  try{
+    const r = await api('/api/jobs/tailor-resume', {method:'POST', body:JSON.stringify({jobId:id, version:$('#advResumeVersion').value})});
+    $('#advResumeOut').textContent = JSON.stringify(r,null,2);
+  }catch(e){ $('#advResumeOut').textContent='错误：'+e.message; }
+});
+$('#advInterview').addEventListener('click', async ()=>{
+  const id=$('#advIvJob').value; const company=$('#advIvCompany').value.trim();
+  if(!id && !company){ $('#advInterviewOut').textContent='请选择岗位或填写公司'; return; }
+  $('#advInterviewOut').textContent='生成中…';
+  try{
+    const r = await api('/api/jobs/interview-prep?jobId='+encodeURIComponent(id||'')+'&company='+encodeURIComponent(company), {});
+    $('#advInterviewOut').textContent = (r&&r.prep)||JSON.stringify(r,null,2);
+  }catch(e){ $('#advInterviewOut').textContent='错误：'+e.message; }
 });
 
-// 记录当前官网表单字段到记忆（人工补填后调用，下次同站自动填写）
-$('#btnRememberForm').addEventListener('click', async () => {
-  const tip = $('#rememberTip');
-  tip.textContent = '记录中…';
-  tip.style.color = 'var(--muted)';
-  try {
-    const r = await (await fetch(API_BASE + '/api/offerbiu/remember-form', { method: 'POST' })).json();
-    if (r.ok && r.saved > 0) {
-      tip.textContent = `✅ 已记录 ${r.saved} 个字段${r.site ? '（' + r.site + '）' : ''}`;
-      tip.style.color = 'var(--ok)';
-      line(`官网表单记忆：已记录 ${r.saved} 个字段${r.site ? '（' + r.site + '）' : ''}，下次同站自动填写`, 'ok');
-    } else if (r.ok) {
-      tip.textContent = '⚠ 当前页面没有可记录的字段（请确认 9227 窗口停在填好的官网表单页）';
-      tip.style.color = 'var(--warn)';
-    } else {
-      tip.textContent = '❌ ' + (r.error || '记录失败');
-      tip.style.color = 'var(--err)';
-    }
-  } catch (e) {
-    tip.textContent = '❌ ' + (e.message || e);
-    tip.style.color = 'var(--err)';
-  }
-  setTimeout(() => { tip.textContent = ''; }, 5000);
+/* schedule */
+async function loadSchedule(){
+  let s=null; try{ s = await api('/api/schedule'); }catch(e){}
+  const slots = (s&&s.slots)||[];
+  $('#schedBox').innerHTML = slots.length? slots.map((x,i)=>'<div class="kv"><span>'+esc(x.start)+' – '+esc(x.end)+'</span><b><button class="btn sm" data-sch="'+i+'">删</button></b></div>').join('') : '<div class="empty">未配置时间段</div>';
+  $$('#schedBox [data-sch]').forEach(b=>b.addEventListener('click', async ()=>{
+    const cur=(await api('/api/schedule')).slots||[]; cur.splice(+b.dataset.sch,1);
+    try{ await api('/api/schedule', {method:'POST', body:JSON.stringify({slots:cur})}); loadSchedule(); }catch(e){ alert('删除失败：'+e.message); }
+  }));
+}
+$('#schedAdd').addEventListener('click', async ()=>{
+  const start=$('#schedStart').value, end=$('#schedEnd').value;
+  if(!start||!end){ alert('请选择起止时间'); return; }
+  const cur=[]; try{ cur.push(...((await api('/api/schedule')).slots||[])); }catch(e){}
+  cur.push({start, end});
+  try{ await api('/api/schedule', {method:'POST', body:JSON.stringify({slots:cur})}); loadSchedule(); }catch(e){ alert('添加失败：'+e.message); }
 });
 
-// ============ 邮箱直投：采集关键词岗位 → 扫描招聘邮箱 → 勾选 → 批量投递 ============
-
-// ① 按关键词采集 offerbiu 岗位（利用列表页搜索框精准扩池）
-$('#btnCollectKeywords').onclick = async () => {
-  const tip = $('#collectTip');
-  const kws = ($('#collectKeywords').value || '').split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
-  if (!kws.length) { tip.textContent = '❌ 请填写关键词'; tip.style.color = 'var(--err)'; return; }
-  tip.textContent = '采集中…';
-  tip.style.color = 'var(--muted)';
-  $('#btnCollectKeywords').disabled = true;
-  line(`开始按关键词采集 offerbiu 岗位：${kws.join('、')} …`, 'info');
-  try {
-    const r = await (await fetch(API_BASE + '/api/offerbiu/collect-keywords', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keywords: kws, pagesPerKeyword: 3, perKeyword: 25 }),
-    })).json();
-    if (r.error) throw new Error(r.error);
-    const detail = Object.entries(r.perKeyword || {}).map(([k, v]) => `${k}:${v}`).join(' ');
-    tip.textContent = `✅ 新增 ${r.collected} 个岗位`;
-    tip.style.color = 'var(--ok)';
-    line(`关键词采集完成：新增 ${r.collected} 个岗位（${detail}）`, 'ok');
-  } catch (e) {
-    tip.textContent = '❌ ' + (e.message || e);
-    tip.style.color = 'var(--err)';
-    line('关键词采集失败：' + (e.message || e), 'err');
-  }
-  $('#btnCollectKeywords').disabled = false;
-  setTimeout(() => { tip.textContent = ''; }, 6000);
-};
-
-let emailHits = []; // { jobId, company, position, email, applyUrl }
-
-function selectedEmailHits() {
-  return Array.from(document.querySelectorAll('.emailChk')).filter(el => el.checked)
-    .map(el => emailHits[Number(el.dataset.i)]).filter(Boolean);
+/* exchange */
+async function loadExchange(){
+  let a=null; try{ a = await api('/api/exchange/actions'); }catch(e){}
+  const acts = a&&a.actions ? a.actions : ['sendResume','changePhone','changeWechat'];
+  $('#exBox').innerHTML = acts.map(k=>'<label class="toggle" style="display:flex;margin:8px 0"><input type="checkbox" data-ex="'+k+'" '+(a&&a.enabled&&a.enabled.includes(k)?'checked':'')+'> '+esc({sendResume:'发简历',changePhone:'交换手机号',changeWechat:'交换微信号'}[k]||k)+'</label>').join('');
 }
-function updateEmailApplyBtn() {
-  const n = selectedEmailHits().length;
-  const b = $('#btnEmailApply');
-  b.disabled = n === 0;
-  b.textContent = `批量邮箱直投（选中 ${n} 个）`;
-}
-function renderEmailHits() {
-  const box = $('#emailResults');
-  const anyQuar = emailHits.some(h => h.quarantine);
-  $('#forceWrap').style.display = anyQuar ? 'inline-flex' : 'none';
-  if (!emailHits.length) {
-    box.innerHTML = '<div class="sub">未发现带招聘邮箱的岗位。可加大扫描数量或换起始偏移再试。</div>';
-    updateEmailApplyBtn();
-    return;
-  }
-  const qn = emailHits.filter(h => h.quarantine).length;
-  box.innerHTML = `<div class="sub" style="margin-bottom:6px">发现 ${emailHits.length} 个可邮箱直投的岗位（默认全选；其中 <b style="color:var(--warn)">${qn}</b> 个被「跨公司串号」隔离，默认不勾选，需勾选下方「强制投递」才发）：</div>`
-    + emailHits.map((h, i) => `
-      <label class="checkline" style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)">
-        <input type="checkbox" class="emailChk" data-i="${i}" ${h.quarantine ? '' : 'checked'} />
-        <span style="flex:1">
-          <b>${esc(h.company)}</b> <span class="sub">· ${esc(h.position || '')}</span><br/>
-          <span class="sub">📧 ${esc(h.email)}</span>
-          ${h.quarantine ? `<br/><span class="badge-quar">⚠ 跨公司串号 · ${esc(h.quarantine)}</span>` : ''}
-        </span>
-      </label>`).join('');
-  box.querySelectorAll('.emailChk').forEach(el => el.addEventListener('change', updateEmailApplyBtn));
-  updateEmailApplyBtn();
+$('#exRun').addEventListener('click', async ()=>{
+  const enabled = $$('#exBox [data-ex]').filter(c=>c.checked).map(c=>c.dataset.ex);
+  try{ await api('/api/exchange/actions', {method:'POST', body:JSON.stringify({enabled})}); }catch(e){}
+  $('#exOut').textContent='执行中…';
+  try{ const r = await api('/api/exchange/run', {method:'POST', body:JSON.stringify({platform:'liepin', enabled})}); $('#exOut').textContent=JSON.stringify(r,null,2); }
+  catch(e){ $('#exOut').textContent='错误：'+e.message; }
+});
+
+/* ---------- logs ---------- */
+async function loadLogs(){
+  let apps=[]; try{ const r = await api('/api/applications?limit=100'); apps=(r.applications||r.jobs||[]); }catch(e){}
+  const tb = $('#logTbl tbody');
+  if(!apps.length){ tb.innerHTML='<tr><td colspan="6" class="empty">无记录</td></tr>'; return; }
+  tb.innerHTML = apps.slice(0,100).map(a=>{
+    const co = a.company||(a.job&&a.job.company)||'–';
+    const po = a.position||(a.job&&a.job.position)||'–';
+    const pf = a.platform||(a.job&&a.job.source)||'–';
+    const st = a.status==='applied'?'<span class="badge b-ok">已投</span>': a.status==='skipped'?'<span class="badge b-warn">跳过</span>':'<span class="badge b-mut">'+esc(a.status||'–')+'</span>';
+    const t = a.appliedAt||a.createdAt||a.updatedAt||'';
+    return '<tr><td>'+esc(co)+'</td><td>'+esc(po)+'</td><td><span class="badge b-info">'+esc(pfName(pf))+'</span></td>'
+      + '<td>'+esc(a.channel||a.method||'–')+'</td><td>'+st+'</td><td class="small muted">'+esc((t+'').slice(0,19))+'</td></tr>';
+  }).join('');
 }
 
-/** 通用：读取 SSE 流并逐事件回调 */
-async function readSse(res, onEvent) {
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const parts = buf.split('\n\n');
-    buf = parts.pop() || '';
-    for (const p of parts) {
-      for (const l of p.split('\n')) {
-        if (!l.startsWith('data: ')) continue;
-        try { onEvent(JSON.parse(l.slice(6))); } catch (_) { /* ignore */ }
-      }
-    }
-  }
-}
+/* ---------- modal ---------- */
+function openModal(title, bodyHtml){ $('#modalTitle').textContent=title; $('#modalBody').innerHTML=bodyHtml; $('#modal').classList.add('open'); }
+$('#modalClose').addEventListener('click', ()=>$('#modal').classList.remove('open'));
+$('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') $('#modal').classList.remove('open'); });
 
-$('#btnScanEmails').onclick = async () => {
-  const tip = $('#scanTip');
-  const limit = Number($('#scanLimit').value) || 20;
-  const offset = Number($('#scanOffset').value) || 0;
-  tip.textContent = '扫描中…';
-  tip.style.color = 'var(--muted)';
-  $('#btnScanEmails').disabled = true;
-  line(`开始扫描 offerbiu 招聘邮箱（数量 ${limit}，偏移 ${offset}）…`, 'info');
-  try {
-    const res = await fetch(API_BASE + '/api/offerbiu/scan-emails', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit, offset }),
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    await readSse(res, (ev) => {
-      if (ev.type === 'progress') line(`[扫描 ${ev.index + 1}/${ev.total}] ${ev.message}`, 'dim');
-      else if (ev.type === 'found') {
-        emailHits = ev.found || [];
-        renderEmailHits();
-        line(`扫描完成：共 ${ev.scanned} 个岗位，发现 ${emailHits.length} 个可邮箱直投。`, 'ok');
-        tip.textContent = `✅ 发现 ${emailHits.length} 个`;
-        tip.style.color = 'var(--ok)';
-      } else if (ev.type === 'error') {
-        line('扫描失败：' + ev.message, 'err');
-        tip.textContent = '❌ ' + ev.message;
-        tip.style.color = 'var(--err)';
-      }
-    });
-  } catch (e) {
-    line('扫描失败：' + (e.message || e), 'err');
-    tip.textContent = '❌ ' + (e.message || e);
-    tip.style.color = 'var(--err)';
-  }
-  $('#btnScanEmails').disabled = false;
-  setTimeout(() => { tip.textContent = ''; }, 5000);
-};
-
-// 预览「一岗一简历」：为选中的第 1 个岗位生成定制 PDF 并直接打开（先看质量，再决定是否真投）
-$('#btnPreviewTailor').onclick = async () => {
-  const sel = selectedEmailHits();
-  const hit = sel[0] || emailHits[0];
-  if (!hit) { line('请先扫描出候选邮箱，或在列表中勾选一个岗位', 'warn'); return; }
-  const b = $('#btnPreviewTailor');
-  b.disabled = true; b.textContent = '生成中…';
-  line(`正在为「${hit.company || ''} ${hit.position || ''}」按 JD 定制简历（首次约 8s，之后命中缓存 1s）…`, 'info');
-  try {
-    const r = await fetch(API_BASE + '/api/jobs/tailor-resume', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: hit.jobId }),
-    });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || '生成失败');
-    line(`✅ 定制简历已生成（匹配度 ${d.matchScore ?? '-'}｜技能重排 ${(d.orderedSkills || []).length} 项｜${d.cached ? '缓存命中' : '新生成'}）`, 'ok');
-    line(`   ${(d.summary || '').slice(0, 120)}`, 'dim');
-    window.open(API_BASE + d.url, '_blank');
-  } catch (e) {
-    line('定制简历生成失败：' + (e.message || e), 'err');
-  }
-  b.disabled = false; b.textContent = '预览定制简历';
-};
-
-$('#btnEmailApply').onclick = async () => {
-  const sel = selectedEmailHits();
-  if (!sel.length) return;
-  if (!window.confirm(
-    `即将对 ${sel.length} 个岗位发起「邮箱直投」：会把你的简历（PDF 附件）真实发送到对方 HR 邮箱，不可撤回。\n\n`
-    + '点「确定」= 真实投递；点「取消」= 放弃。')) return;
-  const ids = sel.map(h => h.jobId);
-  $('#btnEmailApply').disabled = true;
-  line(`开始邮箱直投 ${ids.length} 个岗位…`, 'info');
-  try {
-    const res = await fetch(API_BASE + '/api/offerbiu/email-apply', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jobIds: ids,
-      intervalMs: 8000,
-      force: !!$('#chkForceApply')?.checked,
-      tailor: !!$('#chkTailor')?.checked,
-    }),
-  });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    await readSse(res, (ev) => {
-      if (ev.type === 'progress') line(`[${ev.index + 1}/${ev.total}] ${ev.company || ''} ${ev.position || ''}${ev.message ? ' — ' + ev.message : ''}`, 'info');
-      else if (ev.type === 'result') line(`  ${ev.status === 'applied' ? '✓ 已投递' : '✗ ' + ev.status}：${ev.company || ''} — ${String(ev.message || '').slice(0, 120)}`, ev.status === 'applied' ? 'ok' : 'warn');
-      else if (ev.type === 'done') line(`邮箱直投完成：成功 ${ev.ok} / 失败 ${ev.fail}（共 ${ev.total}）`, ev.fail ? 'warn' : 'ok');
-      else if (ev.type === 'error') line('邮箱直投失败：' + ev.message, 'err');
-    });
-  } catch (e) {
-    line('邮箱直投失败：' + (e.message || e), 'err');
-  }
-  updateEmailApplyBtn();
-};
-
-// 开始投递时把「我的档案」同步进后端档案，确保官网自动填表 / 邮箱投递 / 简历匹配能拿到真实值
-$('#btnStart').addEventListener('click', () => {
-  saveProfileFields(gatherProfilePatch()).catch(() => {});
-}, true);
-
-// 拉取 AI 话术能力状态，联动控制台徽标与「AI 生成话术」开关
-async function refreshAiStatus() {
-  try {
-    const res = await fetch(API_BASE + '/api/ai-status');
-    if (!res.ok) throw new Error('http ' + res.status);
-    const d = await res.json();
-    const badge = $('#aiStatusBadge');
-    const cb = $('#replyUseAi');
-    if (d.enabled) {
-      badge.textContent = `AI 话术：已启用（模型 ${d.model || '?'}）`;
-      badge.className = 'badge ok';
-      cb.disabled = false;
-    } else {
-      badge.textContent = 'AI 话术：未配置（请在 .env 设置 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL，将自动回退规则模板）';
-      badge.className = 'badge warn';
-      cb.disabled = false; // 仍允许勾选，但运行时会自动回退规则
-    }
-  } catch (_) {
-    const badge = $('#aiStatusBadge');
-    badge.textContent = 'AI 话术：检测失败';
-    badge.className = 'badge warn';
-  }
-}
-refreshAiStatus();
-setInterval(refreshAiStatus, 15000);
-
-line('控制台就绪。选择平台后点「开始投递」。', 'info');
-if (API_BASE) line('检测到本页不是从 http://127.0.0.1:4400 打开，已自动直连后端；建议以后用桌面「投递Agent」图标打开。', 'warn');
-
-// ===================== ⑤ 高级功能（对标职得鸭） =====================
-async function advApi(path, init) {
-  const r = await fetch(API_BASE + path, init);
-  const t = await r.text();
-  try { return JSON.parse(t); } catch (_) { return { ok: false, error: t.slice(0, 300) }; }
-}
-async function advPost(path, body) {
-  return advApi(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
-}
-
-/** 一段"JD"是否其实只是列表卡片摘要（offerbiu 列表页抓的就是这个），不是岗位描述 */
-function isCardSummary(jd) {
-  const t = String(jd || '');
-  // 只用结构性标记：「尽快投递」「等 N 项」在真 JD 正文里会自然出现，会误伤
-  return t.includes('投递入口') || /更新\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(t);
-}
-/** 载入「有真 JD」的岗位：没有真 JD 就做不了定制简历与面试攻略。
- *  ⚠️ 不能只看长度 —— offerbiu 的卡片摘要也有 80~120 字，
- *  但内容是「更新 9月2日 / 2027届 / 投递入口」，拿它生成求职信只会产出垃圾。 */
-async function loadAdvJobs() {
-  const sel = $('#advJob');
-  try {
-    const j = await advApi('/api/jobs?status=candidate&limit=60');
-    const list = (j && (j.jobs || j)) || [];
-    const usable = list.filter(x => x && x.id && String(x.jd || '').length > 50 && !isCardSummary(x.jd));
-    if (!usable.length) {
-      sel.innerHTML = '<option value="">（暂无带 JD 的候选岗位）</option>';
-      return;
-    }
-    sel.innerHTML = usable.slice(0, 40).map(x =>
-      '<option value="' + esc(x.id) + '">' + esc((x.company || '?') + ' · ' + (x.position || '?')) + '</option>').join('');
-  } catch (_) {
-    sel.innerHTML = '<option value="">（岗位加载失败，后端可能离线）</option>';
-  }
-}
-function advJobId() {
-  const v = $('#advJob').value;
-  if (!v) { line('⑤ 请先在「目标岗位」下拉框选一个带 JD 的岗位', 'warn'); return null; }
-  return v;
-}
-
-// —— 简历版本 ——
-async function loadResumeVersion() {
-  try {
-    const d = await advApi('/api/resume/version');
-    $('#advResumeVersion').value = d.version || 'original';
-    $('#advResumeVersionNote').textContent = d.description || '';
-  } catch (_) { /* 静默：不影响投递 */ }
-}
-$('#btnSaveResumeVersion').onclick = async () => {
-  const v = $('#advResumeVersion').value;
-  const d = await advPost('/api/resume/version', { version: v });
-  line('⑤ 简历版本 → ' + (d.label || v), d.ok || d.version ? 'info' : 'warn');
-  $('#advResumeVersionNote').textContent = d.description || '';
-};
-
-// —— 求职信模板 ——
-async function loadLetterTpl() {
-  try {
-    const d = await advApi('/api/cover-letter/template');
-    if (d && d.template) {
-      $('#advLetterName').value = d.template.name || '';
-      $('#advLetterBody').value = d.template.content || '';
-      $('#advLetterOut').textContent = '已载入模板。可用变量：' + (d.variables || []).map(v => v.key).join(' ');
-    }
-  } catch (_) { /* 无模板则保持空 */ }
-}
-$('#btnSaveLetterTpl').onclick = async () => {
-  const name = $('#advLetterName').value.trim();
-  if (!name) { line('⑤ 请先填模板名称', 'warn'); return; }
-  const d = await advPost('/api/cover-letter/template', { name, content: $('#advLetterBody').value });
-  line(d.ok ? '⑤ 求职信模板已保存（使用模板不消耗任何额度）' : '⑤ 保存失败：' + (d.error || ''), d.ok ? 'info' : 'warn');
-};
-$('#btnClearLetterTpl').onclick = async () => {
-  await advApi('/api/cover-letter/template', { method: 'DELETE' });
-  $('#advLetterName').value = ''; $('#advLetterBody').value = '';
-  $('#advLetterOut').textContent = '已清空模板，之后由 AI 按 JD 生成。';
-};
-$('#btnGenLetter').onclick = async () => {
-  const id = advJobId(); if (!id) return;
-  $('#advLetterOut').textContent = '生成中…';
-  const d = await advPost('/api/jobs/cover-letter', { jobId: id });
-  if (d.skipped) { $('#advLetterOut').textContent = '跳过：' + (d.skipReason || '未知原因'); return; }
-  $('#advLetterOut').textContent = '【来源 ' + (d.source || '?') + '】\n' + (d.content || d.error || '（空）');
-  line('⑤ 求职信已生成（' + (d.source || '?') + '）', 'info');
-};
-
-// —— 一岗一简历（双通道）——
-$('#btnChannelDecide').onclick = async () => {
-  const d = await advPost('/api/resume/channel', { hasEmail: false, platform: 'boss' });
-  $('#advResumeOut').textContent = 'BOSS 无邮箱时 → ' + (d.channel || '?') + '：' + (d.reason || '');
-};
-$('#btnGenResume').onclick = async () => {
-  const id = advJobId(); if (!id) return;
-  $('#advResumeOut').textContent = '生成中（首次要调 LLM，约 10 秒）…';
-  const d = await advPost('/api/jobs/tailor-resume', { jobId: id });
-  if (!d.ok) { $('#advResumeOut').textContent = '生成失败：' + (d.error || '未知'); return; }
-  $('#advResumeOut').innerHTML = '匹配 ' + d.matchScore + ' 分 · 缓存=' + (d.cached ? '是' : '否') +
-    (d.url ? ' · <a href="' + esc(d.url) + '" target="_blank">打开 PDF</a>' : '');
-  line('⑤ 定制简历已生成（' + d.matchScore + ' 分）', 'info');
-};
-$('#btnGenChatPng').onclick = async () => {
-  const id = advJobId(); if (!id) return;
-  $('#advResumeOut').textContent = '生成聊天用 PNG…';
-  const d = await advPost('/api/jobs/chat-resume', { jobId: id });
-  $('#advResumeOut').textContent = d.ok
-    ? 'PNG 已生成' + (d.path ? '：' + d.path : '') + (d.sent ? ' · 已尝试发送：' + d.sent.detail : ' · 未发送（需先打开对应平台聊天页）')
-    : '失败：' + (d.error || '未知');
-};
-
-// —— 面试攻略 ——
-$('#btnGenInterview').onclick = async () => {
-  const id = advJobId(); if (!id) return;
-  $('#advInterviewOut').textContent = '生成中（约 20 秒）…';
-  const d = await advPost('/api/jobs/interview-prep', { jobId: id });
-  $('#advInterviewOut').textContent = d.content || d.error || '（空）';
-  line('⑤ 面试攻略已生成', 'info');
-};
-
-// —— 运行时间段 ——
-function parseSlots(text) {
-  return String(text || '').split(/[,，]/).map(s => s.trim()).filter(Boolean).map(seg => {
-    const m = seg.split(/[-~至]/).map(x => x.trim());
-    return (m.length === 2 && m[0] && m[1]) ? { startTime: m[0], endTime: m[1] } : null;
-  }).filter(Boolean);
-}
-$('#btnSaveSchedule').onclick = async () => {
-  const platform = $('#advSchedPlatform').value;
-  const enabled = $('#advSchedEnabled').checked;
-  const slots = parseSlots($('#advSchedSlots').value);
-  if (enabled && !slots.length) { line('⑤ 启用了时间段就必须填至少一个，或取消勾选「启用」', 'warn'); return; }
-  const d = await advPost('/api/schedule', { platform, enabled, slots, reset: !enabled });
-  const st = (d.status || {});
-  $('#advScheduleOut').textContent = (d.description || '') + ' · 当前状态：' + (st.message || st.state || '');
-  line('⑤ ' + platform + ' 时间段已保存' + (enabled ? '（' + slots.length + ' 段）' : '（全天）'), 'info');
-};
-$('#btnLoadSchedule').onclick = async () => {
-  const p = $('#advSchedPlatform').value;
-  const d = await advApi('/api/schedule');
-  const one = ((d.schedules) || []).find(s => s.platform === p);
-  if (!one) { $('#advScheduleOut').textContent = '未找到该平台配置'; return; }
-  $('#advSchedEnabled').checked = !!one.enabled;
-  $('#advSchedSlots').value = (one.slots || []).map(s => s.startTime + '-' + s.endTime).join(', ');
-  $('#advScheduleOut').textContent = (one.description || '') + ' · ' + (((one.status) || {}).message || '');
-};
-
-// —— 猎聘交换联系方式 ——
-async function loadExchange() {
-  try {
-    const d = await advApi('/api/exchange/actions');
-    const cur = (d.actions) || [];
-    document.querySelectorAll('.advExchange').forEach(el => { el.checked = cur.indexOf(el.value) >= 0; });
-    $('#advExchangeOut').textContent = cur.length ? ('当前：' + cur.map(v => (d.labels || {})[v] || v).join('、')) : '当前：不进行交换';
-  } catch (_) { /* 静默 */ }
-}
-$('#btnSaveExchange').onclick = async () => {
-  const actions = Array.from(document.querySelectorAll('.advExchange')).filter(el => el.checked).map(el => el.value);
-  await advPost('/api/exchange/actions', { actions });
-  $('#advExchangeOut').textContent = actions.length ? ('已保存：' + actions.join('、')) : '已保存：不进行交换';
-  line('⑤ 猎聘交换联系方式已保存（' + (actions.length || 0) + ' 项）', 'info');
-};
-
-// —— JD 长图查看 ——
-async function loadAdvImageJobs() {
-  const sel = $('#advImageJob');
-  try {
-    const d = await advApi('/api/jobs/image-jd');
-    const items = (d && d.items) || [];
-    if (!items.length) {
-      sel.innerHTML = '<option value="">（暂无已抓取长图的岗位 —— 可运行 scripts/capture_wechat_jd_images.ts）</option>';
-      return;
-    }
-    sel.innerHTML = items.map(x =>
-      '<option value="' + esc(x.id) + '" data-img="' + esc(x.image) + '" data-co="' + esc(x.company || '') + '" data-po="' + esc(x.position || '') + '">'
-      + esc((x.company || '?') + ' · ' + (x.position || '?')) + '</option>').join('');
-  } catch (_) {
-    sel.innerHTML = '<option value="">（长图岗位加载失败，后端可能离线）</option>';
-  }
-}
-$('#btnViewImageJd').onclick = () => {
-  const sel = $('#advImageJob');
-  const opt = sel.selectedOptions[0];
-  const img = opt && opt.getAttribute('data-img');
-  if (!img) { line('⑤ 没有可查看的 JD 长图（先运行抓图脚本）', 'warn'); return; }
-  $('#advImageJdImg').src = img;
-  $('#advImageJdMeta').textContent = (opt.getAttribute('data-co') || '') + ' · ' + (opt.getAttribute('data-po') || '');
-  $('#advImageJdBox').style.display = 'block';
-};
-
-loadAdvJobs();
-loadAdvImageJobs();
-loadResumeVersion();
-loadLetterTpl();
-loadExchange();
+/* ---------- init ---------- */
+fillPlatformSelects();
+checkSvc();
+loadDashboard();
 </script>
 </body>
 </html>
