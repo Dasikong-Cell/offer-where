@@ -564,7 +564,9 @@ async function loadDashboard(){
 /* ---------- deliver: platforms selects ---------- */
 function fillPlatformSelects(){
   const opts = '<option value="">全部平台</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
-  ['#batchPlatform','#replyPlatform'].forEach(s=>{ if($(s)) $(s).innerHTML = opts; });
+  $('#batchPlatform').innerHTML = opts;
+  // 自动回复引擎目前仅实现 BOSS / 猎聘（51job、智联暂无 driver），下拉只列这两个
+  $('#replyPlatform').innerHTML = '<option value="boss">BOSS直聘</option><option value="liepin">猎聘</option>';
   $('#batchSource').innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
 }
 $('#deliverTabs').addEventListener('click', e=>{
@@ -594,18 +596,49 @@ $('#batchRun').addEventListener('click', async ()=>{
   btn.disabled=false; btn.textContent='开始投递';
 });
 
-/* auto reply */
-let replyTimer=null;
+/* auto reply (SSE 流式消费) */
 $('#replyRun').addEventListener('click', async ()=>{
   const btn=$('#replyRun'); btn.disabled=true;
-  $('#replyOut').textContent=''; $('#replyStatus').textContent='运行中…';
+  const out=$('#replyOut'); out.textContent=''; $('#replyStatus').textContent='连接中…';
+  const platform=$('#replyPlatform').value||'boss';
+  const realSend=$('#replyMode').value==='real'?1:0;
+  const unreadOnly=$('#replyUnread').checked?1:0;
+  const url='/api/auto-reply/run?platform='+encodeURIComponent(platform)
+    +'&realSend='+realSend+'&unreadOnly='+unreadOnly;
+  const NL = String.fromCharCode(10);
+  let sent=0, skipped=0, total=0;
   try{
-    const url = '/api/auto-reply/run?platform='+($('#replyPlatform').value||'')
-      + '&unread='+$('#replyUnread').checked+'&mode='+$('#replyMode').value;
-    const r = await api(url);
-    $('#replyOut').textContent = (r&&r.log)||JSON.stringify(r,null,2);
-    $('#replyStatus').textContent = (r&&r.stopped)?'已停止':'完成';
-  }catch(e){ $('#replyOut').textContent='错误：'+e.message; $('#replyStatus').textContent='失败'; }
+    const resp=await fetch(url);
+    if(!resp.ok||!resp.body){ const t=await resp.text().catch(()=>''); out.textContent=t||('HTTP '+resp.status); $('#replyStatus').textContent='失败'; return; }
+    const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+    while(true){
+      const {done,value}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let idx;
+      while((idx=buf.indexOf(NL+NL))>=0){
+        const chunk=buf.slice(0,idx); buf=buf.slice(idx+2);
+        const dataLine=chunk.split(NL).find(l=>l.startsWith('data: '));
+        if(!dataLine) continue;
+        let ev; try{ ev=JSON.parse(dataLine.slice(6)); }catch{ continue; }
+        total++; if(ev.type==='sent') sent++; else if(ev.type==='skipped') skipped++;
+        let line='';
+        switch(ev.type){
+          case 'start': line='▶ 开始 · '+platform+(realSend?'（真实发送）':'（预览）'); break;
+          case 'conv': line='· '+(ev.hr||'?')+(ev.intent?'｜意图:'+ev.intent:'')+(ev.platform?'·'+ev.platform:''); break;
+          case 'dry': case 'send-text': line='  '+(realSend?'✓ 已发':'✎ 拟回复')+'：'+(ev.text||'').slice(0,120); break;
+          case 'sent': line='  ✓ 已发送：'+(ev.text||'').slice(0,120); break;
+          case 'send-resume': line='  ✓ 已发送简历'; break;
+          case 'skipped': line='  ⊘ 跳过：'+(ev.reason||''); break;
+          case 'intent': line='  ◇ 识别意图：'+(ev.intent||'')+(ev.hr?'（'+(ev.hr)+'）':''); break;
+          case 'error': line='  ✗ 错误：'+(ev.message||''); break;
+          case 'aborted': line='■ 用户中止'; break;
+          case 'done': line='■ 完成'; break;
+        }
+        if(line){ out.textContent += (out.textContent?NL:'') + line; out.scrollTop=out.scrollHeight; }
+      }
+    }
+    $('#replyStatus').textContent='完成（事件 '+total+' · 发送 '+sent+' · 跳过 '+skipped+'）';
+  }catch(e){ out.textContent += (out.textContent?NL:'')+'错误：'+e.message; $('#replyStatus').textContent='失败'; }
   btn.disabled=false;
 });
 $('#replyStop').addEventListener('click', async ()=>{
