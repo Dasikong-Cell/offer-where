@@ -410,6 +410,26 @@
             <div class="out" id="exOut"></div>
           </div>
         </div>
+
+        <div class="card" style="margin-top:16px">
+          <h2>AI 回复助手 <span class="tag">HR 收到的署名身份</span></h2>
+          <div class="row2">
+            <div>
+              <label class="f">助手名（署名用）</label>
+              <input id="aiName" maxlength="12" placeholder="懒懒（留空则用默认）" />
+              <div class="small muted" style="margin-top:4px">真实发送时话术会署名「【此名】」，如「【懒懒】您好…」</div>
+            </div>
+            <div>
+              <label class="f">署名开关</label>
+              <label class="toggle" style="margin-top:6px"><input type="checkbox" id="aiSign" checked /> 在回复中署名 AI 身份</label>
+              <div class="small muted" style="margin-top:4px">关闭后话术不再带「【名】」前缀（更像真人）</div>
+            </div>
+          </div>
+          <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+            <button class="btn primary" id="aiNameSave">保存设置</button>
+            <span class="muted small" id="aiNameStatus" style="align-self:center"></span>
+          </div>
+        </div>
       </section>
 
       <!-- ============ Logs ============ -->
@@ -867,8 +887,30 @@ async function fillJobSelect(sel){
 }
 async function loadAdvanced(){
   await fillJobSelect($('#advJob')); await fillJobSelect($('#advIvJob'));
-  loadSchedule(); loadExchange();
+  loadSchedule(); loadExchange(); loadAiSettings();
 }
+
+/* AI 回复助手设置（改名 / 署名开关），落库 profile，下一次自动回复即生效 */
+async function loadAiSettings(){
+  try{
+    const r = await api('/api/profile'); const p = r.profile||{};
+    $('#aiName').value = (p.aiName && String(p.aiName).trim()) ? p.aiName : '';
+    $('#aiSign').checked = (p.signAi === undefined) ? true : !!p.signAi;
+  }catch(e){ $('#aiNameStatus').textContent='加载失败：'+e.message; $('#aiNameStatus').style.color='#f85149'; }
+}
+$('#aiNameSave').addEventListener('click', async ()=>{
+  const btn=$('#aiNameSave'); const status=$('#aiNameStatus');
+  const name=$('#aiName').value.trim(); const sign=$('#aiSign').checked;
+  btn.disabled=true; status.textContent='保存中…'; status.style.color='';
+  try{
+    const r = await api('/api/profile', {method:'PUT', body:JSON.stringify({profile:{aiName:name, signAi:sign}})});
+    const p = r.profile||{};
+    $('#aiName').value = (p.aiName && String(p.aiName).trim()) ? p.aiName : '';
+    const effective = (p.aiName && String(p.aiName).trim()) ? p.aiName : '懒懒';
+    status.textContent='✅ 已保存：助手名「'+effective+'」，署名'+(sign?'开启':'关闭'); status.style.color='#3fb950';
+  }catch(e){ status.textContent='✗ 保存失败：'+e.message; status.style.color='#f85149'; }
+  btn.disabled=false;
+});
 $('#advTailor').addEventListener('click', async ()=>{
   const id=$('#advJob').value; if(!id){ $('#advResumeOut').textContent='请选择岗位'; return; }
   $('#advResumeOut').textContent='生成中…';
