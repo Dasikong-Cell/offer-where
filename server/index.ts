@@ -968,6 +968,82 @@ app.post("/api/resume/version", (req, res) => {
   res.json({ ok: true, version: v, label: RESUME_VERSION_LABELS[v], status: resumeVersionStatus() });
 });
 
+// ============= 简历上传（落盘 + 自动解析） =============
+const RES_DATA = path.dirname(TAILORED_DIR); // data/
+const RES_META_PATH = path.join(RES_DATA, 'resume_meta.json');
+function readResMeta() { try { return JSON.parse(fs.readFileSync(RES_META_PATH, 'utf-8')); } catch { return {}; } }
+function writeResMeta(m: any) { fs.writeFileSync(RES_META_PATH, JSON.stringify(m, null, 2)); }
+function resFileFor(version: string) {
+  return version === 'optimized' ? path.join(RES_DATA, 'resume_optimized.pdf') : path.join(RES_DATA, 'resume_source.pdf');
+}
+
+app.post("/api/resume/upload", async (req, res) => {
+  try {
+    const { fileName, data, version } = req.body || {};
+    const ver = version === 'optimized' ? 'optimized' : 'original';
+    if (!data || typeof data !== 'string') return res.status(400).json({ error: '未收到文件数据' });
+    let buf;
+    try { buf = Buffer.from(data, 'base64'); } catch { return res.status(400).json({ error: '文件数据解码失败' }); }
+    if (buf.length === 0) return res.status(400).json({ error: '文件为空' });
+    if (buf.length > 8 * 1024 * 1024) return res.status(400).json({ error: '文件过大（上限 8MB）' });
+    const isPdf = buf.slice(0, 4).toString('latin1') === '%PDF';
+    const isDocx = buf.slice(0, 2).toString('latin1') === 'PK';
+    if (!isPdf && !isDocx) return res.status(400).json({ error: '仅支持 PDF / Word(.docx) 简历' });
+    const target = resFileFor(ver);
+    if (fs.existsSync(target)) {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      try { fs.renameSync(target, target + '.bak.' + ts); } catch {}
+    }
+    fs.writeFileSync(target, buf);
+    const profile = db.getProfile();
+    profile[ver === 'optimized' ? 'optimized_resume_path' : 'resume_path'] = target;
+    db.saveProfile(profile);
+    const meta = readResMeta();
+    meta[ver] = { fileName: fileName || path.basename(target), size: buf.length, uploadedAt: new Date().toISOString() };
+    writeResMeta(meta);
+    let parsed = undefined, warning = undefined;
+    if (isPdf) {
+      try {
+        const struct = await parseResumeFile(target);
+        if (Array.isArray(struct.skills) && struct.skills.length) {
+          const cur: any = db.getProfile();
+          const prev: any = (cur.skills as any) || '';
+          const merged = Array.from(new Set([
+            ...prev.split(/[,，、]/).map((x: string) => String(x).trim()).filter(Boolean),
+            ...struct.skills,
+          ])).filter(Boolean).join('，');
+          db.saveProfile(Object.assign({}, cur, { skills: merged }));
+        }
+        parsed = { name: struct.name, phone: struct.phone, email: struct.email, skills: (struct.skills || []).length, projects: (struct.projects || []).length, rawTextLength: (struct.rawText || '').length };
+      } catch (e: any) { warning = '简历已保存，但自动解析失败：' + (e && e.message ? e.message : e); }
+    } else {
+      warning = 'Word 简历已保存，但当前解析管线仅支持 PDF；如需参与匹配 / 定制，请上传 PDF 版本。';
+    }
+    res.json({ ok: true, version: ver, path: target, meta: meta[ver], parsed, warning });
+  } catch (error: any) {
+    res.status(500).json({ error: (error && error.message) ? error.message : '简历上传失败' });
+  }
+});
+
+app.get("/api/resume/current", (_req, res) => {
+  const meta = readResMeta();
+  const build = (ver: string) => {
+    const target = resFileFor(ver);
+    const m = meta[ver];
+    return { exists: fs.existsSync(target), size: fs.existsSync(target) ? fs.statSync(target).size : 0, fileName: m && m.fileName, uploadedAt: m && m.uploadedAt, url: '/api/resume/file?version=' + ver };
+  };
+  res.json({ status: resumeVersionStatus(), original: build('original'), optimized: build('optimized') });
+});
+
+app.get("/api/resume/file", (req, res) => {
+  const ver = String(req.query.version) === 'optimized' ? 'optimized' : 'original';
+  const target = resFileFor(ver);
+  if (!fs.existsSync(target)) return res.status(404).json({ error: '简历文件不存在' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'inline; filename="' + path.basename(target) + '"');
+  fs.createReadStream(target).pipe(res);
+});
+
 /** 运行时间段调度（对标职得鸭 TimeManager）。GET 全平台，POST 设置单平台。 */
 app.get("/api/schedule", (_req, res) => {
   res.json({

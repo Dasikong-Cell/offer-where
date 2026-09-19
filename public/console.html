@@ -316,19 +316,38 @@
           <div class="card">
             <h2>候选人档案</h2>
             <div id="profileBox"></div>
-            <label class="f">上传 / 解析简历（PDF）</label>
-            <input type="file" id="resumeFile" accept="application/pdf" />
-            <button class="btn primary sm" id="resumeParse" style="margin-top:8px">解析简历</button>
-            <div class="out" id="resumeParseOut"></div>
+            <div style="border-top:1px dashed #d8dee4;margin:14px 0"></div>
+            <h2>上传简历 <span class="tag">落盘 + 自动解析</span></h2>
+            <div class="row2">
+              <div>
+                <label class="f">底稿类型</label>
+                <select id="upVer">
+                  <option value="original">原始简历</option>
+                  <option value="optimized">优化简历</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:flex-end">
+                <button class="btn primary" id="resumeUpload">上传并解析</button>
+              </div>
+            </div>
+            <div id="dropZone" style="border:1.5px dashed #c4ccd6;border-radius:10px;padding:24px 16px;text-align:center;cursor:pointer;margin-top:10px;background:#fafbfc;color:#57606a">
+              <input type="file" id="resumeFile" accept=".pdf,.doc,.docx" hidden />
+              <div id="dzText">点击选择 或 拖拽简历到此处<br><span style="font-size:12px">支持 PDF / Word，≤8MB</span></div>
+            </div>
+            <div id="upStatus" class="note" style="margin-top:8px"></div>
+            <div id="resumeParseOut" class="out" style="margin-top:8px"></div>
           </div>
           <div class="card">
             <h2>简历版本</h2>
             <div class="kv"><span>当前使用</span><b id="resVerNow">–</b></div>
-            <div style="margin-top:12px;display:flex;gap:10px">
+            <div class="note" id="resVerDesc"></div>
+            <div id="verList" style="margin-top:10px"></div>
+            <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
               <button class="btn" data-ver="original">用原始简历</button>
               <button class="btn" data-ver="optimized">用优化简历</button>
+              <button class="btn" data-ver="tailored">用定制简历</button>
             </div>
-            <div class="note" id="resVerNote">双版本切换：每个投递/求职信接口都会带上所选底稿。</div>
+            <div class="note" id="resVerNote">切换底稿：每个投递 / 求职信 / 定制接口都会带上所选版本。</div>
 
             <h2 style="margin-top:20px">JD 长图查看器</h2>
             <select id="jdImgJob" style="margin-bottom:10px"><option value="">选择岗位…</option></select>
@@ -687,6 +706,11 @@ async function showJdImage(id){
 }
 
 /* ---------- resume ---------- */
+function fileToB64(buf){
+  let bin=''; const bytes=new Uint8Array(buf); const chunk=0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+chunk)); }
+  return btoa(bin);
+}
 async function loadResume(){
   try{
     const r = await api('/api/profile'); const p = r.profile||{};
@@ -696,24 +720,58 @@ async function loadResume(){
       + '<div class="kv"><span>期望城市</span><b>'+esc(p.expectedCity)+'</b></div>'
       + '<div class="kv" style="display:block"><span>期望岗位</span><div class="small muted" style="margin-top:4px">'+esc(p.expectedPositions)+'</div></div>';
   }catch(e){ $('#profileBox').innerHTML='<div class="note bad">加载失败：'+esc(e.message)+'</div>'; }
-  try{ const r = await api('/api/resume/version'); $('#resVerNow').textContent = (r.version==='optimized'?'优化简历':'原始简历'); }catch(e){}
+  try{ const r = await api('/api/resume/current'); renderResumeCurrent(r); }catch(e){}
   loadClTemplates();
   loadJdImgSelect();
 }
-$('#resumeFile').addEventListener('change', ()=>{});
-$('#resumeParse').addEventListener('click', async ()=>{
-  const f = $('#resumeFile').files[0]; if(!f){ $('#resumeParseOut').textContent='请先选择 PDF'; return; }
-  const fd = new FormData(); fd.append('file', f);
-  $('#resumeParseOut').textContent='解析中…';
+function renderResumeCurrent(r){
+  try{ $('#resVerNow').textContent = (r.status&&r.status.label)||'–'; $('#resVerDesc').textContent = (r.status&&r.status.description)||''; }catch(e){}
+  const rows = [['original','原始简历',r.original],['optimized','优化简历',r.optimized]];
+  $('#verList').innerHTML = rows.map(function(row){
+    const ver=row[0], label=row[1], o=row[2]; if(!o) return '';
+    const ok = o.exists;
+    const size = ok ? (o.size/1024).toFixed(0)+' KB' : '未上传';
+    const time = o.uploadedAt ? new Date(o.uploadedAt).toLocaleString('zh-CN') : '';
+    return '<div class="kv" style="border-left:3px solid '+(ok?'#2da44e':'#d0d7de')+';padding-left:8px;margin:8px 0">'
+      + '<span><b>'+label+'</b>'+(ok?' ✓':' ✗')+'<div class="small muted">'+esc(o.fileName||'')+' · '+size+(time?' · '+time:'')+'</div></span>'
+      + (ok?'<span><button class="btn sm" data-prev="'+ver+'">预览</button></span>':'<span class="muted">—</span>')
+      + '</div>';
+  }).join('');
+  $$('[data-prev]').forEach(function(b){ b.addEventListener('click', function(){ window.open('/api/resume/file?version='+b.dataset.prev, '_blank'); }); });
+}
+const dz = $('#dropZone'); const rf = $('#resumeFile');
+dz.addEventListener('click', function(){ rf.click(); });
+dz.addEventListener('dragover', function(e){ e.preventDefault(); dz.style.borderColor='#ff7a45'; });
+dz.addEventListener('dragleave', function(){ dz.style.borderColor='#c4ccd6'; });
+dz.addEventListener('drop', function(e){ e.preventDefault(); dz.style.borderColor='#c4ccd6'; if(e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]){ rf.files = e.dataTransfer.files; onPick(); } });
+rf.addEventListener('change', onPick);
+function onPick(){
+  const f = rf.files[0]; if(!f) return;
+  if(f.size > 8*1024*1024){ $('#upStatus').textContent='✗ 文件超过 8MB 上限'; return; }
+  $('#dzText').innerHTML = '已选择：'+esc(f.name)+'（'+(f.size/1024).toFixed(0)+' KB）<br><span style="font-size:12px">点击「上传并解析」</span>';
+  $('#upStatus').textContent='';
+}
+$('#resumeUpload').addEventListener('click', async function(){
+  const f = rf.files[0]; if(!f){ $('#upStatus').textContent='请先选择简历文件'; return; }
+  if(f.size > 8*1024*1024){ $('#upStatus').textContent='✗ 文件超过 8MB 上限'; return; }
+  $('#upStatus').textContent='上传中…'; $('#resumeParseOut').textContent='';
   try{
-    const res = await fetch('/api/resume/parse', {method:'POST', body:fd});
-    const r = await res.json(); $('#resumeParseOut').textContent=JSON.stringify(r,null,2);
-  }catch(e){ $('#resumeParseOut').textContent='错误：'+e.message; }
+    const buf = await f.arrayBuffer();
+    const b64 = fileToB64(buf);
+    const r = await api('/api/resume/upload', { method:'POST', body: JSON.stringify({ fileName: f.name, data: b64, version: $('#upVer').value }) });
+    let msg = '✅ 已保存为'+(r.version==='optimized'?'优化':'原始')+'简历';
+    if(r.parsed) msg += '｜解析：'+esc(r.parsed.name||'未知')+' · 技能 '+r.parsed.skills+' 项 · 项目 '+r.parsed.projects+' 项';
+    if(r.warning) msg += '  ⚠️ '+r.warning;
+    $('#upStatus').textContent = msg;
+    if(r.parsed) $('#resumeParseOut').textContent = JSON.stringify(r.parsed, null, 2);
+    loadResume();
+  }catch(e){ $('#upStatus').textContent='✗ 上传失败：'+e.message; }
 });
-$$('[data-ver]').forEach(b=>b.addEventListener('click', async ()=>{
-  try{ const r = await api('/api/resume/version', {method:'POST', body:JSON.stringify({version:b.dataset.ver})}); $('#resVerNow').textContent=(r.version==='optimized'?'优化简历':'原始简历'); $('#resVerNote').textContent='已切换为：'+(r.version==='optimized'?'优化简历':'原始简历'); }
+$$('[data-ver]').forEach(function(b){ b.addEventListener('click', async function(){
+  try{ const r = await api('/api/resume/version', {method:'POST', body:JSON.stringify({version:b.dataset.ver})}); $('#resVerNow').textContent = (r.label)||(r.version==='optimized'?'优化简历':'原始简历'); $('#resVerNote').textContent='已切换为：'+((r.label)||r.version); try{ const c = await api('/api/resume/current'); renderResumeCurrent(c); }catch(_){} }
   catch(e){ $('#resVerNote').textContent='切换失败：'+e.message; }
-}));
+}); });
+
 async function loadClTemplates(){
   let list=[]; try{ const r = await api('/api/cover-letter/template'); list=r.templates||[]; }catch(e){}
   $('#clList').innerHTML = list.length? list.map(t=>'<div class="kv"><span><b>'+esc(t.name)+'</b><div class="small muted">'+esc((t.body||'').slice(0,60))+'…</div></span>'
