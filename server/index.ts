@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as db from "./db.js";
 import { fetchLatestCode, listRecentMails, testConnection } from "./services/mail.js";
@@ -655,6 +655,43 @@ app.get("/api/jobs/image-jd", (_req, res) => {
     res.json({ total: items.length, items });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "查询失败" });
+  }
+});
+
+/** 微信图片JD 的 OCR 回填状态统计（按 ocr_status 分组 + 待处理量） */
+app.get("/api/jobs/ocr-status", (_req, res) => {
+  try {
+    const rows = db.query<{ ocr_status: string | null; c: number }>(
+      "SELECT COALESCE(ocr_status,'pending') ocr_status, COUNT(*) c FROM jobs WHERE jd_source='image' GROUP BY ocr_status",
+    );
+    const stat: Record<string, number> = { pending: 0, done: 0, failed: 0 };
+    for (const r of rows) stat[r.ocr_status ?? 'pending'] = r.c;
+    res.json({ ...stat, imageTotal: stat.pending + stat.done + stat.failed });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "查询失败" });
+  }
+});
+
+/** 触发微信图片JD 的 OCR 回填（后台 spawn 脚本，立即返回 pending 量，进度见运行日志/报告） */
+app.post("/api/jobs/ocr-backfill", (req, res) => {
+  try {
+    const body = (req.body || {}) as { limit?: number; model?: string; retryFailed?: boolean };
+    const args: string[] = [];
+    if (body.limit) args.push("--limit", String(body.limit));
+    if (body.model) args.push("--model", String(body.model));
+    if (body.retryFailed) args.push("--retry-failed");
+    const child = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "scripts/ocr_wechat_jd.ts", ...args], {
+      cwd: path.join(__dirname, ".."),
+      detached: false,
+      stdio: "ignore",
+    });
+    child.on("error", (e) => console.error("[ocr-backfill] spawn 失败:", e.message));
+    const pending = db.query<{ c: number }>(
+      "SELECT COUNT(*) c FROM jobs WHERE jd_source='image' AND (jd IS NULL OR TRIM(jd)='') AND (ocr_status IS NULL OR ocr_status='pending')",
+    )[0]?.c || 0;
+    res.json({ ok: true, pending, started: true, note: "已在后台启动，稍后到「职位记录」查看识别结果，或 GET /api/jobs/ocr-status 看进度" });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "启动失败" });
   }
 });
 

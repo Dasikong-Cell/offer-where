@@ -299,6 +299,18 @@
           <div class="funnel" id="recFunnel"></div>
           <div class="legend" id="recLegend"></div>
         </div>
+        <div class="card" style="margin-bottom:16px">
+          <h2>微信图片JD 识别（OCR）</h2>
+          <p class="note small">把「微信推文 JD 长图」用视觉模型识别成文字，写回后这些岗位即可参与智能匹配。需先在 .env 配置<b>视觉模型</b>（如 gpt-4o-mini / qwen-vl / glm-4v）。</p>
+          <div class="row2" style="align-items:center;margin-top:8px">
+            <div id="ocrStat" class="note">统计加载中…</div>
+            <div style="display:flex;gap:10px">
+              <button class="btn primary" id="ocrRun">识别图片JD</button>
+              <button class="btn" id="ocrRetry">重跑失败项</button>
+            </div>
+          </div>
+          <div id="ocrMsg" class="note small" style="margin-top:8px"></div>
+        </div>
         <div class="card">
           <h2>岗位列表 <span class="tag" id="recCount"></span></h2>
           <div class="row2" style="margin-bottom:12px">
@@ -735,6 +747,7 @@ $('#emailApply').addEventListener('click', async ()=>{
 async function loadRecords(){
   let f=null; try{ f = await api('/api/stats/funnel'); }catch(e){}
   if(f) renderFunnel($('#recFunnel'), $('#recLegend'), f.matchScore||{}, f.total);
+  loadOcrStatus();
   // source filter
   const sf = $('#recSource');
   if(!sf.dataset.filled){ sf.innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join(''); sf.dataset.filled='1'; }
@@ -766,6 +779,35 @@ async function loadRecList(){
 }
 $('#recSource').addEventListener('change', loadRecList);
 $('#recStatus').addEventListener('change', loadRecList);
+
+async function loadOcrStatus(){
+  try{
+    const r = await api('/api/jobs/ocr-status');
+    const parts = [];
+    if(r.pending) parts.push('<b style="color:var(--pur)">待识别 '+r.pending+'</b>');
+    if(r.done) parts.push('已识别 '+r.done);
+    if(r.failed) parts.push('<b style="color:var(--bad)">失败 '+r.failed+'</b>');
+    $('#ocrStat').innerHTML = '图片JD 共 '+r.imageTotal+' ：' + (parts.join(' · ')||'无');
+  }catch(e){ $('#ocrStat').textContent='统计获取失败'; }
+}
+$('#ocrRun').addEventListener('click', async ()=>{
+  const b=$('#ocrRun'); b.disabled=true; $('#ocrMsg').textContent='后台识别中…（进度见运行日志 / GET /api/jobs/ocr-status）';
+  try{
+    const r = await api('/api/jobs/ocr-backfill', {method:'POST', body:JSON.stringify({})});
+    $('#ocrMsg').textContent = '已启动，待处理 '+r.pending+' 条；视觉模型需支持多模态，纯文本模型会标记失败。';
+    await loadOcrStatus();
+  }catch(e){ $('#ocrMsg').textContent='启动失败：'+e.message; }
+  b.disabled=false;
+});
+$('#ocrRetry').addEventListener('click', async ()=>{
+  const b=$('#ocrRetry'); b.disabled=true; $('#ocrMsg').textContent='后台重跑失败项…';
+  try{
+    const r = await api('/api/jobs/ocr-backfill', {method:'POST', body:JSON.stringify({retryFailed:true})});
+    $('#ocrMsg').textContent = '已启动重跑，待处理 '+r.pending+' 条。';
+    await loadOcrStatus();
+  }catch(e){ $('#ocrMsg').textContent='启动失败：'+e.message; }
+  b.disabled=false;
+});
 
 async function showJob(id){
   let j=null; try{ const r = await api('/api/jobs'); j=(r.jobs||[]).find(x=>x.id===id); }catch(e){}

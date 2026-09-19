@@ -249,6 +249,10 @@ try {
     db.exec("ALTER TABLE jobs ADD COLUMN jd_source TEXT");
     console.log("[DB] Added jd_source column to jobs");
   }
+  if (!jc4.some((c) => c.name === 'ocr_status')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN ocr_status TEXT");
+    console.log("[DB] Added ocr_status column to jobs");
+  }
 } catch (e) {
   // 忽略错误（列可能已存在）
 }
@@ -642,6 +646,8 @@ export interface JobRow {
   jd_images: string | null;
   /** 'text'=jd 有真描述；'image'=JD 为长图(见 jd_images)；'none'/NULL=无 JD */
   jd_source: string | null;
+  /** 图片JD的OCR回填状态：NULL/pending=待识别；done=已识别写回jd；failed=识别失败(模型非视觉/无内容)，可 --retry-failed 重跑 */
+  ocr_status: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -843,7 +849,7 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'status'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];
