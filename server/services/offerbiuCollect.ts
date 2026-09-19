@@ -4,7 +4,8 @@
  *
  * 采集对象：校招信息库「推荐岗位」卡片中的「投递入口」——即企业官方投递链接
  * （jobs.bytedance.com / 51job / zhaopin / 企业官网 careers / 微信公众号文章 等），
- * 每条返回 { company, position, city, apply_url(官网), jd }。
+ * 每条返回 { company, position, city, apply_url(官网), card_text }。
+ * ⚠️ card_text 是列表页卡片文本（非岗位描述），不得写进 jd。
  */
 import { execAction } from './browser.js';
 import * as db from '../db.js';
@@ -52,7 +53,10 @@ const EXTRACT = `(() => {
     position = position.replace(/等\\s*\\d+\\s*项/, '').replace(/[、，]\\s*$/, '').trim().slice(0, 80) || company;
     const city = CITY.find(c => txt.includes(c)) || null;
     seen.add(url);
-    out.push({ company, position, city, apply_url: url, jd: txt.slice(0, 300) });
+    // ⚠️ txt 是「列表页卡片」的 innerText（含「更新X月X日 / 投递入口 / 2027届」），
+    // **不是岗位描述**。曾整批写进 jd，导致 JD 覆盖率虚高、匹配与 AI 文案失效。
+    // 现在存进 card_text，jd 留空等详情页回填（见 scripts/backfill_wechat_jd.ts）。
+    out.push({ company, position, city, apply_url: url, card_text: txt.slice(0, 300) });
   }
   return out;
 })()`;
@@ -113,7 +117,7 @@ export async function collectOfferbiuByKeywords(
       await execAction('offerbiu', 'eval', { script: SCROLL });
       await execAction('offerbiu', 'wait', { timeout: 1800 });
       const evalRes = await execAction('offerbiu', 'eval', { script: EXTRACT });
-      const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; jd: string }>) || [];
+      const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; card_text: string }>) || [];
       for (const c of raw) {
         if (!c.apply_url || seen.has(c.apply_url)) continue;
         seen.add(c.apply_url);
@@ -122,7 +126,7 @@ export async function collectOfferbiuByKeywords(
           company: c.company,
           position: c.position,
           city: c.city,
-          jd: c.jd,
+          card_text: c.card_text,
           apply_url: c.apply_url,
         });
         collected.push(job);
@@ -181,7 +185,7 @@ export async function collectOfferbiu(limit = 50, pages = 1): Promise<{ collecte
     await execAction('offerbiu', 'eval', { script: SCROLL });
     await execAction('offerbiu', 'wait', { timeout: 2000 });
     const evalRes = await execAction('offerbiu', 'eval', { script: EXTRACT });
-    const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; jd: string }>) || [];
+    const raw = (evalRes.data as Array<{ company: string; position: string; city: string | null; apply_url: string; card_text: string }>) || [];
     for (const c of raw) {
       if (!c.apply_url || seen.has(c.apply_url)) continue;
       seen.add(c.apply_url);
@@ -190,7 +194,7 @@ export async function collectOfferbiu(limit = 50, pages = 1): Promise<{ collecte
         company: c.company,
         position: c.position,
         city: c.city,
-        jd: c.jd,
+        card_text: c.card_text,
         apply_url: c.apply_url,
       });
       collected.push(job);

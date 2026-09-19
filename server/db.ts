@@ -106,6 +106,10 @@ db.exec(`
     match_detail TEXT,
     quarantine TEXT,
     skip_reason TEXT,
+    -- 列表页卡片摘要（如 offerbiu 的「更新9月2日 / 2027届 / 投递入口」）。
+    -- ⚠️ 它不是岗位描述：曾整批塞进 jd，导致「JD 覆盖率 89%」虚高、
+    -- 匹配分与求职信/定制简历/面试攻略全部失效。单独存此列保留信息，jd 只放真岗位描述。
+    card_text TEXT,
     status TEXT NOT NULL DEFAULT 'candidate',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -213,6 +217,17 @@ try {
   if (!jc2.some((c) => c.name === 'skip_reason')) {
     db.exec("ALTER TABLE jobs ADD COLUMN skip_reason TEXT");
     console.log("[DB] Added skip_reason column to jobs");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 card_text 列（列表页卡片摘要，与真 JD 分离）
+try {
+  const jc3 = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jc3.some((c) => c.name === 'card_text')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN card_text TEXT");
+    console.log("[DB] Added card_text column to jobs");
   }
 } catch (e) {
   // 忽略错误（列可能已存在）
@@ -601,6 +616,8 @@ export interface JobRow {
   quarantine: string | null;
   /** 跳过投递的原因（AI/规则给出，用于漏斗分析规则误杀；非空表示此岗位被主动跳过） */
   skip_reason: string | null;
+  /** 列表页卡片摘要（非岗位描述）。与 jd 分离，避免它被当成 JD 参与匹配/AI 文案 */
+  card_text: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -704,6 +721,26 @@ export function sanitizeCompany(input: unknown): string | null {
   return s || null;
 }
 
+/**
+ * 判断一段文本其实是「列表页卡片摘要」而不是岗位描述。
+ *
+ * 背景（2026-09-19 复测发现）：offerbiu 采集器曾把列表页卡片的 innerText 整批写进 jd，
+ * 形如「中大咨询集团 更新 9月2日 博士顾问… 2027届 尽快投递 秋招 需要笔试 投递入口」。
+ * 它有 80~120 字、能通过所有"JD 非空"检查，却让「JD 覆盖率 89%」成为虚高数字，
+ * 并使匹配分 / 求职信 / 定制简历 / 面试攻略全部失效。
+ *
+ * 这类文本应存进 card_text，不得存进 jd。
+ */
+export function isCardSummaryJd(text: unknown): boolean {
+  const t = String(text || '');
+  if (!t.trim()) return false;
+  // 只保留「结构性」标记：实测它们对真 JD 零误伤、对卡片摘要 100% 命中。
+  // ⚠️ 别再加「尽快投递」「等 N 项」——真 JD 正文里会自然出现
+  //    （如「…请尽快投递简历」→ 实测 boss 误判 1 条；「等 3 项」→ 误判 81 条）。
+  return t.includes('投递入口')
+    || /更新\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(t);
+}
+
 export function upsertJob(job: {
   id?: string;
   source?: string;
@@ -715,6 +752,8 @@ export function upsertJob(job: {
   salary?: string | null;
   apply_url?: string | null;
   deadline?: string | null;
+  /** 列表页卡片摘要（非岗位描述）。调用方若只有卡片文本，应传这里而**不要**传 jd */
+  card_text?: string | null;
 }): JobRow {
   // 写库口统一清洗（员工 见 sanitizeJobText 注释）
   job = {
@@ -740,8 +779,8 @@ export function upsertJob(job: {
       : undefined;
   const id = existing?.id || job.id || randomUUID();
   db.prepare(`
-    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, status, created_at, updated_at)
-    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, 'candidate', @created_at, @updated_at)
+    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, status, created_at, updated_at)
+    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       company = excluded.company,
       position = excluded.position,
@@ -751,6 +790,7 @@ export function upsertJob(job: {
       salary = excluded.salary,
       apply_url = excluded.apply_url,
       deadline = excluded.deadline,
+      card_text = excluded.card_text,
       updated_at = excluded.updated_at
   `).run({
     id,
@@ -759,6 +799,7 @@ export function upsertJob(job: {
     position: job.position ?? null,
     city: job.city ?? null,
     jd: job.jd ?? null,
+    card_text: job.card_text ?? null,
     requirements: job.requirements ?? null,
     salary: job.salary ?? null,
     apply_url: job.apply_url ?? null,
@@ -770,7 +811,7 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'card_text' | 'status'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];

@@ -75,9 +75,11 @@ const t3a = matchResumeToJob(RESUME_BLOB, SKILLS_FIX, 'Java开发工程师');
 const t3b = matchResumeToJob(RESUME_BLOB, SKILLS_FIX, 'Java开发工程师');
 check('同输入结果可复现', t3a.score === t3b.score, `${t3a.score} vs ${t3b.score}`);
 
+// ⚠️ 2026-09-19 契约变更：无 JD 时**不再**用职位名兜底打分（否则按匹配度排序投递会退化成随机排序）。
+// 无 JD → 明确得 0 分且 basis='none'，并提示"不应参与按分数排序"。
 const t4 = matchResumeToJob(RESUME_BLOB, SKILLS_FIX, '', undefined, 'Java开发工程师');
-check('无 JD 时用职位名兜底', t4.score > 0 && t4.score <= 70, `score=${t4.score}（封顶70）`);
-check('无 JD 时给出提示', t4.suggestions.some((s) => /职位名/.test(s)), t4.suggestions[0]?.slice(0, 40) || '');
+check('无 JD 时不再兜底打分（应得 0 分）', t4.score === 0 && t4.basis === 'none', `score=${t4.score} basis=${t4.basis}`);
+check('无 JD 时明确提示不可参与排序', t4.suggestions.some((s) => /(JD|排序)/.test(s)), t4.suggestions[0]?.slice(0, 40) || '');
 
 const t5 = matchResumeToJob('', [], '');
 check('全空输入不崩溃', t5.score === 0, `score=${t5.score}`);

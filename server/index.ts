@@ -117,13 +117,17 @@ app.get("/api/stats/funnel", (_req, res) => {
        FROM jobs WHERE match_score IS NOT NULL GROUP BY b`
     );
     const quarantined = (db.query<{ c: number }>("SELECT COUNT(*) c FROM jobs WHERE quarantine IS NOT NULL")[0] || { c: 0 }).c;
-    // 匹配分「依据来源」拆分：无 JD 的岗位只能用职位名粗略兜底（封顶 70），
-    // 这类分数参考性低 —— 不区分会让看板的「高匹配」严重虚高（实测 BOSS 高分 98.4% 来自兜底）。
-    const basis = db.query<{ title_only: number; jd_based: number }>(
+    // 匹配分「依据来源」三分拆分。
+    // ⚠️ 2026-09-19 起**取消了职位名兜底打分**（此前无 JD 时用职位名匹配并封顶 70，
+    //    实测「BOSS 246 个高分里 242 个是兜底」，按匹配度排序等于随机排序）。
+    // 所以现在是三档：真 JD / 卡片摘要（不是 JD，曾伪装成 JD）/ 完全无 JD。
+    // 只报一个笼统的「JD 覆盖率」会让数字虚高（首轮就报过 89%，真实只有 26%）。
+    const basis = db.query<{ title_only: number; jd_based: number; card_only: number }>(
       `SELECT SUM(CASE WHEN jd IS NULL OR TRIM(jd)='' THEN 1 ELSE 0 END) title_only,
-              SUM(CASE WHEN jd IS NOT NULL AND TRIM(jd)<>'' THEN 1 ELSE 0 END) jd_based
+              SUM(CASE WHEN jd IS NOT NULL AND TRIM(jd)<>'' THEN 1 ELSE 0 END) jd_based,
+              SUM(CASE WHEN (jd IS NULL OR TRIM(jd)='') AND card_text IS NOT NULL AND TRIM(card_text)<>'' THEN 1 ELSE 0 END) card_only
        FROM jobs`
-    )[0] || { title_only: 0, jd_based: 0 };
+    )[0] || { title_only: 0, jd_based: 0, card_only: 0 };
     const highWithJd = (db.query<{ c: number }>(
       "SELECT COUNT(*) c FROM jobs WHERE match_score>=70 AND jd IS NOT NULL AND TRIM(jd)<>''"
     )[0] || { c: 0 }).c;
@@ -170,10 +174,14 @@ app.get("/api/stats/funnel", (_req, res) => {
         coverage: total ? Math.round((scored.c / total) * 100) : 0,
         avg: scored.avg ? Math.round(scored.avg) : 0,
         high: bucketMap.high, mid: bucketMap.mid, low: bucketMap.low,
-        /** 仅凭职位名兜底的分数（无 JD），参考性低 */
+        /** 无 JD 的岗位（现在明确不给分，不参与按分数排序） */
         titleOnly: basis.title_only,
-        /** 基于真实 JD 的分数 */
+        /** 基于真实 JD 的岗位数 */
         jdBased: basis.jd_based,
+        /** 其中：虽有"看起来像 JD"的文本、实为列表卡片摘要的（不是岗位描述） */
+        cardTextOnly: basis.card_only,
+        /** 真 JD 覆盖率（jdBased / total）—— 这是唯一可信的覆盖率口径 */
+        realJdRate: total ? Math.round((basis.jd_based / total) * 100) : 0,
         /** 高匹配里真正基于 JD 的数量（这才是可信的高匹配） */
         highWithJd,
       },

@@ -10,6 +10,16 @@ export interface MatchResult {
   matched: string[];
   missing: string[];
   suggestions: string[];
+  /**
+   * 分数的依据 —— 用于防止"虚高分"误导排序：
+   *   'jd'    基于真实岗位描述（可信）
+   *   'none'  既无 JD 也无可用职位名，**分数无意义（恒为 0），不要参与排序**
+   *
+   * ⚠️ 2026-09-19 起**取消了职位名兜底打分**：
+   *    此前无 JD 时会用职位名匹配并封顶 70，实测造成「BOSS 246 个高分里 242 个是兜底」
+   *    —— 按匹配度排序投递因此变成随机排序。现在无 JD 就明确不给分。
+   */
+  basis: 'jd' | 'none';
 }
 
 /**
@@ -29,12 +39,18 @@ export function matchResumeToJob(
   const jdText = `${jd || ''}\n${requirements || ''}`.trim();
   const blob = `${(resumeBlob || '').toLowerCase()} ${(resumeSkills || []).join(' ').toLowerCase()}`;
 
-  // 主匹配信号用 JD；BOSS 等平台采集的岗位常只有职位名、没有 JD 正文，
-  // 此时降级用「职位名」做粗略匹配，避免直接 0 分（否则整池无法排序/过滤）。
-  const usedTitle = jdText.length < 10 && !!title && String(title).trim().length >= 2;
-  const corpus = usedTitle ? String(title).trim() : jdText;
-  if (!corpus) {
-    return { score: 0, matched: [], missing: [], suggestions: ['岗位 JD 与职位名为空，无法匹配'] };
+  // ⚠️ 不再用职位名兜底打分（2026-09-19）：
+  // 此前无 JD 时用职位名匹配并封顶 70，实测「BOSS 246 个高分里 242 个是兜底」，
+  // 让"按匹配度排序投递"退化成随机排序。现在 JD 不足就直接判定为「无法评分」。
+  const corpus = jdText;
+  if (corpus.length < 10) {
+    return {
+      score: 0,
+      matched: [],
+      missing: [],
+      suggestions: ['岗位 JD 为空或过短，无法评估匹配度；补全 JD 后重算（此岗位不应参与按分数排序）'],
+      basis: 'none',
+    };
   }
   const corpusLower = corpus.toLowerCase();
 
@@ -70,16 +86,10 @@ export function matchResumeToJob(
   }
   score = Math.max(0, Math.min(100, score));
 
-  // 职位名兜底匹配的精度弱于真实 JD，封顶 70，确保「有 JD 的岗位」始终排在「仅职位名」之上
-  if (usedTitle) score = Math.min(score, 70);
-
   // 5) 建议：针对缺失技能给出补充提示（最多 8 条）
   const suggestions = missing.slice(0, 8).map(m => `简历中未见「${m.trim()}」，建议在相关经历中显性补充或针对性学习后再投递`);
-  if (usedTitle) {
-    suggestions.unshift('岗位 JD 为空，已基于职位名做粗略匹配（补全 JD 后重算精度更高）');
-  }
 
-  return { score, matched, missing, suggestions };
+  return { score, matched, missing, suggestions, basis: 'jd' };
 }
 
 /** 提取 JD 中可能的技术短语（2-6 字，含中文/字母/数字/·），用于兜底命中 */

@@ -974,16 +974,20 @@ async function renderFunnel() {
     document.getElementById('kHigh').textContent = d.matchScore.high;
     document.getElementById('kMid').textContent = d.matchScore.mid;
     document.getElementById('kLow').textContent = d.matchScore.low;
-    // 如实标注匹配依据：无 JD 的岗位只能靠职位名兜底（封顶 70），高分不代表真匹配
+    // 如实标注匹配依据（三分口径）：真 JD / 卡片摘要 / 无 JD。
+    // ⚠️ 只报一个笼统的「JD 覆盖率」会让数字虚高（首轮报过 89%，真实只有 26%）。
     const ms = d.matchScore;
     const noteEl = document.getElementById('matchBasisNote');
     if (noteEl) {
-      const titleOnly = ms.titleOnly || 0;
-      const highJd = ms.highWithJd || 0;
-      noteEl.textContent = titleOnly
-        ? `⚠️ 可信度提示：${ms.scored} 个已评分岗位中 ${titleOnly} 个「无 JD、仅凭职位名兜底」（参考性低）；`
-          + `高匹配 ${ms.high} 个里真正基于 JD 的只有 ${highJd} 个。采集时补全 JD 后重算才可信（/api/jobs/match）。`
-        : '';
+      const noJd = ms.titleOnly || 0;
+      const card = ms.cardTextOnly || 0;
+      const real = ms.jdBased || 0;
+      const parts = [];
+      parts.push(`真 JD ${real} 个（${ms.realJdRate || 0}%）`);
+      if (card) parts.push(`卡片摘要 ${card} 个（不是岗位描述，已迁出 jd）`);
+      if (noJd) parts.push(`无 JD ${noJd} 个（不给分，不参与按分数排序）`);
+      noteEl.textContent = `⚠️ 覆盖口径：${parts.join(' · ')}。`
+        + `只有真 JD 那 ${real} 个能用匹配度排序 / 求职信 / 定制简历 / 面试攻略。`;
     }
     const box = document.getElementById('funnelBySource');
     box.innerHTML = (d.bySource || []).map(s => `
@@ -1482,7 +1486,8 @@ async function advPost(path, body) {
 /** 一段"JD"是否其实只是列表卡片摘要（offerbiu 列表页抓的就是这个），不是岗位描述 */
 function isCardSummary(jd) {
   const t = String(jd || '');
-  return t.includes('投递入口') || t.includes('尽快投递') || /更新\s*\d+\s*月\s*\d+\s*日/.test(t);
+  // 只用结构性标记：「尽快投递」「等 N 项」在真 JD 正文里会自然出现，会误伤
+  return t.includes('投递入口') || /更新\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(t);
 }
 /** 载入「有真 JD」的岗位：没有真 JD 就做不了定制简历与面试攻略。
  *  ⚠️ 不能只看长度 —— offerbiu 的卡片摘要也有 80~120 字，

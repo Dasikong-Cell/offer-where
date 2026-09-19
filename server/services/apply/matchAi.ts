@@ -28,7 +28,7 @@ export async function matchResumeToJobAi(input: JobMatchInput): Promise<MatchRes
   const { resumeBlob, resumeSkills, jd, requirements } = input;
   const jdText = `${jd || ''}\n${requirements || ''}`.trim();
 
-  // JD 过短无法语义评估 → 直接规则匹配（规则匹配内部会用职位名兜底，避免 0 分）
+  // JD 过短无法语义评估 → 返回「不可评分」（basis:'none'），不要用职位名凑一个分数
   if (!jdText || jdText.length < 10) {
     return matchResumeToJob(resumeBlob, resumeSkills, jd, requirements, input.position);
   }
@@ -57,6 +57,7 @@ ${jdText}
         matched: Array.isArray(r.matched) ? r.matched.map(String).slice(0, 20) : [],
         missing: Array.isArray(r.missing) ? r.missing.map(String).slice(0, 20) : [],
         suggestions: Array.isArray(r.suggestions) ? r.suggestions.map(String).slice(0, 10) : [],
+        basis: 'jd' as const,
       };
     }
   } catch {
