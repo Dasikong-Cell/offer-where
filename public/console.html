@@ -261,6 +261,10 @@
                 <select id="replyMode"><option value="preview">预览（不发送）</option><option value="real">真实发送</option></select></div>
             </div>
             <label class="toggle" style="margin-top:12px"><input type="checkbox" id="replyUnread" checked /> 仅处理未读消息</label>
+            <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+              <button class="btn sm" id="replyCheck">检查登录态</button>
+              <span class="muted small" id="replyPrecheck" style="align-self:center"></span>
+            </div>
             <div style="margin-top:14px;display:flex;gap:10px">
               <button class="btn primary" id="replyRun">开始自动回复</button>
               <button class="btn" id="replyStop">停止</button>
@@ -573,6 +577,8 @@ $('#deliverTabs').addEventListener('click', e=>{
   const b = e.target.closest('button'); if(!b) return;
   $$('#deliverTabs button').forEach(x=>x.classList.toggle('active', x===b));
   ['batch','reply','email'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
+  // 切到「自动回复」页时顺手探一次登录态，避免用户盲跑
+  if(b.dataset.tab==='reply') checkReplyLogin();
 });
 
 /* batch apply */
@@ -596,6 +602,22 @@ $('#batchRun').addEventListener('click', async ()=>{
   btn.disabled=false; btn.textContent='开始投递';
 });
 
+/* auto reply 登录态预检 */
+async function checkReplyLogin(){
+  const platform=$('#replyPlatform').value||'boss';
+  const el=$('#replyPrecheck'); el.textContent='检测中…'; el.style.color='';
+  try{
+    const r=await api('/api/platforms/health?platforms='+encodeURIComponent(platform)+'&deep=1');
+    const h=(r.platforms||[]).find(p=>p.platform===platform);
+    const colorMap={ok:'#3fb950','not-logged-in':'#f85149',blocked:'#f85149',offline:'#f85149',unknown:'#e8a33d'};
+    const labelMap={ok:'✅ 登录态正常','not-logged-in':'⚠️ 未登录',blocked:'⚠️ 被风控拦截',offline:'⚠️ 调试窗口未启动',unknown:'❓ 无法判定'};
+    if(!h){ el.textContent='❓ 无法判定登录态'; el.style.color=colorMap.unknown; return {verdict:'unknown',action:'',detail:''}; }
+    el.textContent=labelMap[h.verdict]+'：'+h.detail; el.style.color=colorMap[h.verdict]||colorMap.unknown;
+    if(h.action) el.textContent+='（'+h.action+'）';
+    return h;
+  }catch(e){ el.textContent='检测失败：'+e.message; el.style.color='#f85149'; return {verdict:'unknown',action:'',detail:e.message}; }
+}
+
 /* auto reply (SSE 流式消费) */
 $('#replyRun').addEventListener('click', async ()=>{
   const btn=$('#replyRun'); btn.disabled=true;
@@ -603,6 +625,12 @@ $('#replyRun').addEventListener('click', async ()=>{
   const platform=$('#replyPlatform').value||'boss';
   const realSend=$('#replyMode').value==='real'?1:0;
   const unreadOnly=$('#replyUnread').checked?1:0;
+  // 运行前先确认登录态：异常（未登录/被风控/窗口未起）默认拦截，避免「静默空跑」
+  const pre=await checkReplyLogin();
+  if(pre.verdict!=='ok'){
+    const go=confirm('平台 '+platform+' 登录态异常（'+pre.verdict+'）：\n'+(pre.detail||'')+'\n'+(pre.action||'')+'\n仍要尝试运行自动回复？');
+    if(!go){ btn.disabled=false; $('#replyStatus').textContent='已取消（登录态异常）'; out.textContent=''; return; }
+  }
   const url='/api/auto-reply/run?platform='+encodeURIComponent(platform)
     +'&realSend='+realSend+'&unreadOnly='+unreadOnly;
   const NL = String.fromCharCode(10);
@@ -645,6 +673,8 @@ $('#replyStop').addEventListener('click', async ()=>{
   try{ await api('/api/auto-reply/stop', {method:'POST'}); $('#replyStatus').textContent='已发送停止信号'; }
   catch(e){ $('#replyStatus').textContent='停止失败：'+e.message; }
 });
+$('#replyCheck').addEventListener('click', checkReplyLogin);
+$('#replyPlatform').addEventListener('change', checkReplyLogin);
 
 /* ---------- email apply (offerbiu) ---------- */
 async function emailStream(path, body, outEl, barEl){

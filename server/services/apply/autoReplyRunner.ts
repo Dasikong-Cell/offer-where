@@ -18,6 +18,7 @@ import { liepinChatDriver } from './liepinChat.js';
 import { decide, composeReplyWithAi, isPositionRelated, parsePositions } from './autoReply.js';
 import { getConversation, upsertConversation, getProfile, listJobs } from '../../db.js';
 import { tryAcquire, release } from './sessionLock.js';
+import { probeOne } from '../platformHealth.js';
 
 /** 默认 AI 助手名（标记「这是 AI 回复」用） */
 const DEFAULT_AI_NAME = '懒懒';
@@ -141,6 +142,18 @@ export async function runAutoReply(
   }
 
   try {
+  // 运行前登录态预检：拦截「静默空跑」——平台掉登录 / 被风控 / Chrome 未起时，
+  // 直接开跑会 list 出 0 会话、投出 0 条却无任何提示，用户看到「跑了 N 个，投出 0 个」一脸懵。
+  // 预检 verdict 不在 ok（即 offline / blocked / not-logged-in）直接报错返回；
+  // unknown（无法判定，多半页面没加载完或改版）则放行，交给后续流程兜底，避免过度阻断。
+  try {
+    const pre = await probeOne(platform, true);
+    if (pre.verdict !== 'ok') {
+      emit({ type: 'error', message: `平台 ${platform} 登录态异常（${pre.verdict}）：${pre.detail}。${pre.action}` });
+      return { sent: 0, skipped: 0 };
+    }
+  } catch { /* 预检本身失败不阻断，交后续流程判定 */ }
+
   // 进对应平台聊天页（依赖该平台已登录的养熟标签）
   await driver.openChat();
   if (signal?.aborted) return { sent: 0, skipped: 0 };
