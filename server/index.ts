@@ -38,12 +38,16 @@ import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcher
 import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuCollect.js";
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.js";
+import { cleanupData } from "./services/dataCleanup.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
 
+/** 默认端口：与全部投递/采集脚本、控制台的 4400 约定保持一致（避免「开箱即坏」） */
+const DEFAULT_PORT = 4400;
+
 /** 本机 API 基础地址（写入 Agent 提示词） */
-const API_BASE = process.env.APP_PUBLIC_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
+const API_BASE = process.env.APP_PUBLIC_URL || `http://127.0.0.1:${process.env.PORT || DEFAULT_PORT}`;
 
 // 待处理的权限请求
 interface PendingPermission {
@@ -64,17 +68,49 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || DEFAULT_PORT);
+/** 监听地址：默认仅本机回环；如需局域网/其它设备访问，显式设 HOST=0.0.0.0（会暴露到内网） */
+const HOST = process.env.HOST || '127.0.0.1';
 
-// Middleware
-app.use(express.json({ limit: '10mb' }));
+// ── 运行日志：错误落盘，便于事后排查（data/run_log/YYYY-MM-DD.log）──
+const RUN_LOG_DIR = path.join(__dirname, '..', 'data', 'run_log');
+try { if (!fs.existsSync(RUN_LOG_DIR)) fs.mkdirSync(RUN_LOG_DIR, { recursive: true }); } catch { /* 忽略 */ }
+function logRun(level: 'INFO' | 'ERROR', msg: string): void {
+  const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
+  if (level === 'ERROR') console.error(line); else console.log(line);
+  try {
+    fs.appendFileSync(path.join(RUN_LOG_DIR, new Date().toISOString().slice(0, 10) + '.log'), line + '\n');
+  } catch { /* 落盘失败不影响主流程 */ }
+}
 
-// CORS：允许控制台页面从任意来源（文件预览/其它端口）直连本机 API
+// ── 安全中间件：JSON 体积 + CORS 白名单 + 写请求来源校验 ──
+// 目的：防止任意网页调用本机 API 触发真实投递/发信（DNS-rebinding / 恶意页面静默调用）
+app.use(express.json({ limit: '15mb' }));
+
+const ALLOWED_ORIGINS = new Set([
+  `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`,
+  'http://127.0.0.1:5173', 'http://localhost:5173', // Vite 开发前端
+]);
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const origin = req.headers.origin;
+  // 仅对白名单来源回显 CORS 头；不回显时浏览器侧会自动拒绝读取
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
   if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  // 写请求来源校验：非白名单跨站一律 403
+  if (!SAFE_METHODS.has(req.method)) {
+    if (origin) {
+      if (!ALLOWED_ORIGINS.has(origin)) { res.status(403).json({ error: '禁止的请求来源' }); return; }
+    } else if (String(req.headers['sec-fetch-site'] || '') === 'cross-site') {
+      res.status(403).json({ error: '禁止的跨站请求' }); return;
+    }
+  }
   next();
 });
 
@@ -1981,14 +2017,22 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// Express 终末错误中间件：未捕获的路由异常统一返回 500 JSON 并落日志，避免连接悬挂
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  logRun('ERROR', `express error: ${err?.stack || err}`);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: '服务器内部错误' });
+});
+
 // 启动服务器
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => {
+  logRun('INFO', `API 服务器已启动 http://${HOST}:${PORT}｜数据库 SQLite(data/chat.db)`);
   console.log(`
 ╔════════════════════════════════════════════╗
 ║                                            ║
 ║     ◉ 简历投递 Agent · API 服务器已启动     ║
 ║                                            ║
-║     地址: http://localhost:${PORT}            ║
+║     地址: http://${HOST}:${PORT}            ║
 ║     数据库: SQLite (data/chat.db)          ║
 ║     能力: 浏览器自动化 / 邮箱验证码 / 档案  ║
 ║                                            ║
@@ -2001,6 +2045,8 @@ const server = app.listen(PORT, () => {
   } catch (e) {
     console.error('[watch] bootstrap failed:', e);
   }
+  // 非阻塞：释放过期磁盘占用（截图超期、DB 备份仅留最近若干份）
+  cleanupData({}).catch((e) => logRun('ERROR', `cleanupData 启动清理异常: ${e}`));
 });
 
 // 退出时关闭所有浏览器，避免残留进程
@@ -2015,3 +2061,12 @@ const shutdown = async () => {
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// 全局异常兜底：不因单个未捕获异常而静默退出（否则用户端表现为「控制台突然打不开、投递莫名中断」）
+process.on('uncaughtException', (err) => {
+  logRun('ERROR', `uncaughtException: ${(err as any)?.stack || err}`);
+});
+process.on('unhandledRejection', (reason) => {
+  const r: any = reason;
+  logRun('ERROR', `unhandledRejection: ${r?.stack || r}`);
+});

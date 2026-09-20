@@ -16,6 +16,7 @@
     "verify": "npm run typecheck && npm run console:check",
     "db:report": "tsx scripts/db_report.ts",
     "db:fix": "tsx scripts/fix_job_data.ts",
+    "data:cleanup": "tsx scripts/cleanup_data.ts",
     "jobs:backfill-jd": "tsx scripts/backfill_jd.ts",
     "hooks:install": "git config core.hooksPath .githooks && echo \"已启用 .githooks/（pre-push 会跑 typecheck + console:check）\""
   },
