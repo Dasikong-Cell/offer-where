@@ -315,7 +315,7 @@
           <h2>岗位列表 <span class="tag" id="recCount"></span></h2>
           <div class="row2" style="margin-bottom:12px">
             <div><select id="recSource"><option value="">全部来源</option></select></div>
-            <div><select id="recStatus"><option value="">全部状态</option><option value="applied">已投递</option><option value="candidate">候选</option><option value="unavailable">不可用</option></div>
+            <div><select id="recStatus"><option value="">全部状态</option><option value="applied">已投递</option><option value="candidate">候选</option><option value="unavailable">不可用</option></select></div>
           </div>
           <div style="overflow:auto">
             <table class="tbl" id="recTbl">
@@ -447,12 +447,58 @@
       <!-- ============ Logs ============ -->
       <section class="view" id="view-logs">
         <div class="card">
-          <h2>近期投递 / 申请记录</h2>
-          <div style="overflow:auto">
-            <table class="tbl" id="logTbl">
-              <thead><tr><th>公司</th><th>职位</th><th>平台</th><th>方式</th><th>状态</th><th>时间</th></tr></thead>
-              <tbody><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
-            </table>
+          <div class="tabs" id="logTabs">
+            <button class="active" data-tab="run">运行日志</button>
+            <button data-tab="ocrfail">OCR 失败明细</button>
+            <button data-tab="apps">投递记录</button>
+          </div>
+
+          <div id="pane-run">
+            <div class="row2" style="margin-bottom:12px;align-items:center">
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <select id="runDate"></select>
+                <select id="runLevel">
+                  <option value="">全部级别</option>
+                  <option value="ERROR">仅 ERROR</option>
+                  <option value="INFO">仅 INFO</option>
+                </select>
+                <input id="runQ" placeholder="关键字过滤…" style="min-width:180px" />
+                <button class="btn" id="runRefresh">刷新</button>
+              </div>
+              <div class="note small" id="runStat" style="text-align:right">加载中…</div>
+            </div>
+            <div style="overflow:auto;max-height:540px">
+              <table class="tbl" id="runTbl">
+                <thead><tr><th style="width:180px">时间</th><th style="width:80px">级别</th><th>内容</th></tr></thead>
+                <tbody><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="pane-ocrfail" style="display:none">
+            <p class="note small">OCR 识别失败项的<b>模型原文</b>（保存在 <code>data/ocr_failed/</code>）。多因图片本身不含 JD 正文（如纯海报 / 微信 UI 噪点），可人工复核后决定是否手工补 JD。</p>
+            <div class="row2" style="margin:12px 0;align-items:center">
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <input id="ocrQ" placeholder="按公司 / 职位 / 原文过滤…" style="min-width:240px" />
+                <button class="btn" id="ocrFailRefresh">刷新</button>
+              </div>
+              <div class="note small" id="ocrFailStat" style="text-align:right">加载中…</div>
+            </div>
+            <div style="overflow:auto;max-height:540px">
+              <table class="tbl" id="ocrFailTbl">
+                <thead><tr><th>公司</th><th>职位</th><th style="width:90px">原文长度</th><th>原文预览</th><th style="width:64px"></th></tr></thead>
+                <tbody><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="pane-apps" style="display:none">
+            <div style="overflow:auto">
+              <table class="tbl" id="logTbl">
+                <thead><tr><th>公司</th><th>职位</th><th>平台</th><th>方式</th><th>状态</th><th>时间</th></tr></thead>
+                <tbody><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -499,7 +545,7 @@ const VIEW_META = {
   records:{t:'职位记录', s:'投递漏斗 · 岗位列表 · JD 长图'},
   resume:{t:'简历中心', s:'候选人档案 · 简历版本 · 求职信模板'},
   advanced:{t:'高级功能', s:'定制简历 · 面试攻略 · 时间段 · 交换联系'},
-  logs:{t:'运行日志', s:'近期投递与申请记录'},
+  logs:{t:'运行日志', s:'运行日志 · OCR 失败明细 · 投递记录'},
 };
 $$('#nav a').forEach(a=>a.addEventListener('click',()=>navigate(a.dataset.view)));
 function navigate(view){
@@ -511,7 +557,7 @@ function navigate(view){
   if(view==='records') loadRecords();
   if(view==='resume') loadResume();
   if(view==='advanced') loadAdvanced();
-  if(view==='logs') loadLogs();
+  if(view==='logs') loadLogsTab();
 }
 $('#refreshBtn').addEventListener('click', ()=>{ loadDashboard(); if($('#view-records').classList.contains('active')) loadRecords(); });
 
@@ -1004,6 +1050,80 @@ $('#exRun').addEventListener('click', async ()=>{
 });
 
 /* ---------- logs ---------- */
+let logTab = 'run';
+function loadLogsTab(){
+  if(logTab==='run') return loadRunLogs();
+  if(logTab==='ocrfail') return loadOcrFailed();
+  return loadLogs();
+}
+$$('#logTabs button').forEach(b=>b.addEventListener('click', ()=>{
+  logTab = b.dataset.tab;
+  $$('#logTabs button').forEach(x=>x.classList.toggle('active', x===b));
+  ['run','ocrfail','apps'].forEach(t=>{ const p = $('#pane-'+t); if(p) p.style.display = (t===logTab)?'block':'none'; });
+  loadLogsTab();
+}));
+function fmtTs(ts){ return String(ts||'').replace('T',' ').slice(0,19); }
+
+async function loadRunLogs(){
+  const tb = $('#runTbl tbody');
+  if(!tb) return;
+  tb.innerHTML = '<tr><td colspan="3" class="empty">加载中…</td></tr>';
+  const date = $('#runDate').value, level = $('#runLevel').value, q = $('#runQ').value.trim();
+  try{
+    const r = await api('/api/logs/run?date='+encodeURIComponent(date)+'&level='+encodeURIComponent(level)+'&q='+encodeURIComponent(q));
+    const sel = $('#runDate'), sig = (r.dates||[]).join(',');
+    if(sel.dataset.sig !== sig){
+      sel.dataset.sig = sig;
+      sel.innerHTML = (r.dates||[]).map(d=>'<option value="'+esc(d)+'">'+esc(d)+'</option>').join('') || '<option value="">（无日志）</option>';
+      sel.value = r.date || '';
+    }
+    const lines = r.lines||[];
+    $('#runStat').textContent = (r.date||'无日志') + ' · 命中 ' + (r.total||0) + ' 行' + (lines.length < (r.total||0) ? '（显示前 '+lines.length+'）' : '');
+    if(!lines.length){ tb.innerHTML='<tr><td colspan="3" class="empty">无匹配日志</td></tr>'; return; }
+    tb.innerHTML = lines.map(l=>'<tr><td class="small muted">'+esc(fmtTs(l.ts))+'</td>'
+      +'<td><span class="badge '+(l.level==='ERROR'?'b-bad':'b-info')+'">'+esc(l.level)+'</span></td>'
+      +'<td class="small">'+esc(l.msg)+'</td></tr>').join('');
+  }catch(e){ tb.innerHTML='<tr><td colspan="3" class="empty">加载失败：'+esc(e.message)+'</td></tr>'; $('#runStat').textContent=''; }
+}
+
+async function loadOcrFailed(){
+  const tb = $('#ocrFailTbl tbody');
+  if(!tb) return;
+  tb.innerHTML = '<tr><td colspan="5" class="empty">加载中…</td></tr>';
+  const q = $('#ocrQ').value.trim();
+  try{
+    const r = await api('/api/logs/ocr-failed?q='+encodeURIComponent(q));
+    const items = r.items||[];
+    $('#ocrFailStat').textContent = '失败 ' + (r.total||0) + ' 条';
+    if(!items.length){ tb.innerHTML='<tr><td colspan="5" class="empty">'+(q?'无匹配项':'暂无失败项')+'</td></tr>'; return; }
+    tb.innerHTML = items.map(it=>{
+      const preview = String(it.text||'').replace(/\s+/g,' ').slice(0,90);
+      return '<tr><td>'+esc(it.company||'–')+'</td><td class="small">'+esc(it.position||'–')+'</td>'
+        +'<td class="small muted">'+it.chars+' 字</td><td class="small muted">'+esc(preview)+'…</td>'
+        +'<td><button class="btn sm" data-ocrview="'+esc(it.jobId)+'">查看</button></td></tr>';
+    }).join('');
+    $$('#ocrFailTbl [data-ocrview]').forEach(b=>b.addEventListener('click', ()=>{
+      const it = items.find(x=>x.jobId===b.dataset.ocrview); if(!it) return;
+      openModal('OCR 失败原文 · '+(it.company||it.jobId),
+        '<div class="kv"><span>公司</span><b>'+esc(it.company||'–')+'</b></div>'
+        +'<div class="kv"><span>职位</span><b>'+esc(it.position||'–')+'</b></div>'
+        +'<div class="kv"><span>原文长度</span><b>'+it.chars+' 字'+(it.truncated?'（已截断显示）':'')+'</b></div>'
+        +'<pre style="white-space:pre-wrap;margin-top:12px;font-size:12.5px;line-height:1.6">'+esc(it.text||'')+'</pre>');
+    }));
+  }catch(e){ tb.innerHTML='<tr><td colspan="5" class="empty">加载失败：'+esc(e.message)+'</td></tr>'; $('#ocrFailStat').textContent=''; }
+}
+
+$('#runRefresh').addEventListener('click', loadRunLogs);
+$('#runDate').addEventListener('change', loadRunLogs);
+$('#runLevel').addEventListener('change', loadRunLogs);
+let runQTimer = null;
+$('#runQ').addEventListener('input', ()=>{ clearTimeout(runQTimer); runQTimer = setTimeout(loadRunLogs, 350); });
+$('#runQ').addEventListener('keydown', e=>{ if(e.key==='Enter') loadRunLogs(); });
+$('#ocrFailRefresh').addEventListener('click', loadOcrFailed);
+let ocrQTimer = null;
+$('#ocrQ').addEventListener('input', ()=>{ clearTimeout(ocrQTimer); ocrQTimer = setTimeout(loadOcrFailed, 350); });
+$('#ocrQ').addEventListener('keydown', e=>{ if(e.key==='Enter') loadOcrFailed(); });
+
 async function loadLogs(){
   let apps=[]; try{ const r = await api('/api/applications?limit=100'); apps=(r.applications||r.jobs||[]); }catch(e){}
   const tb = $('#logTbl tbody');

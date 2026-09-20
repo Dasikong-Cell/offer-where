@@ -731,6 +731,77 @@ app.post("/api/jobs/ocr-backfill", (req, res) => {
   }
 });
 
+// ── 运行日志 / OCR 失败明细（供控制台「运行日志」视图，只读） ──
+const OCR_FAILED_DIR = path.join(__dirname, "..", "data", "ocr_failed");
+
+app.get("/api/logs/run", (req, res) => {
+  try {
+    const qRaw = String(req.query.q || "").trim();
+    const q = qRaw.toLowerCase();
+    const level = String(req.query.level || "").trim().toUpperCase();
+    const limit = Math.min(2000, Number(req.query.limit) || 500);
+    let dates: string[] = [];
+    try {
+      dates = fs.readdirSync(RUN_LOG_DIR).filter((f) => f.endsWith(".log")).map((f) => f.replace(/\.log$/, "")).sort().reverse();
+    } catch { /* 尚无日志目录 */ }
+    const date = String(req.query.date || "").trim() || dates[0] || "";
+    const lines: Array<{ ts: string; level: string; msg: string }> = [];
+    if (date) {
+      const fp = path.join(RUN_LOG_DIR, date + ".log");
+      if (fs.existsSync(fp)) {
+        for (const ln of fs.readFileSync(fp, "utf-8").split("\n")) {
+          const m = ln.match(/^\[([^\]]+)\]\s*\[([A-Z]+)\]\s*(.*)$/);
+          if (!m) continue;
+          const rec = { ts: m[1], level: m[2], msg: m[3] };
+          if (level && rec.level !== level) continue;
+          if (q && !(rec.msg.toLowerCase().includes(q) || rec.ts.toLowerCase().includes(q))) continue;
+          lines.push(rec);
+        }
+      }
+    }
+    lines.reverse(); // 最新在前
+    res.json({ dates, date, level, q: qRaw, total: lines.length, lines: lines.slice(0, limit) });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取运行日志失败" });
+  }
+});
+
+app.get("/api/logs/ocr-failed", (req, res) => {
+  try {
+    const qRaw = String(req.query.q || "").trim();
+    const q = qRaw.toLowerCase();
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(OCR_FAILED_DIR).filter((f) => f.endsWith(".txt"));
+    } catch { /* 尚无失败明细 */ }
+    const MAX = 4000;
+    const items: Array<{ jobId: string; company: string; position: string; chars: number; at: string; text: string; truncated: boolean }> = [];
+    for (const f of files) {
+      const jobId = f.replace(/\.txt$/, "");
+      let text = "";
+      let at = "";
+      try {
+        const fp = path.join(OCR_FAILED_DIR, f);
+        text = fs.readFileSync(fp, "utf-8");
+        at = new Date(fs.statSync(fp).mtimeMs).toISOString();
+      } catch { continue; }
+      let company = "";
+      let position = "";
+      try {
+        const row = db.query<{ company: string; position: string }>("SELECT company, position FROM jobs WHERE id=?", [jobId])[0];
+        company = row?.company || "";
+        position = row?.position || "";
+      } catch { /* 忽略 */ }
+      if (q && !(`${company} ${position} ${text}`.toLowerCase().includes(q))) continue;
+      items.push({ jobId, company, position, chars: text.length, at, text: text.slice(0, MAX), truncated: text.length > MAX });
+    }
+    items.sort((a, b) => (a.at < b.at ? 1 : -1));
+    res.json({ total: items.length, q: qRaw, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取 OCR 失败明细失败" });
+  }
+});
+
 app.post("/api/jobs", (req, res) => {
   try {
     const { id, source, company, position, city, jd, requirements, salary, applyUrl, deadline } = req.body || {};

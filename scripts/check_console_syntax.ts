@@ -46,5 +46,25 @@ while ((m = re.exec(html)) !== null) {
 }
 
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-console.log(bad ? `\n❌ ${bad} 个内联脚本有语法错误` : `\n✅ 全部 ${i} 个内联脚本语法正确`);
-process.exit(bad ? 1 : 0);
+
+// ── 结构平衡校验（仅静态 HTML，即第一个 <script> 之前） ──
+// 背景：曾因 <select id="recStatus"> 漏写 </select>，其后所有视图被解析进 select 内部、
+// 简历中心整个不渲染；而本脚本只查 JS 语法、verify 与 58 项回归全绿，问题静默存在很久，
+// 最终靠截图才发现。容器类标签在静态 HTML 中不应出现在 JS 字符串里，可安全做配对计数。
+const scriptAt = html.search(/<script/i);
+const staticHtml = scriptAt === -1 ? html : html.slice(0, scriptAt);
+const CONTAINERS = ['select', 'option', 'textarea', 'section', 'table', 'thead', 'tbody', 'tr', 'th', 'td'];
+let unbal = 0;
+for (const tag of CONTAINERS) {
+  const open = (staticHtml.match(new RegExp(`<${tag}\\b`, 'gi')) || []).length;
+  const close = (staticHtml.match(new RegExp(`</${tag}>`, 'gi')) || []).length;
+  if (open !== close) {
+    unbal++;
+    console.log(`❌ 结构不平衡：<${tag}> ${open} 个，</${tag}> ${close} 个`);
+  }
+}
+if (!unbal) console.log('✅ 静态 HTML 容器标签配对平衡');
+
+const failed = bad + unbal;
+console.log(failed ? `\n❌ ${bad} 个内联脚本语法错误，${unbal} 类标签不平衡` : `\n✅ 全部 ${i} 个内联脚本语法正确，静态 HTML 标签配对平衡`);
+process.exit(failed ? 1 : 0);
