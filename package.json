@@ -13,6 +13,8 @@
     "typecheck": "tsc -b",
     "console:check": "tsx scripts/check_console_syntax.ts",
     "selftest": "tsx scripts/selftest.ts",
+    "test:contract": "tsx scripts/contract_tests.ts",
+    "test": "npm run selftest && npm run test:contract",
     "verify": "npm run typecheck && npm run console:check",
     "db:report": "tsx scripts/db_report.ts",
     "db:fix": "tsx scripts/fix_job_data.ts",

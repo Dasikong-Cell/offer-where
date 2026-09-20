@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify-and-test:
+    name: 类型检查 + 门禁 + 测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # tsc -b（含 server/）+ 控制台内联 JS 语法校验
+      - name: 类型检查 + 控制台语法门禁
+        run: npm run verify
+
+      # 只读回归（缺本地简历时自动跳过 A 段）+ 自动回复/来源守卫合约测试
+      - name: 回归自检 + 合约测试
+        run: npm test

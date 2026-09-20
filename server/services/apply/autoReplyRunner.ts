@@ -41,11 +41,16 @@ function resolveHrPosition(company: string | null, platform: string): string | n
   return hit?.position || null;
 }
 
-/** 支持自动回复的平台 → 对应聊天驱动 */
-const DRIVERS: Partial<Record<ApplyPlatform, ChatDriver>> = {
+/** 支持自动回复的平台 → 对应聊天驱动（新增平台在此登记即生效，引擎零改动） */
+export const DRIVERS: Partial<Record<ApplyPlatform, ChatDriver>> = {
   boss: bossChatDriver,
   liepin: liepinChatDriver,
 };
+
+/** 注册/覆盖某平台的聊天驱动：新增平台扩展用；测试中亦用于注入 mock 驱动 */
+export function registerChatDriver(platform: ApplyPlatform, driver: ChatDriver): void {
+  DRIVERS[platform] = driver;
+}
 
 export function getChatDriver(platform: ApplyPlatform): ChatDriver | null {
   return DRIVERS[platform] || null;
@@ -93,6 +98,11 @@ export interface RunAutoReplyOpts {
   hrCooldownSec?: number;
   /** 停止信号 */
   signal?: AbortSignal;
+  /**
+   * 登录态预检实现（可注入；默认用 platformHealth.probeOne）。
+   * 测试 / 嵌入场景可传桩函数，避免依赖真实 CDP 窗口。
+   */
+  probe?: (platform: ApplyPlatform, deep: boolean) => Promise<{ verdict: string; detail?: string; action?: string }>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -147,8 +157,10 @@ export async function runAutoReply(
   // 预检 verdict 不在 ok（即 offline / blocked / not-logged-in）直接报错返回；
   // unknown（无法判定，多半页面没加载完或改版）则放行，交给后续流程兜底，避免过度阻断。
   try {
-    const pre = await probeOne(platform, true);
-    if (pre.verdict !== 'ok') {
+    const pre = await (opts.probe || probeOne)(platform, true);
+    // 注意：unknown（无法判定，多半页面没加载完或改版）要**放行**，交后续流程兜底，避免过度阻断。
+    // 只拦明确的异常态：offline / blocked / not-logged-in。
+    if (pre.verdict !== 'ok' && pre.verdict !== 'unknown') {
       emit({ type: 'error', message: `平台 ${platform} 登录态异常（${pre.verdict}）：${pre.detail}。${pre.action}` });
       return { sent: 0, skipped: 0 };
     }

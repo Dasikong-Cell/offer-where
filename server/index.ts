@@ -39,6 +39,7 @@ import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuC
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
+import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
@@ -84,14 +85,14 @@ function logRun(level: 'INFO' | 'ERROR', msg: string): void {
 }
 
 // ── 安全中间件：JSON 体积 + CORS 白名单 + 写请求来源校验 ──
-// 目的：防止任意网页调用本机 API 触发真实投递/发信（DNS-rebinding / 恶意页面静默调用）
+// 目的：防止任意网页调用本机 API 触发真实投递/发信（DNS-rebinding / 恶意页面静默调用）。
+// 局域网多人共用：把对方访问地址加入 EXTRA_ORIGINS（如 http://192.168.1.20:4400），并把 HOST 设为 0.0.0.0。
 app.use(express.json({ limit: '15mb' }));
 
-const ALLOWED_ORIGINS = new Set([
-  `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`,
-  'http://127.0.0.1:5173', 'http://localhost:5173', // Vite 开发前端
-]);
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const ALLOWED_ORIGINS = buildAllowedOrigins(
+  PORT,
+  String(process.env.EXTRA_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -103,14 +104,13 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   }
   if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
-  // 写请求来源校验：非白名单跨站一律 403
-  if (!SAFE_METHODS.has(req.method)) {
-    if (origin) {
-      if (!ALLOWED_ORIGINS.has(origin)) { res.status(403).json({ error: '禁止的请求来源' }); return; }
-    } else if (String(req.headers['sec-fetch-site'] || '') === 'cross-site') {
-      res.status(403).json({ error: '禁止的跨站请求' }); return;
-    }
-  }
+  const verdict = checkRequestOrigin({
+    method: req.method,
+    origin,
+    secFetchSite: req.headers['sec-fetch-site'] as string | undefined,
+    allowed: ALLOWED_ORIGINS,
+  });
+  if (!verdict.ok) { res.status(403).json({ error: verdict.reason }); return; }
   next();
 });
 

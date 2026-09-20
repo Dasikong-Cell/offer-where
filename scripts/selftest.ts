@@ -21,7 +21,7 @@ import { buildResumeHtml } from '../server/services/apply/resumeRender.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skip = 0;
 const results: Array<{ name: string; ok: boolean; detail: string }> = [];
 
 function check(name: string, ok: boolean, detail = '') {
@@ -34,17 +34,22 @@ function check(name: string, ok: boolean, detail = '') {
 console.log('\n══════ A. 简历解析 ══════');
 const resumePath = path.join(ROOT, 'data', 'resume_source.pdf');
 let struct: any = null;
-try {
-  if (!fs.existsSync(resumePath)) throw new Error('简历文件不存在：' + resumePath);
-  struct = await parseResumeFile(resumePath);
-  check('PDF 可解析', struct.rawText.length > 200, `${struct.rawText.length} 字符`);
-  check('抽取到姓名', !!struct.name, struct.name || '(空)');
-  check('抽取到手机号', /^1\d{10}$/.test(String(struct.phone || '')), struct.phone || '(空)');
-  check('抽取到邮箱', /@/.test(String(struct.email || '')), struct.email || '(空)');
-  check('抽取到技能', struct.skills.length >= 5, `${struct.skills.length} 项`);
-  check('searchBlob 非空', Boolean(struct.searchBlob && struct.searchBlob.length > 50), `${(struct.searchBlob || '').length} 字符`);
-} catch (e: any) {
-  check('简历解析整体', false, e?.message || String(e));
+if (!fs.existsSync(resumePath)) {
+  // data/ 属个人数据、不入库；CI / 新机器上缺失属正常，跳过而非误报失败。
+  console.log(`⏭️  跳过 A（未找到 ${path.relative(ROOT, resumePath)} —— 个人数据不入库，CI/新机器上正常缺失）`);
+  skip += 6;
+} else {
+  try {
+    struct = await parseResumeFile(resumePath);
+    check('PDF 可解析', struct.rawText.length > 200, `${struct.rawText.length} 字符`);
+    check('抽取到姓名', !!struct.name, struct.name || '(空)');
+    check('抽取到手机号', /^1\d{10}$/.test(String(struct.phone || '')), struct.phone || '(空)');
+    check('抽取到邮箱', /@/.test(String(struct.email || '')), struct.email || '(空)');
+    check('抽取到技能', struct.skills.length >= 5, `${struct.skills.length} 项`);
+    check('searchBlob 非空', Boolean(struct.searchBlob && struct.searchBlob.length > 50), `${(struct.searchBlob || '').length} 字符`);
+  } catch (e: any) {
+    check('简历解析整体', false, e?.message || String(e));
+  }
 }
 
 console.log('\n══════ A2. 手机号抽取（多种常见写法） ══════');
@@ -205,7 +210,7 @@ check('HTML 自包含（无外链资源）', !/<(link|script|img)\b/i.test(html)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ 汇总 ══════');
-console.log(`通过 ${pass} / 共 ${pass + fail}${fail ? `，失败 ${fail}` : ''}`);
+console.log(`通过 ${pass} / 共 ${pass + fail}${skip ? `（跳过 ${skip} 项：无本地简历文件）` : ''}${fail ? `，失败 ${fail}` : ''}`);
 if (fail) {
   console.log('\n失败明细：');
   for (const r of results.filter((x) => !x.ok)) console.log(`  ❌ ${r.name}  ${r.detail}`);
