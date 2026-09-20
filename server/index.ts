@@ -802,6 +802,36 @@ app.get("/api/logs/ocr-failed", (req, res) => {
   }
 });
 
+app.get("/api/logs/summary", (req, res) => {
+  try {
+    const days = Math.min(14, Math.max(1, Number(req.query.days) || 1));
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(RUN_LOG_DIR).filter((f) => f.endsWith(".log")).sort().reverse().slice(0, days);
+    } catch { /* 尚无日志目录 */ }
+    let total = 0;
+    const errs: Array<{ ts: string; msg: string }> = [];
+    for (const f of files) {
+      try {
+        for (const ln of fs.readFileSync(path.join(RUN_LOG_DIR, f), "utf-8").split("\n")) {
+          const m = ln.match(/^\[([^\]]+)\]\s*\[([A-Z]+)\]\s*(.*)$/);
+          if (!m) continue;
+          total++;
+          if (m[2] === "ERROR") errs.push({ ts: m[1], msg: m[3] });
+        }
+      } catch { /* 跳过单个文件 */ }
+    }
+    errs.sort((a, b) => (a.ts < b.ts ? 1 : -1));
+    let ocrFailed = 0;
+    try {
+      ocrFailed = fs.readdirSync(OCR_FAILED_DIR).filter((f) => f.endsWith(".txt")).length;
+    } catch { /* 忽略 */ }
+    res.json({ days, files: files.length, total, errors: errs.length, lastError: errs[0] || null, ocrFailed });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取日志摘要失败" });
+  }
+});
+
 app.post("/api/jobs", (req, res) => {
   try {
     const { id, source, company, position, city, jd, requirements, salary, applyUrl, deadline } = req.body || {};
