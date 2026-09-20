@@ -308,9 +308,9 @@ curl -X POST http://127.0.0.1:4400/api/jobs/tailor-resume -H 'Content-Type: appl
 
 ```bash
 npm install
-npm run dev          # 前端(React, 5173) + 后端(默认 3000，CORS 互通)；浏览器开 http://127.0.0.1:5173 使用 React 界面
+npm run dev          # 前端(React, 5173) + 后端(默认 4400)；浏览器开 http://127.0.0.1:5173 使用 React 界面
 npm run build        # tsc -b && vite build（产物 dist/，供自托管/开发用）
-npm run server       # 仅起后端，并在 / 托管 public/console.html（生产控制台，默认 3000，PORT=4400 覆盖）
+npm run server       # 仅起后端，并在 / 托管 public/console.html（生产控制台，默认 4400，PORT 可覆盖）
 ```
 
 ### ⚠️ 改完代码必须跑 `npm run verify`（血的教训）
@@ -321,7 +321,9 @@ npm run server       # 仅起后端，并在 / 托管 public/console.html（生�
 
 ```bash
 npm run verify       # = typecheck(tsc -b，含 server/) + console:check(控制台内联 JS 语法)
-npm run selftest     # 42 项功能回归（只读，不投递不发信）
+npm run test         # = selftest + 合约测试（CI 同款；离线可跑，不碰浏览器/不联网）
+npm run selftest     # 只读功能回归 58 项（无本地简历文件时自动跳过 A 段）
+npm run test:contract # 23 项合约测试：请求来源守卫 8 + 自动回复引擎 15（mock 驱动，无需 CDP）
 npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「构建坏了没人知道」
 ```
 
@@ -329,6 +331,28 @@ npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「
 紧急时可 `git push --no-verify` 跳过。
 
 > 生产一键启动：双击桌面「投递Agent」（= `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 自动打开 `http://127.0.0.1:4400/`（console.html 控制台）。
+
+## 部署与安全（分发 / 多人共用）
+
+本服务会**触发真实副作用**（批量投递、邮箱直投发信），因此内置了来源防护：
+
+| 场景 | 配置 | 说明 |
+|---|---|---|
+| 本机自用（默认） | 无需配置 | 仅监听 `127.0.0.1`，CORS 白名单只放行本机来源 |
+| 局域网小团队共用 | `HOST=0.0.0.0`<br>`EXTRA_ORIGINS=http://192.168.1.20:4400,...` | 把**对方浏览器访问本服务的来源地址**加入白名单，否则其写操作会被 403 |
+| 公网 / 多租户 | ❌ 不支持 | 需账号体系、数据隔离、托管浏览器，属架构级改造；**请勿直接暴露公网** |
+
+安全机制（`server/services/requestGuard.ts`，有单测覆盖）：
+- 写请求（非 GET/HEAD/OPTIONS）带 `Origin` 时必须命中白名单，否则 **403**；
+- 不带 `Origin` 时校验 `Sec-Fetch-Site`，跨站一律 **403**；
+- 只读请求放行（无副作用）。
+
+> 这套机制用于拦截「用户浏览恶意网页时，页面 JS 静默调用本机 API 触发投递/发信」（DNS-rebinding）。
+
+运维要点：
+- 运行日志落盘 `data/run_log/YYYY-MM-DD.log`；启动时自动清理过期截图与超量 DB 备份（`npm run data:cleanup` 可手动跑，`--dry-run` 只统计）。
+- 未捕获异常有全局兜底（保活 + 落日志），不会静默退出。
+- OCR 失败项的模型原文落盘 `data/ocr_failed/`，不丢数据，便于复核。
 
 ## License
 
