@@ -376,6 +376,9 @@ export async function runBatchApply(
         status: job.status,
         profile,
         minScore: input.criteria?.minScore,
+        // 闸门以界面展示的匹配分为准（jobs.match_score）。不传这个，
+        // 闸门就会用本地规则分另算一套，导致「界面 88 分却判匹配度过低跳过」。
+        storedScore: job.match_score ?? null,
       });
       if (!decision.greet) {
         skipped++;
@@ -566,11 +569,26 @@ export async function runBatchApply(
     onEvent?.({ type: 'result', index: i, jobId: job.id, status: res.status, message: res.message });
   }
 
+  // 全部没投出去时，把跳过原因归类汇总进 message —— 否则用户只看到
+  // 「成功 0、跳过 N」，完全不知道是筛选、匹配度还是登录态的问题（曾因此误判"投不出去"）。
+  const reasonTop = (() => {
+    if (applied > 0 || !results.length) return '';
+    const tally = new Map<string, number>();
+    for (const r of results) {
+      if (r.status !== 'skipped') continue;
+      // 归一化：取「：」前的规则名（如「匹配度过低」「城市不符」「命中排除词」）
+      const label = String(r.message || '').replace(/^跳过：/, '').split(/[（(：:]/)[0].trim() || '其他';
+      tally.set(label, (tally.get(label) || 0) + 1);
+    }
+    const top = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return top.length ? `｜跳过原因：${top.map(([k, v]) => `${k}×${v}`).join('、')}` : '';
+  })();
+
   const summary: BatchResult = {
     total: picked.length,
     applied, needManual, needCaptcha, error, skipped,
     results,
-    message: `批量投递完成：共 ${picked.length} 个岗位，成功 ${applied}、需人工 ${needManual}、需验证码 ${needCaptcha}、失败 ${error}、跳过 ${skipped}`,
+    message: `批量投递完成：共 ${picked.length} 个岗位，成功 ${applied}、需人工 ${needManual}、需验证码 ${needCaptcha}、失败 ${error}、跳过 ${skipped}${reasonTop}`,
   };
   onEvent?.({ type: 'done', summary });
   return summary;

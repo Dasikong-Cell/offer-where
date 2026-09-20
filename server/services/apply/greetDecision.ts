@@ -13,7 +13,8 @@
  *   5  跨公司串号隔离      → 简历可能发错公司
  *   6  命中排除词          → 外包/中介/劳务派遣等
  *   7  城市不符            → 与期望城市无关
- *   8  匹配度过低          → 低于阈值
+ *   8  匹配度过低          → 低于阈值（**以界面匹配分 jobs.match_score 为准**；
+ *                            无界面分时不启用此闸门，规则匹配结果仅作证据）
  *   9  AI 判定             → 输出是/否 + 理由
  *  10  兜底               → 通过（未启用 AI 时不会静默全挂）
  */
@@ -60,6 +61,11 @@ export interface GreetContext {
   expectedCities?: string[];
   /** 最低匹配分阈值（默认 40） */
   minScore?: number;
+  /**
+   * 该岗位在库里的匹配分（jobs.match_score，即界面展示的那个分）。
+   * 匹配度闸门以此为准 —— 见 decideGreet 第 8 条注释（两套分数尺度不一致的坑）。
+   */
+  storedScore?: number | null;
   /** 是否启用 AI 判定（默认 true，AI 未配置时自动降级） */
   useAi?: boolean;
 }
@@ -151,24 +157,40 @@ export async function decideGreet(ctx: GreetContext): Promise<GreetDecision> {
       evidence.push(`城市匹配：${ctx.city}`);
     }
 
-    // ── 8. 匹配度过低
-    let score: number | null = null;
+    // ── 8. 匹配度过低 —— 只认「界面匹配分」（jobs.match_score）
+    // ⚠️ 2026-09-20 修复「投不出去」：此前闸门用本地规则匹配 matchResumeToJob 现算一个分，
+    //    而界面展示的、以及「按匹配分排序」用的都是 AI 分（jobs.match_score）。两套尺度差异极大
+    //    —— 实测同一岗位界面 88 分 / 规则分 27 分，于是「界面看着很匹配，一投递全被判匹配度过低跳过」，
+    //    用户看到的是投递在跑却一个都投不出去。
+    //    规则分还有个硬伤：它靠技能词典命中率打分，而 BOSS 的 JD 多为通用中文描述，
+    //    词典往往只筛出「责任心/团队协作」这类软技能，命中率天然趋近 0 → 必然误杀。
+    //    现在的语义：**用户看到多少分就按多少分判定**；没有界面分时不启用该闸门（宁可打招呼），
+    //    规则匹配结果仅作为证据展示（命中/缺失项），不作为拦截依据。
+    let score: number | null = typeof ctx.storedScore === 'number' && Number.isFinite(ctx.storedScore)
+      ? ctx.storedScore
+      : null;
     if (ctx.profile) {
-      const blob = buildResumeBlob(ctx.profile);
-      const skills = parseSkills(ctx.profile);
-      const mr = matchResumeToJob(blob, skills, ctx.jd || '', ctx.requirements || undefined, ctx.position || undefined);
-      score = mr.score;
+      const mr = matchResumeToJob(
+        buildResumeBlob(ctx.profile),
+        parseSkills(ctx.profile),
+        ctx.jd || '',
+        ctx.requirements || undefined,
+        ctx.position || undefined,
+      );
       const min = ctx.minScore ?? 40;
-      if (score < min) {
+      if (score != null && score < min) {
         return {
           greet: false,
-          reason: `匹配度过低（${score} < ${min}）：命中 ${mr.matched.length} 项、缺 ${mr.missing.slice(0, 3).join('/') || '无'}`,
+          reason: `匹配度过低（界面匹配分 ${score} < ${min}）：命中 ${mr.matched.length} 项、缺 ${mr.missing.slice(0, 3).join('/') || '无'}`,
           source: 'rule',
           score,
           evidence: mr.missing.slice(0, 5),
         };
       }
-      evidence.push(`匹配分 ${score}（命中 ${mr.matched.length} 项）`);
+      evidence.push(score != null
+        ? `界面匹配分 ${score}（规则命中 ${mr.matched.length} 项）`
+        : '该岗位无界面匹配分，未启用匹配度闸门（可先「用简历匹配」算分）');
+      if (mr.missing.length) evidence.push(`规则缺失项：${mr.missing.slice(0, 5).join('/')}`);
     }
 
     // ── 9. AI 判定（职得鸭的 checkAutoChat 对位能力）
@@ -236,6 +258,8 @@ export async function decideGreetBatch(
       status: j.status,
       profile,
       minScore: opts.minScore,
+      // 与批量投递同源：闸门必须以界面展示的匹配分为准
+      storedScore: j.match_score ?? null,
       useAi: opts.useAi,
       excludeKeywords: opts.excludeKeywords,
     });

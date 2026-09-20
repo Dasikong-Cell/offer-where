@@ -5,6 +5,8 @@
  *   A. 请求来源守卫 —— 本机 API 的安全边界（防「任意网页静默调用」触发真实投递/发信）
  *   B. 自动回复引擎合约 —— 登录态预检拦截 / 预览不发 / 真实发送 / 去重 / 单轮上限 /
  *      职位相关性过滤 / 平台占用让路
+ *   C. 投递闸门与数据写入回归 —— 闸门以界面匹配分为准（防「界面 88 分却判匹配度过低」）、
+ *      upsertJob 部分更新不得抹掉未传字段（防投递补 JD 时清空 company/position/apply_url）
  *
  * 设计：用注入的 `probe` 桩 + `registerChatDriver` 注册 mock 驱动，摆脱对真实 CDP 窗口
  *       与登录态的依赖 —— 因此可在 CI（无 Chrome、无账号）中稳定运行。
@@ -15,7 +17,8 @@ import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
-import { getConversation, exec } from '../server/db.js';
+import { getConversation, exec, getJob, upsertJob } from '../server/db.js';
+import { decideGreet } from '../server/services/apply/greetDecision.js';
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
 
 let pass = 0, fail = 0;
@@ -178,6 +181,47 @@ const fresh = () => { release('boss', 'reply'); release('boss', 'apply'); };
   const r = await runAutoReply('boss', { probe: okProbe }, emit);
   check('平台被投递占用 → 自动回复让路', r.sent === 0 && calls.openChat === 0 && evs.some((e) => e.type === 'error' && String(e.message).includes('占用')));
   release('boss', 'apply');
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ C. 投递闸门 / 数据写入回归 ══════');
+
+// C1 upsertJob 是「部分更新」语义：投递流程补 JD 时只传 {id, jd, requirements}，
+//    绝不能因此把 company/position/apply_url 抹成 NULL（曾实测抹掉 11 条已投岗位）。
+{
+  const id = `${RUN_TAG}-upsert`;
+  upsertJob({ id, source: 'boss', company: '测试公司A', position: '软件工程师', apply_url: 'https://example.com/job/1', city: '昆明' });
+  upsertJob({ id, jd: '岗位职责：负责后端服务开发与维护。任职要求：熟悉 Java。', requirements: '' });
+  const after = getJob(id);
+  check('upsertJob 部分更新保留 company', after?.company === '测试公司A', String(after?.company));
+  check('upsertJob 部分更新保留 position', after?.position === '软件工程师', String(after?.position));
+  check('upsertJob 部分更新保留 apply_url', after?.apply_url === 'https://example.com/job/1', String(after?.apply_url));
+  check('upsertJob 部分更新保留 city', after?.city === '昆明', String(after?.city));
+  check('upsertJob 部分更新保留 source（不被默认 manual 覆写）', after?.source === 'boss', String(after?.source));
+  check('upsertJob 部分更新确实写入 jd', String(after?.jd || '').includes('后端服务开发'));
+  exec('DELETE FROM jobs WHERE id = ?', [id]);
+}
+
+// C2 匹配度闸门必须以**界面展示的匹配分**（jobs.match_score）为准。
+//    此前闸门只认本地规则分：同一岗位界面 88 分、闸门算出 27 分 → 全被判「匹配度过低」跳过，
+//    用户看到的是「投递在跑、却一个都投不出去」。
+{
+  const profile = { name: '测试求职者', city: '昆明', skills: 'Java,MySQL,Spring Boot' };
+  const base = {
+    company: '测试公司B', position: '软件工程师', city: '昆明',
+    jd: '岗位职责：工作认真负责、有责任心、学习能力强、沟通表达良好。任职要求：具备团队协作精神。',
+    profile, useAi: false,
+  };
+
+  const hi = await decideGreet({ ...base, storedScore: 80, minScore: 40 });
+  check('界面分 80 ≥ 40 → 放行（不再被规则分误杀）', hi.greet === true, hi.reason);
+
+  const lo = await decideGreet({ ...base, storedScore: 20, minScore: 40 });
+  check('界面分 20 < 40 → 仍拦截', lo.greet === false, lo.reason);
+  check('拦截理由标明分数来源为「界面匹配分」', lo.greet === false && String(lo.reason).includes('界面匹配分'), lo.reason);
+
+  const none = await decideGreet({ ...base, storedScore: null, minScore: 40 });
+  check('无界面分且规则分无信息量 → 不给结论、放行', none.greet === true, none.reason);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

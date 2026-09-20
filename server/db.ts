@@ -796,15 +796,17 @@ export function upsertJob(job: {
   /** 'text'|'image'|'none'：标记 JD 形态 */
   jd_source?: string | null;
 }): JobRow {
-  // 写库口统一清洗（员工 见 sanitizeJobText 注释）
-  job = {
-    ...job,
-    company: sanitizeCompany(job.company),
-    position: sanitizePosition(job.position),
-    city: sanitizeJobText(job.city, 30),
-    // 薪资也被加密字体污染（`10-20K` → `-K`），用专用清洗（保留合法薪资、丢弃无数字残片）
-    salary: sanitizeSalary(job.salary),
-  };
+  // 写库口统一清洗（见 sanitizeJobText 注释）
+  // ⚠️ 只清洗**调用方真正传了的字段**：upsertJob 是「部分更新」语义（投递流程补 JD 时只传
+  //    `{id, jd, requirements}`）。若无条件补上 company/position=''，下游就无法区分
+  //    「这次没传」与「显式清空」，进而把已有数据抹掉。
+  const cleaned = { ...job } as typeof job;
+  if (job.company !== undefined) cleaned.company = sanitizeCompany(job.company);
+  if (job.position !== undefined) cleaned.position = sanitizePosition(job.position);
+  if (job.city !== undefined) cleaned.city = sanitizeJobText(job.city, 30);
+  // 薪资也被加密字体污染（`10-20K` → `-K`），用专用清洗（保留合法薪资、丢弃无数字残片）
+  if (job.salary !== undefined) cleaned.salary = sanitizeSalary(job.salary);
+  job = cleaned;
   const now = new Date().toISOString();
   // 去重键：优先「来源 + 公司 + 职位」，退化到「来源 + apply_url」。
   // ⚠️ 必须用 COALESCE 包一层：SQL 里 `NULL = NULL` 恒为 false，
@@ -819,22 +821,23 @@ export function upsertJob(job: {
           .get(src, job.apply_url) as JobRow | undefined
       : undefined;
   const id = existing?.id || job.id || randomUUID();
+
+  // 只更新调用方**显式提供**的列。
+  // ⚠️ 2026-09-20 修复数据损坏：此前 DO UPDATE SET 把所有列都用 excluded 覆盖，
+  //    而投递流程补 JD 时只传 `{id, jd, requirements}` → 刚投成功的岗位被顺手写成
+  //    company/position/apply_url = NULL（实测 boss 12/277、job51 53/101 条被抹掉）。
+  //    现在语义为「部分更新」：undefined = 保持原值；显式 null = 清空。
+  const UPDATABLE = ['source', 'company', 'position', 'city', 'jd', 'requirements',
+    'salary', 'apply_url', 'deadline', 'card_text', 'jd_images', 'jd_source'] as const;
+  const providedCols = UPDATABLE.filter((c) => (job as Record<string, unknown>)[c] !== undefined);
+  // updated_at 始终更新，保证 SET 子句非空（否则只剩逗号会成为非法 SQL）
+  const setSql = [...providedCols.map((c) => `${c} = excluded.${c}`), 'updated_at = excluded.updated_at'].join(',\n      ');
+
   db.prepare(`
     INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, status, created_at, updated_at)
     VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
-      company = excluded.company,
-      position = excluded.position,
-      city = excluded.city,
-      jd = excluded.jd,
-      requirements = excluded.requirements,
-      salary = excluded.salary,
-      apply_url = excluded.apply_url,
-      deadline = excluded.deadline,
-      card_text = excluded.card_text,
-      jd_images = excluded.jd_images,
-      jd_source = excluded.jd_source,
-      updated_at = excluded.updated_at
+      ${setSql}
   `).run({
     id,
     source: job.source || 'manual',
