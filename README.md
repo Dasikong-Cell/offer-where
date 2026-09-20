@@ -20,7 +20,7 @@
 | 📄 **一岗一简历** | `/api/jobs/tailor` + `/api/jobs/tailor-resume` | 按 JD 定制：技能按相关度重排 + 定制「核心优势」+ 命中/待补分析。**已接入投递**——可生成定制简历 PDF 作为邮件附件（`tailorResume` → HTML → Chrome 排版 → PDF，带内容哈希缓存）。LLM 优先、本地规则兜底，**严禁编造**事实 |
 | 🩺 **平台可用性巡检** | `/api/platforms/health` | 把「连接 / 登录态 / 风控」收敛成**一个结论 + 一条处置建议**，消除「跑完 50 个却投出 0 个」的静默失败 |
 | 📊 **投递漏斗 + 匹配度看板** | `/api/stats/funnel` | 全池按状态/来源聚合（候选/已投/不可用/已隔离），匹配分覆盖度与高/中/低分布，控制台实时展示 |
-| 🔐 **平台 API 通道** | `platformApi/bossOpenApi.ts` | CDP 读取已登录会话 Cookie（含 httpOnly）做**登录态巡检**；逆向 JSON 只读检索提速。**结论：官方开放平台是 B 端，求职者侧无法用它投递**（详见 `BOSS_OPENAPI_PLAN.md`） |
+| 🔐 **平台 API 通道** | `platformApi/bossOpenApi.ts` | CDP 读取已登录会话 Cookie（含 httpOnly）做**登录态巡检**；逆向 JSON 只读检索提速。**结论：官方开放平台是 B 端，求职者侧无法用它投递**（详见 `docs/BOSS_OPENAPI_PLAN.md`） |
 
 > 说明：**模拟面试 / 笔试题库 / 简历润色** 属于世纪云端另一产品「职达鸭」范畴，不在本仓库（job-apply-agent）范围内。
 
@@ -299,7 +299,7 @@ curl -X POST http://127.0.0.1:4400/api/jobs/tailor-resume -H 'Content-Type: appl
 
 实测（2026-09-18）：BOSS `wt2 / __zp_stoken__ / bst`、猎聘 `__gc_id / XSRF-TOKEN` 均读取成功 —— 此前只能靠截图肉眼判断登录态。
 
-**核心结论**（详见 [`BOSS_OPENAPI_PLAN.md`](./BOSS_OPENAPI_PLAN.md)）：BOSS/猎聘的「开放平台」**都是 B 端（招聘方/服务商）能力**（企业 IM、简历库、薪资元数据），需企业实名 + IP 白名单，**求职者个人无法用它投递简历**。因此「彻底消验证码」的正解不是找官方 API，而是**把平台登录会话搬出用户本机（云端执行）**——这正是职得鸭验证码无感的真正原因。
+**核心结论**（详见 [`docs/BOSS_OPENAPI_PLAN.md`](./docs/BOSS_OPENAPI_PLAN.md)）：BOSS/猎聘的「开放平台」**都是 B 端（招聘方/服务商）能力**（企业 IM、简历库、薪资元数据），需企业实名 + IP 白名单，**求职者个人无法用它投递简历**。因此「彻底消验证码」的正解不是找官方 API，而是**把平台登录会话搬出用户本机（云端执行）**——这正是职得鸭验证码无感的真正原因。
 本仓库当前策略：**CDP 整页链路负责投递**（签名由页面自算，最稳），**JSON 通道只负责检索提速与登录态诊断**，不做签名对抗军备竞赛。
 
 ---

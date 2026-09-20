@@ -1,7 +1,7 @@
 /**
  * 平台 API 通道 —— BOSS 直聘 / 猎聘（方案落地脚手架）
  * ==========================================================================
- * 调研结论（2026-09-18，详见仓库根 BOSS_OPENAPI_PLAN.md）：
+ * 调研结论（2026-09-18，详见 docs/BOSS_OPENAPI_PLAN.md）：
  *
  *   ① 「开放平台」确实存在，但**都是 B 端（企业/服务商）侧**：
  *      · BOSS：open.zhipin.com / hi-open.zhipin.com/open-apis（企业协作 BossHi：员工 IM、
