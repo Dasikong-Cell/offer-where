@@ -40,6 +40,7 @@ import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
+import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
@@ -82,6 +83,8 @@ function logRun(level: 'INFO' | 'ERROR', msg: string): void {
   try {
     fs.appendFileSync(path.join(RUN_LOG_DIR, new Date().toISOString().slice(0, 10) + '.log'), line + '\n');
   } catch { /* 落盘失败不影响主流程 */ }
+  // 无人值守告警：ERROR 额外走邮件通道（去重 + 节流，见 services/errorAlert.ts）
+  if (level === 'ERROR') { try { queueErrorAlert(msg); } catch { /* 告警失败不影响主流程 */ } }
 }
 
 // ── 安全中间件：JSON 体积 + CORS 白名单 + 写请求来源校验 ──
@@ -111,6 +114,19 @@ app.use((req, res, next) => {
     allowed: ALLOWED_ORIGINS,
   });
   if (!verdict.ok) { res.status(403).json({ error: verdict.reason }); return; }
+  next();
+});
+
+// ── 5xx 统一落日志 + 告警 ──
+// 多数路由自己 try/catch 后直接返回 500 JSON，不会走到终末错误中间件；
+// 这里在响应结束时兜底统计，保证「接口真的挂了」也能进 run_log 并触发邮件告警。
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (res.statusCode >= 500 && !(res as any).__errLogged) {
+      (res as any).__errLogged = true;
+      logRun('ERROR', `HTTP ${res.statusCode} ${req.method} ${req.originalUrl}`);
+    }
+  });
   next();
 });
 
@@ -826,9 +842,20 @@ app.get("/api/logs/summary", (req, res) => {
     try {
       ocrFailed = fs.readdirSync(OCR_FAILED_DIR).filter((f) => f.endsWith(".txt")).length;
     } catch { /* 忽略 */ }
-    res.json({ days, files: files.length, total, errors: errs.length, lastError: errs[0] || null, ocrFailed });
+    res.json({ days, files: files.length, total, errors: errs.length, lastError: errs[0] || null, ocrFailed, alert: alertStatus() });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "读取日志摘要失败" });
+  }
+});
+
+// 主动发一封测试告警邮件，验证「运行异常 → 邮件提醒」链路是否打通
+app.post("/api/logs/alert-test", async (_req, res) => {
+  try {
+    const r = await sendTestAlert();
+    if (!r.ok) return res.status(400).json({ error: r.error || "发送失败", to: r.to || null });
+    res.json({ ok: true, to: r.to, note: "测试告警已发送，请查收邮箱（含垃圾箱）" });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "发送测试告警失败" });
   }
 });
 
@@ -2120,8 +2147,14 @@ app.post("/api/chat", async (req, res) => {
 
 // Express 终末错误中间件：未捕获的路由异常统一返回 500 JSON 并落日志，避免连接悬挂
 app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  logRun('ERROR', `express error: ${err?.stack || err}`);
+  const code = Number(err?.status || err?.statusCode) || 500;
+  // 只有真正的服务端故障（5xx）才落 ERROR + 触发告警；4xx 参数错误属客户端问题，不打扰
+  if (code >= 500) {
+    (res as any).__errLogged = true; // 已记录，避免 finish 兜底重复记一条
+    logRun('ERROR', `express error: ${err?.stack || err}`);
+  }
   if (res.headersSent) return next(err);
+  if (code >= 400 && code < 500) return res.status(code).json({ error: String(err?.message || '请求错误') });
   res.status(500).json({ error: '服务器内部错误' });
 });
 

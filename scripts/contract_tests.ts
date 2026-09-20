@@ -15,7 +15,7 @@ import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
-import { getConversation, query } from '../server/db.js';
+import { getConversation, exec } from '../server/db.js';
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
 
 let pass = 0, fail = 0;
@@ -184,7 +184,9 @@ console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}`);
 
 // 清理：删除本次测试写入的会话行（conv_key 以 RUN_TAG 开头），避免污染真实库
-try { query(`DELETE FROM hr_conversations WHERE conv_key LIKE ?`, [`${RUN_TAG}%`]); } catch { /* 忽略 */ }
+// 注意必须用 exec（DELETE 不返回结果集，用 query 会抛错导致清理静默失效）
+try { exec(`DELETE FROM hr_conversations WHERE conv_key LIKE ?`, [`${RUN_TAG}%`]); }
+catch (e: any) { console.log('⚠️ 测试数据清理失败：' + (e?.message || e)); }
 
 if (fail) {
   console.log('失败项：\n - ' + fails.join('\n - '));

@@ -230,7 +230,11 @@
             <div class="stat"><div class="v sm" id="hStatus">–</div><div class="l">运行状态</div></div>
           </div>
           <div class="note small" id="hLast"></div>
-          <button class="btn sm" id="hGoLogs" style="margin-top:12px">查看运行日志</button>
+          <div class="note small" id="hAlert" style="margin-top:8px"></div>
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+            <button class="btn sm" id="hGoLogs">查看运行日志</button>
+            <button class="btn sm" id="hTestAlert">测试告警邮件</button>
+          </div>
         </div>
 
         <div class="card">
@@ -681,12 +685,33 @@ async function loadHealth(){
       ? '<b style="color:var(--bad)">最近 ERROR</b> ' + esc(String(s.lastError.ts||'').replace('T',' ').slice(0,19)) + ' — ' + esc(s.lastError.msg||'')
       : '近 ' + (s.days||1) + ' 天无 ERROR 记录';
   }
+  const al = $('#hAlert');
+  if(al){
+    const a = s.alert || {};
+    if(!a.enabled) al.innerHTML = '邮件告警：<b>已关闭</b>（ALERT_ENABLED=false）';
+    else if(a.to) al.innerHTML = '邮件告警：ERROR 发往 <b>'+esc(a.to)+'</b>（同一错误 '
+      + Math.round((a.dedupSec||0)/60) + ' 分钟内不重复，两封间隔 ≥' + Math.round((a.minIntervalSec||0)/60) + ' 分钟）';
+    else al.innerHTML = '邮件告警：<b>未找到收件人</b> —— 配置 ALERT_EMAIL，或先在「简历中心 → 候选人档案」填写邮箱';
+  }
   if(badge){
     if(errs){ badge.textContent = errs > 99 ? '99+' : String(errs); badge.style.display = 'block'; }
     else badge.style.display = 'none';
   }
 }
 $('#hGoLogs').addEventListener('click', ()=>navigate('logs'));
+$('#hTestAlert').addEventListener('click', async ()=>{
+  const b = $('#hTestAlert'); const old = b.textContent;
+  b.disabled = true; b.textContent = '发送中…';
+  try{
+    const r = await api('/api/logs/alert-test', {method:'POST'});
+    b.textContent = '已发送 ✓';
+    if($('#hAlert')) $('#hAlert').innerHTML = '测试告警已发往 <b>'+esc(r.to||'')+'</b>，请查收（含垃圾箱）';
+  }catch(e){
+    b.textContent = '发送失败';
+    if($('#hAlert')) $('#hAlert').innerHTML = '<b style="color:var(--bad)">告警发送失败：</b>'+esc(e.message||'');
+  }
+  setTimeout(()=>{ b.textContent = old; b.disabled = false; }, 2500);
+});
 
 /* ---------- deliver: platforms selects ---------- */
 function fillPlatformSelects(){

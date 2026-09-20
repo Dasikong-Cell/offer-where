@@ -27,6 +27,13 @@ export function query<T = any>(sql: string, params: any[] = []): T[] {
   return db.prepare(sql).all(...params) as T[];
 }
 
+// 通用写操作助手：INSERT / UPDATE / DELETE 等**不返回结果集**的语句。
+// 注意 query() 用的是 .all()，对 DELETE 会抛 "This statement does not return data"，
+// 写操作必须走这里（否则像测试清理那样静默失败）。
+export function exec(sql: string, params: any[] = []): void {
+  db.prepare(sql).run(...params);
+}
+
 // 初始化数据库表
 db.exec(`
   -- 会话表
