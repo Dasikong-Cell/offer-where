@@ -169,6 +169,7 @@ export type BatchEvent =
 
 const PLATFORM_LABEL: Record<string, string> = {
   boss: 'BOSS直聘', zhilian: '智联招聘', job51: '前程无忧', nowcoder: '牛客网', offerbiu: '企业官网',
+  liepin: '猎聘', iguopin: '国聘', yupao: '鱼泡直聘',
 };
 
 /** 域名 → 投递平台（用于「按链接自动路由」模式） */

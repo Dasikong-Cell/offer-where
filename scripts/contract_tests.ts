@@ -348,6 +348,34 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
   check('各平台 CDP 端口互不冲突', new Set(ports).size === ports.length, `${ports.length} 个端口 / ${new Set(ports).size} 个唯一值`);
 }
 
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ F. 安全不变量：preview 必须透传 ══════');
+// 血泪：2026-09-21 单岗接口 /api/apply 没有透传 preview，本想"零副作用预览"，
+// 结果真的点了国聘的「申请职位」按钮。这条测试机械校验：**每个 runApply 调用点都必须带 preview**。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const files = ['server/index.ts', 'server/services/apply/batch.ts'];
+  let sites = 0, missing = 0;
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const lines = src.split('\n');
+    lines.forEach((line, i) => {
+      if (!/runApply\s*\(\s*\{?/.test(line)) return;
+      sites++;
+      // 调用点参数可能跨多行：取其后 40 行内是否出现 preview
+      const block = lines.slice(i, i + 40).join('\n');
+      // 截到该次调用的结束（第一个顶格 "});" 或 "});"）以防跨到下一个调用
+      const endIdx = block.search(/\n\s{0,10}\}\);/);
+      const scoped = endIdx > 0 ? block.slice(0, endIdx) : block;
+      if (!/preview\s*:/.test(scoped)) {
+        missing++;
+        console.log(`   ⚠️ ${f}:${i + 1} 的 runApply 调用未透传 preview`);
+      }
+    });
+  }
+  check(`runApply 调用点全部透传 preview（共 ${sites} 处）`, sites > 0 && missing === 0, missing ? `${missing} 处缺失` : '全部透传');
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}`);
 

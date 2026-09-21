@@ -103,8 +103,9 @@ export const PLATFORM_PAGE: Record<string, { home: string; logged: string[]; ano
   yupao: {
     // 鱼泡直聘（蓝领/建筑垂直），首页会按 IP 城市自动切换
     home: 'https://www.yupao.com/',
-    logged: ['退出登录', '个人中心', '我的简历'],
-    anon: ['登录丨注册', '登录', '注册', '我要找工作'],
+    // ⚠️ 实测（登录后）：导航出现「消息 / 简历 / 先生」；登录前是「登录丨注册」+「登录，查看更多职位」
+    logged: ['消息', '简历', '退出登录', '个人中心'],
+    anon: ['登录丨注册', '登录，查看更多职位', '我要找工作'],
   },
   maimai: {
     // 脉脉高聘 = 脉脉旗下的招聘模块
@@ -122,8 +123,10 @@ export const PLATFORM_PAGE: Record<string, { home: string; logged: string[]; ano
   iguopin: {
     // 国聘（央企国企招聘平台）
     home: 'https://www.iguopin.com/',
-    logged: ['退出登录', '个人中心', '我的简历'],
-    anon: ['登录/注册', '登录', '注册', '我要招人'],
+    // ⚠️ 实测教训：anon 里**不能放「我要招人」** —— 它登录后也在导航里，
+    //    会把已登录误判成未登录（实测踩到：已登录显示手机号仍报 not-logged-in）。
+    logged: ['退出登录', '个人中心', '我的简历', '消息'],
+    anon: ['登录/注册', '注册'],
   },
   yingjiesheng: {
     // 应届生求职网（校招垂直）

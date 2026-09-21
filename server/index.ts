@@ -27,7 +27,7 @@ import { listSchedules, setSchedule, getSchedule, describeSchedule, evaluateSche
 import { getExchangeActions, setExchangeActions, runExchangeActions, summarizeExchange, EXCHANGE_LABELS } from "./services/apply/exchangeContact.js";
 import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMAGE_INPUTS } from "./services/apply/chatResumeImage.js";
 import { locateJobById } from "./services/apply/jobLocate.js";
-import { runApply, isSupported } from "./services/apply/index.js";
+import { runApply, isSupported, SUPPORTED_PLATFORMS } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import {
   runBatchApply, resolveDailyLimit, todayAppliedCount,
@@ -1429,6 +1429,10 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
           autofill: (profile.autofill as Record<string, string>) || undefined,
           channel: 'email',
           realSend: true,
+          // 安全不变量：即便是"邮箱直投"这条会真实发信的路径，也要尊重「仅预览」——
+          // 传了 preview:true 就只解析收件人/正文，不真正发信（dryRun 会拦下发送）。
+          preview: req.body?.preview === true,
+          dryRun: req.body?.preview === true,
           email: emails[job.id] || undefined,
           /** 一岗一简历：该岗位的定制 PDF（未生成成功则不传 → 回退固定简历） */
           resumeOverride: resumeOverrides[job.id],
@@ -1716,9 +1720,9 @@ app.get("/api/auto-apply/watch", (_req, res) => {
 
 app.post("/api/apply", async (req, res) => {
   try {
-    const { platform, jobId, jobUrl, headless, sinceMinutes, action, keyword, maxPages, maxApply, hrGroupId, chatHistory, jdText, channel } = req.body || {};
+    const { platform, jobId, jobUrl, headless, sinceMinutes, action, keyword, maxPages, maxApply, hrGroupId, chatHistory, jdText, channel, preview } = req.body || {};
     if (!isSupported(platform)) {
-      return res.status(400).json({ error: `不支持的平台：${platform}（支持：boss / zhilian / job51 / nowcoder / offerbiu / liepin）` });
+      return res.status(400).json({ error: `不支持的平台：${platform}（可直接投递：${SUPPORTED_PLATFORMS.join(' / ')}）` });
     }
     const profile = db.getProfile() as Record<string, unknown> | undefined;
     if (!profile?.email) {
@@ -1745,7 +1749,12 @@ app.post("/api/apply", async (req, res) => {
       chatHistory: chatHistory ? String(chatHistory) : undefined,
       jdText: jdText ? String(jdText) : undefined,
       channel: channel === 'email' ? 'email' : 'auto',
-      dryRun: req.body?.dryRun === true,
+      // ⚠️ 2026-09-21 修复：此前单岗接口**没有透传 preview** —— 传了 preview:true 也会走真实点击路径。
+      //    实测踩到：本想做"零副作用预览"，结果真的点了国聘的「申请职位」按钮。
+      //    预览是安全不变量，任何调用 runApply 的入口都必须透传。
+      preview: preview === true,
+      // preview 同时也是 offerbiu 官网/邮箱通道的 dry-run 信号（保持"仅预览"语义一致）
+      dryRun: req.body?.dryRun === true || preview === true,
       realSend: req.body?.realSend === true,
     });
 

@@ -160,9 +160,43 @@ APP/小程序 → /pc/download
 
 ---
 
-## 六、下一步（待人确认）
+## 七、实现结果（同日落地）
 
-1. **给鱼泡直聘写采集器**：列表 `/zhaogong/{cityId}/`（一次 161 条）+ 详情 `/zhaogong/{id}.html`（h1 + JD 正文）→ 先落库跑通采集；再写 `runYupao`（**必须含 preview 分支**），投递入口为 `聊一聊` / `发送简历`。需你在 9232 窗口登录一次。
-2. **国聘**：按 `.job-card` 走 DOM 采集（等 12s）；若要挖真列表接口，可 hook `window.fetch` 抓请求体。投递按钮需登录后再探。
-3. **店长直聘**：登记保留作**采集源**；**不建议投入投递实现**（Web 无求职者登录入口）。同类需注意：易直聘也是 APP 优先。
-4. 三个调试窗口（9231/9232/9235）已保持运行，可直接在其中登录。
+探针后立即完成接入，**两家都已进入「已接入」档**（`SUPPORTED_PLATFORMS`：6 → 8）。
+
+### 国聘：采集改走 API（比 DOM 好得多）★
+继续深挖发现 **`/api/jobs/v1/list` 匿名 POST 可用**，且**支持 `job_name` 关键词搜索**：
+
+| 请求 | 结果 |
+|---|---|
+| `{"job_name":"软件"}` | ✅ 首条 = 「软件工程师」（**服务端关键词搜索有效**） |
+| `{"page":1,"page_size":20,"job_name":"Java"}` | ✅ 返回 20 条，字段 30+ |
+| `keyword` / `search` / `name` 参数 | ❌ 被忽略（返回默认列表） |
+
+单条记录字段（节选）：`job_id, job_name, company_name, min_wage, max_wage, wage_unit_cn,
+education_cn, experience_cn, nature_cn, recruitment_type_cn, category_cn, district_list,
+**contents（JD 正文）**, is_apply, applied, apply_instruction`
+
+→ **采集实现**：`scripts/collect_iguopin.ts`（纯 HTTP，**秒级完成**，无 CDP 依赖）
+→ **实测入库 193 条**：无公司 0 / 无城市 0 / 有真 JD(>200字) 162 条（84%）
+→ **投递实现**：`server/services/apply/iguopin.ts`（详情页 `/job/detail?id={job_id}` → 点「申请职位」），需登录
+→ ⚠️ **重要提醒**：193 条里**昆明岗位 = 0**（多为广东/北京/福建等），对该用户实际可用量很低
+
+### 鱼泡直聘：采集器已就绪，但昆明无技术岗
+→ **采集实现**：`scripts/collect_yupao.ts`（列表 `/zhaogong/a367/` + 详情），实测能稳定收集 33 个详情链接
+→ **但技术岗过滤后 = 0**：昆明 33 个岗位**全是蓝领/工厂/服务岗**（打包工、包装工、奶茶店员、滴滴司机、
+美容师、总账会计…），**零技术岗** → 0 是**正确过滤**而非 bug
+→ **投递实现**：`server/services/apply/yupao.ts`（详情页 → 「聊一聊」/「发送简历」），需登录
+
+### 两家的预览都已实测通过（零副作用）
+```
+国聘  status=preview  投递入口「申请职位」可用；本次未点击，未产生任何真实投递
+鱼泡  status=preview  投递入口「发送简历」可用；本次未点击，未产生任何真实投递
+```
+
+### ⚠️ 过程中的一次事故（已修复并加测试）
+给预览做实测时，**单岗接口 `/api/apply` 没有透传 `preview`** —— 本想"零副作用预览"，
+结果**真的点了国聘的「申请职位」按钮**（截图确认：按钮仍显示"申请职位"、无"已投递"状态，判定未成功提交）。
+已修：`/api/apply` 与 offerbiu 邮箱直投入口都补上 `preview` 透传，并新增**合约测试 F 段
+「runApply 调用点必须全部透传 preview」**（该测试上线又抓出第三处遗漏）。
+
