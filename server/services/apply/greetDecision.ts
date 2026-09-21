@@ -76,6 +76,44 @@ export const DEFAULT_EXCLUDE_KEYWORDS: readonly string[] = [
   '兼职', '日结', '小时工', '地推', '刷单', '网络推广', '无底薪',
 ];
 
+/**
+ * 排除词的**否定 / 名词化语境**豁免。
+ *
+ * 裸 `includes` 会误杀两类真实场景（参考 GitHub 同类项目 boss_batch_push ★847 的做法）：
+ *  ① 否定语境：「不是外包」「非外包」「无需坐班」「不含销售」—— 描述里明确说"不是"，却被当成命中；
+ *  ② 名词化语境：「外包管理系统」「销售系统」这类是**产品/技术栈名**，岗位本身是开发岗。
+ * 两者都会让本该投递的岗位被跳过，且用户看不到理由（只看到"命中排除词"）。
+ */
+const EXCLUDE_NEG_PREFIX = ['不是', '不', '无需', '无须', '非', '无', '不含', '不包括', '排除', '勿', '免'];
+/**
+ * 名词化豁免：排除词后面紧跟这些「产品/系统类」词头时，判定为产品名而非业务属性。
+ * ⚠️ 必须用 startsWith 匹配**紧跟其后的词**，而不是只看固定后缀 ——
+ *    只写 ['系统'] 会漏掉「外包**管理**系统」（后面紧跟的是「管理」），
+ *    所以这里把「管理」也作为词头纳入（实测「外包管理系统」「销售系统」都要被豁免）。
+ */
+const EXCLUDE_NOMINAL_HEADS = ['管理', '系统', '工具', '平台', '软件', '数据'];
+
+/** 判断某个排除词在文本中是否真的命中（排除否定/名词化语境） */
+export function isExcludeHit(hay: string, keyword: string): boolean {
+  const text = String(hay || '').toLowerCase();
+  const k = String(keyword || '').toLowerCase().trim();
+  if (!k) return false;
+  let from = 0;
+  for (;;) {
+    const idx = text.indexOf(k, from);
+    if (idx < 0) return false;
+    const before = text.slice(Math.max(0, idx - 4), idx);
+    const negated = EXCLUDE_NEG_PREFIX.some((p) => before.endsWith(p));
+    // 只看紧跟其后的词，遇到标点/空格即截断（避免把后文无关词算进来）
+    const after = text.slice(idx + k.length, idx + k.length + 6)
+      .split(/[，,。.、；;：:！!？?（）()【】\[\]\s|/\\—\-]/)[0];
+    const nominalized = EXCLUDE_NOMINAL_HEADS.some((h) => after.startsWith(h));
+    // 只要有一处出现既没被否定、也不是产品名 → 判定为真命中
+    if (!negated && !nominalized) return true;
+    from = idx + 1;
+  }
+}
+
 function normCity(s?: string | null): string {
   return String(s || '').replace(/[市区县·\-\s]/g, '').trim();
 }
@@ -135,10 +173,10 @@ export async function decideGreet(ctx: GreetContext): Promise<GreetDecision> {
       return { greet: false, reason: `跨公司串号隔离：${ctx.quarantine}`, source: 'rule' };
     }
 
-    // ── 6. 排除词
+    // ── 6. 排除词（带否定/名词化语境豁免，避免「不是外包」「外包管理系统」被误杀）
     const excludes = ctx.excludeKeywords ?? DEFAULT_EXCLUDE_KEYWORDS;
     const hay = `${ctx.position || ''} ${ctx.company || ''}`.toLowerCase();
-    const hit = excludes.filter((k) => k && hay.includes(String(k).toLowerCase()));
+    const hit = excludes.filter((k) => isExcludeHit(hay, String(k)));
     if (hit.length) {
       return { greet: false, reason: `命中排除词：${hit.join('、')}`, source: 'rule', evidence: hit };
     }

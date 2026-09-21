@@ -28,6 +28,65 @@ import { parseResumeFile } from '../resume.js';
 import type { ApplyPlatform, ApplyResult } from './types.js';
 import { tryAcquire, release } from './sessionLock.js';
 import { decideGreet } from './greetDecision.js';
+
+/** 每日投递上限默认值（按平台计）。可被 criteria.dailyLimit 或环境变量 APPLY_DAILY_LIMIT 覆盖，0=不限制。 */
+export const DEFAULT_DAILY_LIMIT = 40;
+
+/** 解析每日上限：请求参数 > 环境变量 > 默认 40 */
+export function resolveDailyLimit(fromCriteria?: number): number {
+  if (typeof fromCriteria === 'number' && Number.isFinite(fromCriteria)) return fromCriteria;
+  const raw = String(process.env.APPLY_DAILY_LIMIT ?? '').trim();
+  const n = Number(raw);
+  return raw !== '' && Number.isFinite(n) ? n : DEFAULT_DAILY_LIMIT;
+}
+
+/**
+ * 该平台「今天」已成功投递数（按本地日期 00:00 切分）。
+ * 以 applications 表为唯一权威口径 —— 不引入额外计数器，重启/多进程/多脚本都一致，
+ * 也不会出现"内存计数归零后重复投递"的问题。
+ */
+export function todayAppliedCount(platform?: string): number {
+  try {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const rows = platform
+      ? db.query<{ c: number }>(
+          'SELECT COUNT(*) c FROM applications WHERE platform = ? AND created_at >= ?',
+          [platform, start.toISOString()],
+        )
+      : db.query<{ c: number }>('SELECT COUNT(*) c FROM applications WHERE created_at >= ?', [start.toISOString()]);
+    return rows[0]?.c ?? 0;
+  } catch {
+    return 0;
+  }
+}
+// ============= 平台级风控封锁（命中 rate_limited / account_risk 后持久化） =============
+// 命中后写入 app_kv，后续批次在有效期内**直接短路**，不再反复试探 —— 连续重试只会让风控升级
+// （参考同类开源项目 boss_batch_push 的 PUSH_LIMIT 持久标志）。
+const riskBlockKey = (p: string) => `risk:block:${p}`;
+
+/** 读平台风控封锁状态；已过期返回 null（不主动清理，过期即失效） */
+export function readPlatformRiskBlock(p: string): { until: number; reason: string; kind?: string } | null {
+  try {
+    const raw = db.kvGet(riskBlockKey(p));
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { until: number; reason: string; kind?: string };
+    return v && v.until > Date.now() ? v : null;
+  } catch { return null; }
+}
+
+/** 写平台风控封锁：额度到顶 6 小时（通常隔日恢复）；账号级异常 12 小时（需人工处置） */
+export function writePlatformRiskBlock(p: string, kind: string, reason: string): void {
+  const minutes = kind === 'account_risk' ? 12 * 60 : 6 * 60;
+  try { db.kvSet(riskBlockKey(p), JSON.stringify({ until: Date.now() + minutes * 60_000, reason, kind })); }
+  catch { /* 写入失败不影响本批中止 */ }
+}
+
+/** 手动解封（控制台/运维用） */
+export function clearPlatformRiskBlock(p: string): void {
+  try { db.kvDelete(riskBlockKey(p)); } catch { /* 忽略 */ }
+}
+
 import { composeCoverLetter, markLetterSent } from './coverLetter.js';
 import { runExchangeActions, getExchangeActions, summarizeExchange } from './exchangeContact.js';
 import { ensureChatResumePng, sendChatResumeImage } from './chatResumeImage.js';
@@ -47,6 +106,13 @@ export interface BatchCriteria {
   coverLetter?: boolean;
   /** 投递成功后发送「简历聊天图」（默认 false；有 HR 邮箱的岗位本来就走了 PDF 邮件通道，无需重复） */
   chatResume?: boolean;
+  /**
+   * 每日投递上限（按平台计，0/负数 = 不限制）。
+   * 缺省取环境变量 `APPLY_DAILY_LIMIT`，再缺省 40。
+   * 超限即提前收工并说明原因 —— 平台（尤其 BOSS）对骚扰式批量投递有账号级处罚，
+   * 宁可少投也不能把号玩坏（参考同类开源项目的硬性频率表）。
+   */
+  dailyLimit?: number;
 }
 
 export interface BatchInput {
@@ -55,6 +121,11 @@ export interface BatchInput {
   criteria?: BatchCriteria;
   collect?: 'offerbiu' | false;     // 投递前先采集 Offerbiu 岗位池
   realSend?: boolean;               // 官网(offerbiu)通道真实投递开关；缺省=false→仅预览不提交
+  /**
+   * 平台通道的**只读预览**（dry-run）：走完导航/下线检测/JD 抓取，探测到投递入口就返回，
+   * **不点击、不产生任何真实投递**。用于零风险验证链路（登录态、选择器、岗位是否可投）。
+   */
+  preview?: boolean;
   autoRefill?: boolean;             // 候选池耗尽时自动重采 BOSS 岗位（默认 true）
   limit?: number;                   // 最多投递数（默认 10，上限 100）
   headless?: boolean;               // 默认非无头（便于人工过滑块）
@@ -80,6 +151,10 @@ export interface BatchResult {
   needCaptcha: number;
   error: number;
   skipped: number;
+  /** 仅预览（dry-run）的岗位数：已探测到投递入口但**未点击**，不计入 applied */
+  previewed?: number;
+  /** 因平台风控/额度信号而中止（>0 说明本批被安全闸门提前终止，原因见 message 与 results） */
+  riskStopped?: number;
   results: BatchItemResult[];
   message: string;
 }
@@ -294,11 +369,16 @@ export async function runBatchApply(
   const limit = Math.max(1, Math.min(Number(input.limit) || 10, 100));
   const picked = filtered.slice(0, limit);
   const intervalMs = Math.max(0, Number(input.intervalMs ?? 20000));
+  const dailyLimit = resolveDailyLimit(input.criteria?.dailyLimit);
+  const quotaPlatform = input.platform && input.platform !== 'auto' ? input.platform : '';
+  const quotaNote = dailyLimit > 0
+    ? `｜今日已投 ${todayAppliedCount(quotaPlatform || undefined)}/${dailyLimit}`
+    : '｜未设每日上限';
 
   // 起始事件：total=0 时明确告知「为什么没有岗位」，不让用户对着「共 0 个岗位」干瞪眼。
   let startMsg: string;
   if (picked.length > 0) {
-    startMsg = `开始批量投递，共 ${picked.length} 个岗位`;
+    startMsg = `开始批量投递，共 ${picked.length} 个岗位${quotaNote}`;
   } else if (jobs.length === 0) {
     startMsg = `未找到可投岗位：该来源岗位库为空，请先采集岗位后再投`;
   } else if (jobs.filter(j => j.status !== 'applied').length === 0) {
@@ -312,7 +392,7 @@ export async function runBatchApply(
 
   // 6) 逐个投递
   const results: BatchItemResult[] = [];
-  let applied = 0, needManual = 0, needCaptcha = 0, error = 0, skipped = 0;
+  let applied = 0, needManual = 0, needCaptcha = 0, error = 0, skipped = 0, previewed = 0, riskStopped = 0;
 
   for (let i = 0; i < picked.length; i++) {
     const job = picked[i];
@@ -338,6 +418,37 @@ export async function runBatchApply(
       skipped++;
       results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'skipped', message: `不支持的平台：${platform}` });
       continue;
+    }
+
+    // ── 平台级风控封锁闸门（优先级最高，先于一切投递动作）──
+    // 上一批若命中「额度到顶 / 账号异常」，这里直接短路：连续重试只会让风控升级。
+    // （platform 已被上面的 auto 分支收窄为具体平台，无需再判 auto）
+    {
+      const blk = readPlatformRiskBlock(platform);
+      if (blk) {
+        riskStopped++;
+        const mins = Math.max(1, Math.ceil((blk.until - Date.now()) / 60_000));
+        const msg = `平台「${platform}」处于风控封锁期（约剩 ${mins} 分钟）：${blk.reason}；本批不投递。解封前请先在调试 Chrome 里人工处理。`;
+        results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'rate_limited', message: msg });
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'rate_limited', message: msg });
+        break;
+      }
+    }
+
+    // ── 每日配额闸门 ──
+    // 平台（尤其 BOSS）对骚扰式批量投递有**账号级**处罚，且每日打招呼额度有限。
+    // 超限即提前收工并说明原因，绝不"闷头投到底"——这是账号安全线与"投得多"之间的取舍。
+    if (dailyLimit > 0) {
+      const used = todayAppliedCount(platform);
+      if (used >= dailyLimit) {
+        skipped++;
+        const msg = `已达今日投递上限（${platform} ${used}/${dailyLimit}），本批提前结束以免触发平台风控；明日自动恢复，或在控制台调高「每日上限」`;
+        results.push({ jobId: job.id, company: job.company, position: job.position, platform, status: 'skipped', message: msg });
+        onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'skipped', message: msg });
+        // 指定平台：后面必然同样超限 → 直接收工；auto 模式：换下一个岗位看其它平台是否还有额度
+        if (input.platform !== 'auto') break;
+        continue;
+      }
     }
 
     // 运行时间段闸门：到点即停（对标职得鸭 TimeManager，但**不在服务端长 sleep**）。
@@ -416,7 +527,10 @@ export async function runBatchApply(
         realSend: input.realSend === true,
         // 双通道闸门一致性：realSend 非 true 时同时置 dryRun，
         // 否则官网通道(读 realSend)会预览、而邮箱通道(读 dryRun)仍会真实发信 —— 「仅预览」形同虚设。
-        dryRun: input.realSend !== true,
+        dryRun: input.realSend !== true || input.preview === true,
+        // 平台通道（boss/zhilian/job51/liepin/nowcoder）读这个：投递=点一下按钮，没有可拦截的提交步骤，
+        // 所以必须显式传 preview 才安全（它们不读 dryRun —— dryRun 在批量里缺省就是 true，会误伤正常投递）。
+        preview: input.preview === true,
         sinceMinutes: input.sinceMinutes ? Number(input.sinceMinutes) : 10,
       });
     } catch (e: any) {
@@ -556,6 +670,34 @@ export async function runBatchApply(
       });
       onEvent?.({ type: 'result', index: i, jobId: job.id, status: res.status, message: res.message });
       continue;
+    } else if (res.status === 'preview') {
+      // 仅预览：已探测到投递入口但**未点击**。不计入 applied、不写 applications、不改岗位状态。
+      previewed++;
+      results.push({
+        jobId: job.id, company: res.company || job.company, position: res.position || job.position,
+        platform, status: res.status, message: res.message,
+      });
+      onEvent?.({ type: 'result', index: i, jobId: job.id, status: res.status, message: res.message });
+      continue;
+    } else if (res.status === 'rate_limited' || res.status === 'account_risk') {
+      // 平台级风控信号：**立即中止整批**（继续投只会加重处罚），并落持久封锁标志供后续批次短路。
+      // 这类**不能**计入 error —— 它不是脚本故障，而是"应当停手"的正常安全响应。
+      riskStopped++;
+      writePlatformRiskBlock(platform, res.status, res.message);
+      results.push({
+        jobId: job.id, company: res.company || job.company, position: res.position || job.position,
+        platform, status: res.status, message: res.message,
+      });
+      onEvent?.({ type: 'result', index: i, jobId: job.id, status: res.status, message: res.message });
+      break;
+    } else if (res.status === 'need_login' || res.status === 'need_resume') {
+      // 需要人工/环境介入（未登录、缺在线简历）：归入「需人工」而不是「失败」，
+      // 否则会把环境问题算成投递故障，污染失败率与告警。
+      needManual++;
+      onEvent?.({
+        type: 'need_input', inputType: 'manual', platform, jobId: job.id,
+        company: job.company, position: job.position, message: res.message,
+      });
     } else { error++; }
 
     results.push({
@@ -572,23 +714,26 @@ export async function runBatchApply(
   // 全部没投出去时，把跳过原因归类汇总进 message —— 否则用户只看到
   // 「成功 0、跳过 N」，完全不知道是筛选、匹配度还是登录态的问题（曾因此误判"投不出去"）。
   const reasonTop = (() => {
-    if (applied > 0 || !results.length) return '';
+    if ((applied > 0 && riskStopped === 0) || !results.length) return '';
     const tally = new Map<string, number>();
     for (const r of results) {
-      if (r.status !== 'skipped') continue;
+      if (r.status === 'applied' || r.status === 'preview') continue;
       // 归一化：取「：」前的规则名（如「匹配度过低」「城市不符」「命中排除词」）
       const label = String(r.message || '').replace(/^跳过：/, '').split(/[（(：:]/)[0].trim() || '其他';
       tally.set(label, (tally.get(label) || 0) + 1);
     }
     const top = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-    return top.length ? `｜跳过原因：${top.map(([k, v]) => `${k}×${v}`).join('、')}` : '';
+    return top.length ? `｜未投递原因：${top.map(([k, v]) => `${k}×${v}`).join('、')}` : '';
   })();
 
   const summary: BatchResult = {
     total: picked.length,
-    applied, needManual, needCaptcha, error, skipped,
+    applied, needManual, needCaptcha, error, skipped, previewed, riskStopped,
     results,
-    message: `批量投递完成：共 ${picked.length} 个岗位，成功 ${applied}、需人工 ${needManual}、需验证码 ${needCaptcha}、失败 ${error}、跳过 ${skipped}${reasonTop}`,
+    message: `批量投递完成：共 ${picked.length} 个岗位，成功 ${applied}、需人工 ${needManual}、需验证码 ${needCaptcha}、失败 ${error}、跳过 ${skipped}`
+      + (previewed ? `、仅预览 ${previewed}` : '')
+      + (riskStopped ? `、风控中止 ${riskStopped}` : '')
+      + reasonTop,
   };
   onEvent?.({ type: 'done', summary });
   return summary;

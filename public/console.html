@@ -262,14 +262,20 @@
             </div>
             <label class="f">职位关键词（逗号分隔，留空=全部）</label>
             <input id="batchKeywords" placeholder="如：Java,后端,实习" />
-            <label class="f" style="margin-top:10px">最低匹配分（低于此分自动跳过；0 = 不限制）</label>
-            <input id="batchMinScore" type="number" min="0" max="100" step="1" value="40" style="max-width:140px" />
-            <div class="note small" style="margin-top:6px">匹配分即首页/职位记录里显示的分数。调低可投更多，调高更精准。</div>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">最低匹配分（0 = 不限制）</label>
+                <input id="batchMinScore" type="number" min="0" max="100" step="1" value="40" /></div>
+              <div><label class="f">每日投递上限（0 = 不限制）</label>
+                <input id="batchDailyLimit" type="number" min="0" max="500" step="1" value="40" /></div>
+            </div>
+            <div class="note small" style="margin-top:6px" id="batchQuotaNote">匹配分即首页/职位记录里显示的分数。平台对批量投递有账号级风控，每日上限用于保号。</div>
             <div style="margin-top:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
               <label class="toggle"><input type="checkbox" id="batchExclude" checked /> 排除已投递</label>
               <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
+              <label class="toggle"><input type="checkbox" id="batchPreview" /> 仅预览（不真正投递）</label>
               <button class="btn primary" id="batchRun">开始投递</button>
             </div>
+            <div class="note small" style="margin-top:6px">勾选「仅预览」会走完登录态校验、岗位页加载、下线检测与 JD 抓取，并探测投递按钮是否可用，<b>但不点击、不产生任何真实投递</b> —— 用于先验证链路再实投。</div>
             <div class="progress"><i id="batchBar"></i></div>
             <div class="out" id="batchOut"></div>
           </div>
@@ -577,6 +583,7 @@ function navigate(view){
   if(view==='dashboard') loadDashboard();
   if(view==='records') loadRecords();
   if(view==='resume') loadResume();
+  if(view==='deliver') loadQuota();
   if(view==='advanced') loadAdvanced();
   if(view==='logs') loadLogsTab();
 }
@@ -739,14 +746,19 @@ $('#batchRun').addEventListener('click', async ()=>{
   try{
     const minScoreRaw = $('#batchMinScore').value.trim();
     const minScore = minScoreRaw==='' ? 40 : Math.max(0, Math.min(100, Number(minScoreRaw)||0));
+    const dlRaw = $('#batchDailyLimit').value.trim();
+    const dailyLimit = dlRaw==='' ? 40 : Math.max(0, Math.min(500, Number(dlRaw)||0));
     const body = {
       platform: $('#batchPlatform').value || undefined,
       source: $('#batchSource').value || undefined,
+      // 平台通道只读预览：零真实投递地验证链路（服务端对应 ApplyInput.preview）
+      preview: $('#batchPreview').checked,
       criteria: {
         excludeApplied: $('#batchExclude').checked,
         keywords: $('#batchKeywords').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
         realJdOnly: $('#batchReal').checked,
         minScore,
+        dailyLimit,
       }
     };
     const r = await api('/api/apply/batch', {method:'POST', body:JSON.stringify(body)});
@@ -754,9 +766,38 @@ $('#batchRun').addEventListener('click', async ()=>{
     const head = (r && r.message) ? ('【结果】'+r.message+'\n\n') : '';
     $('#batchOut').textContent = head + JSON.stringify(r, null, 2);
     $('#batchBar').style.width='100%';
+    loadQuota();
   }catch(e){ $('#batchOut').textContent='错误：'+e.message; }
   btn.disabled=false; btn.textContent='开始投递';
 });
+
+/* 今日投递配额 + 平台风控封锁（只读展示，避免投到封号才发现） */
+async function loadQuota(){
+  const el = $('#batchQuotaNote'); if(!el) return;
+  try{
+    const p = $('#batchPlatform').value || '';
+    const q = await api('/api/apply/quota'+(p?('?platform='+encodeURIComponent(p)):''));
+    // 风控封锁优先提示：封锁期内批量投递会被直接短路（不投），必须让用户看到原因与解封方式
+    if(q.blocked){
+      el.innerHTML = '⛔ 平台「'+esc(q.platform||'')+'」处于<b>风控封锁</b>期（约剩 '+q.blockedMinutesLeft+' 分钟）：'
+        + esc(String(q.blockedReason||'').slice(0,90))
+        + ' <button class="btn sm" id="riskUnblock" style="margin-left:6px">我已人工处理，解除封锁</button>';
+      el.style.color = '#f85149';
+      const btn = document.getElementById('riskUnblock');
+      if(btn) btn.addEventListener('click', async ()=>{
+        if(!confirm('确认已在调试 Chrome 里完成平台验证/滑块，且账号恢复正常？\n解除后本批会继续投递，若平台仍在处罚中会再次触发风控。')) return;
+        try{ await api('/api/apply/risk-unblock', {method:'POST', body:JSON.stringify({platform:q.platform})}); loadQuota(); }
+        catch(e){ alert('解除失败：'+e.message); }
+      });
+      return;
+    }
+    if(q.unlimited){ el.textContent = '每日投递上限：未限制（不推荐，平台有账号级风控）。'; el.style.color=''; return; }
+    const left = q.remaining;
+    el.textContent = '今日已投 '+q.used+' / '+q.limit+'（'+(q.platform||'全部平台')+'），还可投 '+left+' 份。'
+      + '匹配分即首页/职位记录里显示的分数；每日上限用于保号。';
+    el.style.color = left===0 ? '#f85149' : '';
+  }catch(e){ /* 只读展示失败不影响投递 */ }
+}
 
 /* auto reply 登录态预检 */
 async function checkReplyLogin(){

@@ -9,6 +9,7 @@
  */
 import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode, resolveResumePath } from './common.js';
 import type { ApplyInput, ApplyResult } from './types.js';
+import { detectRiskSignal, riskStatusOf } from '../riskSignals.js';
 import * as db from '../../db.js';
 
 const LOGIN_URL = 'https://www.zhipin.com/web/user/?ka=header-login';
@@ -93,6 +94,20 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
     if (jobUrl) {
       const freshText = await pageText(platform);
       const freshUrl = await pageUrl(platform);
+
+      // 2.5.0) 风控 / 额度信号优先：账号级处罚远比"少投一份"严重，
+      //        识别到就带**可执行处置**返回，并由批量投递中止整批（见 services/riskSignals.ts）。
+      const risk = detectRiskSignal(freshText);
+      if (risk) {
+        logs.step('风控检测', false, `${risk.kind}：命中「${risk.matched}」`);
+        const shot = await tryScreenshot(platform);
+        return {
+          platform, status: riskStatusOf(risk.kind),
+          message: `检测到平台风控信号「${risk.matched}」。${risk.action}`,
+          logs: logs.logs, company, position, screenshot: shot,
+        };
+      }
+
       const closedMarkers = /(职位已关闭|该职位已关闭|职位已暂停|该职位已暂停|职位已下线|该职位已下线|该职位不存在|职位已招满|该职位已招满|该职位可能已)/;
       if (closedMarkers.test(freshText + ' ' + freshUrl)) {
         logs.step('岗位状态', false, `检测到岗位已下线/关闭，跳过投递：${(freshText || '').slice(0, 120)}`);
@@ -113,14 +128,44 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
 
     // 3) 发起沟通 / 投递
     if (jobUrl) {
-      // 立即沟通（BOSS 投递入口）
-      let chatted = false;
       // BOSS JD 页真实投递按钮文案实测为「继续沟通」，而不是常说的「立即沟通」。
       // ⚠️ 千万不要把「在线简历」「完善在线简历」「感兴趣」放进候选列表：JD 页右侧常驻这些
       //    辅助入口，点了只会跳到简历编辑页 / 标记感兴趣，不会发起沟通。
       //    实测教训：候选里有「在线简历」→ 点中后跳 https://www.zhipin.com/web/geek/resume，
       //    脚本误以为已进入引导页并在那里上传简历，最终报 need_manual、一个都没投出去。
       const labels = ['继续沟通', '立即沟通', '沟一下', '沟通', '投个简历', '发简历', '投递简历', '投递'];
+
+      // ── 预览模式（dry-run）：走完导航 → 下线检测 → JD 抓取之后，**只探测投递入口是否可用，绝不点击**。
+      //    平台通道的"投递"就是点一下按钮，没有可拦截的提交步骤，所以必须在点击前返回
+      //    （参考同类开源项目 boss_batch_push 的 mock 模式）。
+      //    价值：用户可在**零真实投递**的前提下验证「登录态 / 选择器 / 岗位是否可投」整条链路。
+      if (input.preview === true) {
+        const probe = await bexec(platform, 'eval', {
+          script: `(function(){var T=${JSON.stringify(labels)};var hit=[];
+            var els=document.querySelectorAll('a,button,span,div,i');
+            for(var i=0;i<els.length;i++){var e=els[i];var s=(e.innerText||'').trim();
+              if(s&&T.indexOf(s)>=0&&e.offsetHeight>0&&hit.indexOf(s)<0)hit.push(s);}
+            return JSON.stringify({hit:hit,title:document.title});})()`,
+        }, logs, '预览：探测投递入口（不点击）');
+        let hit: string[] = [];
+        try { hit = JSON.parse(String(probe.data || '{}')).hit || []; } catch { /* 探测失败不影响结论 */ }
+        const shot = await tryScreenshot(platform);
+        logs.step('预览', hit.length > 0, hit.length ? `可投递入口：${hit.join(' / ')}` : '未探测到投递入口');
+        return {
+          platform,
+          status: 'preview',
+          company,
+          position,
+          screenshot: shot,
+          logs: logs.logs,
+          message: hit.length
+            ? `预览：岗位页正常，投递入口「${hit.join(' / ')}」可用；本次未点击，未产生任何真实投递`
+            : '预览：岗位页正常，但未探测到投递入口按钮（正式投递时很可能需要人工介入）',
+        };
+      }
+
+      // 立即沟通（BOSS 投递入口）
+      let chatted = false;
       for (const label of labels) {
         const rr = await bexec(platform, 'click', { text: label, timeout: 10000 }, logs, `点击「${label}」`);
         if (rr.ok) { chatted = true; break; }
@@ -131,6 +176,17 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
         const url = await pageUrl(platform);
         const html = await bexec(platform, 'html', { maxLength: 4000 }, logs, '抓取页面HTML片段');
         logs.step('诊断', false, `url=${url}; 页面文本前500字=${page.slice(0, 500)}; html片段=${(html.html || '').slice(0, 500)}`);
+        // 按钮找不到很可能是**风控把页面换掉了**（额度到顶/账号异常）——先把这类判出来，
+        // 否则会被笼统归成 need_manual，用户反复重试反而加重处罚。
+        const risk = detectRiskSignal(`${page} ${url}`);
+        if (risk) {
+          logs.step('风控检测', false, `点击失败且命中风控信号：${risk.kind}「${risk.matched}」`);
+          return {
+            platform, status: riskStatusOf(risk.kind),
+            message: `点击投递失败并检测到平台风控信号「${risk.matched}」。${risk.action}`,
+            logs: logs.logs, company, position, screenshot: shot,
+          };
+        }
         return { platform, status: 'need_manual', message: '未找到「立即沟通/投简历」按钮，可能页面结构变化或需先完善在线简历', logs: logs.logs, company, position, screenshot: shot };
       }
       await sleep(2500);

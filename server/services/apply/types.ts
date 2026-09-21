@@ -13,9 +13,12 @@ export type ApplyStatus =
   | 'found'          // 仅搜索收集到岗位（search 动作）
   | 'need_login'     // 未登录，需先登录
   | 'need_captcha'   // 出现滑块/图形验证码，需在打开的浏览器里人工过一下后重试
+  | 'rate_limited'   // 平台今日额度/频率到顶：本批应停止，不要连续重试（见 services/riskSignals.ts）
+  | 'account_risk'   // 账号被平台标记异常：**不要重试**，需人工过验证 + 主动发消息后等待恢复
   | 'need_manual'    // 遇到非标准流程，需人工在浏览器完成
   | 'need_resume'    // 缺少在线简历，需先上传简历再投
   | 'unavailable'    // 岗位本身不可投（已下线/审核中/校招需单独简历/链接失效重定向）
+  | 'preview'        // 仅预览：已走到投递入口但**未点击/未提交**（dry-run，无任何真实动作）
   | 'error';         // 脚本执行出错
 
 export interface ApplyProfile {
@@ -90,6 +93,16 @@ export interface ApplyInput {
   /** 真实投递开关（官网/offerbiu 通道专用）：只有显式 true 才真正提交；
    *  其余情况（含 dryRun 或 realSend 缺省）一律只做只读预览，防止批量误投 */
   realSend?: boolean;
+  /**
+   * **平台通道**（boss/zhilian/job51/liepin/nowcoder）的只读预览开关。
+   *
+   * 为什么需要单独一个开关：平台通道的"投递"就是点一下按钮，没有"提交表单"这一步可拦截，
+   * 所以 `realSend` 对它无意义（历史实现里这些模块根本不读 dryRun/realSend，
+   * 导致用户无法在不产生真实投递的情况下验证链路）。
+   * 打开后：走完导航 → 读 JD → 探测投递入口按钮是否可点，**但不点击**，返回 status='preview'。
+   * 参考同类开源项目（boss_batch_push）的 `mock` 模式。
+   */
+  preview?: boolean;
   /** 求职信生成模式：ai=LLM 按 JD 生成；custom=用自定义模板（支持 {职位名称} 等变量） */
   letterMode?: 'ai' | 'custom';
   /** 自定义模板内容（覆盖全局模板，仅 letterMode=custom 时生效） */

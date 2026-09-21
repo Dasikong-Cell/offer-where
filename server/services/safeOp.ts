@@ -34,6 +34,21 @@ export function isClosingRelatedError(err: unknown): boolean {
   return CLOSING_ERROR_PATTERNS.some((p) => msg.includes(p));
 }
 
+/**
+ * 是否是**输出管道断开**类噪声（stdout/stderr 被关闭，例如启动它的终端/父进程退出了）。
+ *
+ * ⚠️ 必须在进程级错误兜底里**优先于日志记录**判断：这类错误的特殊性在于
+ *    「为了报告它而写日志」会再次写向已断开的管道 → 再抛同样的错误 → 自激无限循环。
+ *    实测后果：单日写成 330 万行 / 240MB 日志，全部是同一句 EPIPE。
+ *    它们也不是应用故障，静默丢弃是唯一正确处置。
+ */
+export function isPipeNoise(err: unknown): boolean {
+  const code = String((err as any)?.code || '');
+  if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED' || code === 'ERR_STREAM_WRITE_AFTER_END') return true;
+  const msg = err instanceof Error ? err.message : String((err as any)?.message ?? err ?? '');
+  return /EPIPE|broken pipe|write after end|stream destroyed/i.test(msg);
+}
+
 export interface SafeOpOptions {
   /** 静默模式：关闭态与业务错误都不打印（用于「预期可能失败」的探测） */
   silent?: boolean;

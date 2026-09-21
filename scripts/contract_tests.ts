@@ -17,8 +17,14 @@ import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
-import { getConversation, exec, getJob, upsertJob } from '../server/db.js';
-import { decideGreet } from '../server/services/apply/greetDecision.js';
+import { getConversation, exec, getJob, upsertJob, kvSet } from '../server/db.js';
+import { decideGreet, isExcludeHit } from '../server/services/apply/greetDecision.js';
+import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
+import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js';
+import {
+  DEFAULT_DAILY_LIMIT, resolveDailyLimit, todayAppliedCount,
+  readPlatformRiskBlock, writePlatformRiskBlock, clearPlatformRiskBlock,
+} from '../server/services/apply/batch.js';
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
 
 let pass = 0, fail = 0;
@@ -222,6 +228,82 @@ console.log('\n══════ C. 投递闸门 / 数据写入回归 ═══
 
   const none = await decideGreet({ ...base, storedScore: null, minScore: 40 });
   check('无界面分且规则分无信息量 → 不给结论、放行', none.greet === true, none.reason);
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ D. 投递安全闸门（风控信号 / 每日上限 / 排除词语境） ══════');
+
+// D1 平台风控信号识别：不同类别 → 不同处置，且必须能中止整批
+{
+  const cap = detectRiskSignal('抱歉，今日沟通人数已达上限，请明天再试');
+  check('BOSS 每日额度文案 → rate_limited', cap?.kind === 'rate_limited', cap?.kind || 'null');
+  check('rate_limited → 中止整批', shouldAbortBatch('rate_limited'));
+
+  const cap2 = detectRiskSignal('访问验证：请按住滑块，拖动到最右边');
+  check('滑块/验证码 → captcha 且不中止整批', cap2?.kind === 'captcha' && !shouldAbortBatch('captcha'), cap2?.kind || 'null');
+  check('captcha 复用既有状态 need_captcha', riskStatusOf('captcha') === 'need_captcha');
+
+  const risk = detectRiskSignal('您的账号异常，请完成安全校验后重试');
+  check('账号异常 → account_risk 且中止整批', risk?.kind === 'account_risk' && shouldAbortBatch('account_risk'), risk?.kind || 'null');
+  check('account_risk 带可执行处置指引', /人工|手动|不要再重试/.test(risk?.action || ''));
+
+  // 严重度优先：同时出现账号异常与验证码时，返回更严重的 account_risk
+  check('多信号并存 → 取最严重（account_risk）', detectRiskSignal('账号异常 访问验证')?.kind === 'account_risk');
+
+  // 负例：普通 JD 文本不得误触发（否则会白停一批）
+  check('普通 JD 文本 → 不误报', detectRiskSignal('岗位职责：负责后端开发，要求沟通能力强、学习能力好') === null);
+}
+
+// D2 排除词的否定 / 名词化语境豁免（裸 includes 会误杀真实岗位）
+{
+  check('排除词：裸命中', isExcludeHit('该岗位为外包性质', '外包'));
+  check('排除词：否定语境「不是外包」豁免', !isExcludeHit('本岗位不是外包，签正式合同', '外包'));
+  check('排除词：否定语境「非外包」豁免', !isExcludeHit('非外包岗位，直签', '外包'));
+  check('排除词：名词化「外包管理系统」豁免', !isExcludeHit('负责外包管理系统开发', '外包'));
+  check('排除词：名词化「销售系统」豁免', !isExcludeHit('招聘销售系统开发工程师', '销售'));
+  check('排除词：一处否定但另一处真命中 → 仍命中', isExcludeHit('不是外包，但有外包团队管理', '外包'));
+  check('排除词：标点截断后不误豁免', isExcludeHit('外包，系统集成商', '外包'));
+}
+
+// D3 每日投递上限解析（请求参数 > 环境变量 > 默认 40；0 = 不限制）
+{
+  const saved = process.env.APPLY_DAILY_LIMIT;
+  delete process.env.APPLY_DAILY_LIMIT;
+  check('每日上限默认 40', DEFAULT_DAILY_LIMIT === 40 && resolveDailyLimit() === 40);
+  process.env.APPLY_DAILY_LIMIT = '12';
+  check('每日上限：环境变量可覆盖', resolveDailyLimit() === 12, String(resolveDailyLimit()));
+  check('每日上限：请求参数优先于环境变量', resolveDailyLimit(75) === 75);
+  if (saved === undefined) delete process.env.APPLY_DAILY_LIMIT; else process.env.APPLY_DAILY_LIMIT = saved;
+  check('每日上限：0 表示不限制', resolveDailyLimit(0) === 0);
+  check('今日已投数可读且非负', todayAppliedCount() >= 0);
+}
+
+// D4 平台风控封锁持久化（命中后短路后续批次，避免连续重试升级风控）
+{
+  const p = `${RUN_TAG}-plat`;
+  check('封锁：初始为空', readPlatformRiskBlock(p) === null);
+  writePlatformRiskBlock(p, 'rate_limited', '今日沟通人数已达上限');
+  const blk = readPlatformRiskBlock(p);
+  check('封锁：写入后可读到', !!blk && blk.reason.includes('上限'), blk?.reason || 'null');
+  check('封锁：带未来解封时间', !!blk && blk.until > Date.now());
+  clearPlatformRiskBlock(p);
+  check('封锁：手动解封后失效', readPlatformRiskBlock(p) === null);
+
+  // 过期即失效：写入一个过去的 until，应读不到（不必真等 6 小时）
+  kvSet(`risk:block:${p}`, JSON.stringify({ until: Date.now() - 1000, reason: '过期' }));
+  check('封锁：过期自动失效', readPlatformRiskBlock(p) === null);
+  clearPlatformRiskBlock(p);
+}
+
+// D5 日志自激防护：管道类噪声必须被识别出来
+//    （否则「为报告错误而写日志 → 再次写向已断开的管道 → 再抛同样的错」会无限放大，
+//      实测单日写成 330 万行 / 240MB，全是同一句 EPIPE）
+{
+  check('EPIPE（管道断开）识别为管道噪声', isPipeNoise({ code: 'EPIPE' }));
+  check('ERR_STREAM_DESTROYED 识别为管道噪声', isPipeNoise({ code: 'ERR_STREAM_DESTROYED' }));
+  check('broken pipe 文案识别为管道噪声', isPipeNoise(new Error('Error: EPIPE: broken pipe, write')));
+  check('真实业务错误不误判为管道噪声', !isPipeNoise(new Error('SQLITE_ERROR: no such table')) && !isPipeNoise('boom'));
+  check('关闭态错误识别不受影响（回归）', isClosingRelatedError(new Error('Target closed')));
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

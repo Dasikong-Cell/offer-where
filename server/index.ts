@@ -29,7 +29,10 @@ import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMA
 import { locateJobById } from "./services/apply/jobLocate.js";
 import { runApply, isSupported } from "./services/apply/index.js";
 import { toApplyProfile } from "./services/apply/common.js";
-import { runBatchApply } from "./services/apply/batch.js";
+import {
+  runBatchApply, resolveDailyLimit, todayAppliedCount,
+  readPlatformRiskBlock, clearPlatformRiskBlock,
+} from "./services/apply/batch.js";
 import { rememberCurrentForm } from "./services/apply/offerbiu.js";
 import { scanOfferbiuEmails } from "./services/offerbiuEmailScan.js";
 import { runAutoReply } from "./services/apply/autoReplyRunner.js";
@@ -40,6 +43,7 @@ import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
+import { isPipeNoise } from "./services/safeOp.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
@@ -77,14 +81,29 @@ const HOST = process.env.HOST || '127.0.0.1';
 // ── 运行日志：错误落盘，便于事后排查（data/run_log/YYYY-MM-DD.log）──
 const RUN_LOG_DIR = path.join(__dirname, '..', 'data', 'run_log');
 try { if (!fs.existsSync(RUN_LOG_DIR)) fs.mkdirSync(RUN_LOG_DIR, { recursive: true }); } catch { /* 忽略 */ }
+const RUN_LOG_MAX_BYTES = Math.max(1, Number(process.env.RUN_LOG_MAX_MB) || 20) * 1024 * 1024;
+let inLogRun = false;
+
 function logRun(level: 'INFO' | 'ERROR', msg: string): void {
-  const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
-  if (level === 'ERROR') console.error(line); else console.log(line);
+  // 重入守卫：日志写入过程本身出错时不再递归记录（自激放大的第二道防线）
+  if (inLogRun) return;
+  inLogRun = true;
   try {
-    fs.appendFileSync(path.join(RUN_LOG_DIR, new Date().toISOString().slice(0, 10) + '.log'), line + '\n');
-  } catch { /* 落盘失败不影响主流程 */ }
-  // 无人值守告警：ERROR 额外走邮件通道（去重 + 节流，见 services/errorAlert.ts）
-  if (level === 'ERROR') { try { queueErrorAlert(msg); } catch { /* 告警失败不影响主流程 */ } }
+    const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
+    // console 可能因管道断开而同步抛错 —— 不能让它把主流程带崩
+    try { if (level === 'ERROR') console.error(line); else console.log(line); } catch { /* 忽略 */ }
+    try {
+      const file = path.join(RUN_LOG_DIR, new Date().toISOString().slice(0, 10) + '.log');
+      // 单文件体积上限：任何未预料的日志风暴都不该把磁盘写满（实测曾写到 240MB）
+      let size = 0;
+      try { size = fs.statSync(file).size; } catch { /* 文件不存在 */ }
+      if (size < RUN_LOG_MAX_BYTES) fs.appendFileSync(file, line + '\n');
+    } catch { /* 落盘失败不影响主流程 */ }
+    // 无人值守告警：ERROR 额外走邮件通道（去重 + 节流，见 services/errorAlert.ts）
+    if (level === 'ERROR') { try { queueErrorAlert(msg); } catch { /* 告警失败不影响主流程 */ } }
+  } finally {
+    inLogRun = false;
+  }
 }
 
 // ── 安全中间件：JSON 体积 + CORS 白名单 + 写请求来源校验 ──
@@ -1452,10 +1471,53 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
 
 // ============= 跨平台批量连投（自动筛选 + 投递） =============
 
+/**
+ * 今日投递配额使用情况（只读）。
+ * 平台对骚扰式批量投递有账号级处罚，所以把"今天还能投几份"显式暴露出来，
+ * 而不是让用户投到被封号才发现。
+ */
+app.get("/api/apply/quota", (req, res) => {
+  try {
+    const platform = String(req.query.platform || "").trim();
+    const limit = resolveDailyLimit();
+    const used = todayAppliedCount(platform || undefined);
+    // 平台级风控封锁（上一批命中额度到顶/账号异常后写入）：封锁期内批量投递会直接短路
+    const block = platform ? readPlatformRiskBlock(platform) : null;
+    res.json({
+      platform: platform || null,
+      used,
+      limit,
+      remaining: limit > 0 ? Math.max(0, limit - used) : null,
+      unlimited: limit <= 0,
+      blocked: Boolean(block),
+      blockedUntil: block ? new Date(block.until).toISOString() : null,
+      blockedMinutesLeft: block ? Math.max(1, Math.ceil((block.until - Date.now()) / 60_000)) : null,
+      blockedReason: block?.reason || null,
+      note: limit > 0
+        ? `今日已投 ${used}/${limit}（${platform || "全部平台"}）；上限可用 APPLY_DAILY_LIMIT 环境变量或请求里的 dailyLimit 调整，0=不限制`
+        : "未设每日上限（不推荐）",
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "查询配额失败" });
+  }
+});
+
+/** 手动解除平台风控封锁（运维用；用户确认已在浏览器里人工处理好风控后调用） */
+app.post("/api/apply/risk-unblock", (req, res) => {
+  try {
+    const platform = String(req.body?.platform || "").trim();
+    if (!platform) return res.status(400).json({ error: "请提供 platform" });
+    clearPlatformRiskBlock(platform);
+    res.json({ ok: true, platform, message: `已解除「${platform}」的风控封锁（请确认已人工处理完平台验证，否则很快会再次触发）` });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "解除封锁失败" });
+  }
+});
+
 app.post("/api/apply/batch", async (req, res) => {
   try {
     const {
-      platform, source, criteria, collect, limit, headless, sinceMinutes, intervalMs, stream, realSend,
+      platform, source, criteria, collect, limit, headless, sinceMinutes, intervalMs, stream, realSend, preview,
     } = req.body || {};
 
     if (platform && platform !== 'auto' && !isSupported(platform)) {
@@ -1473,6 +1535,8 @@ app.post("/api/apply/batch", async (req, res) => {
       criteria,
       collect: (collect === 'offerbiu' ? 'offerbiu' : false) as false | 'offerbiu',
       realSend: realSend === true,
+      // 平台通道只读预览（dry-run）：零真实投递地验证链路
+      preview: preview === true,
       limit: limit ? Number(limit) : 10,
       headless: headless === true,
       sinceMinutes: sinceMinutes ? Number(sinceMinutes) : 10,
@@ -2197,10 +2261,17 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 // 全局异常兜底：不因单个未捕获异常而静默退出（否则用户端表现为「控制台突然打不开、投递莫名中断」）
+// ⚠️ 2026-09-21 修复「日志自我放大」：实测单日写出 330 万行 / 240MB，内容全是
+//    `uncaughtException: Error: EPIPE: broken pipe, write`。链路是：
+//      stdout 管道断开（启动它的终端/父进程被关）→ console.* 抛 EPIPE → uncaughtException →
+//      logRun 又去 console.error → 又 EPIPE → 再 uncaughtException …… 无限循环 + 同步 append 狂写盘。
+//    因此：管道类噪声错误**绝不落日志、绝不告警**（它们不是应用故障，且写日志本身会再触发它）。
 process.on('uncaughtException', (err) => {
+  if (isPipeNoise(err)) return; // 静默丢弃，打破自激循环
   logRun('ERROR', `uncaughtException: ${(err as any)?.stack || err}`);
 });
 process.on('unhandledRejection', (reason) => {
+  if (isPipeNoise(reason)) return;
   const r: any = reason;
   logRun('ERROR', `unhandledRejection: ${r?.stack || r}`);
 });

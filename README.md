@@ -256,6 +256,44 @@ curl -s -X POST http://127.0.0.1:4400/api/browser/exec -H 'Content-Type: applica
 
 ---
 
+## 投递安全（仅预览 / 每日上限 / 风控信号）
+
+批量投递是**唯一会不可逆地对外产生动作**的功能，因此这里有三道闸门（全部可在控制台看到状态）：
+
+### 1. 仅预览（dry-run）—— 零副作用验证链路
+控制台「投递中心」勾选「**仅预览（不真正投递）**」后，服务端会：
+打开岗位页 → 登录态校验 → 已下线/关闭检测 → 抓取 JD 入库 → **探测投递入口按钮是否可用，但不点击**。
+返回 `status='preview'`，**不写 `applications`、不改岗位状态**。
+
+- 用途：换机器/换账号后先验证「登录态、页面选择器、岗位是否可投」，确认无误再实投。
+- 接口：`POST /api/apply/batch` 带 `{"preview": true}`（对应 `ApplyInput.preview`）。
+- 实测：`previewed=2 / applied=0`，`applications` 计数不变。
+
+### 2. 每日投递上限（保号）
+平台对骚扰式批量投递有**账号级**处罚，且每日额度有限（同类开源项目实测 BOSS 每日沟通上限约 100 次）。
+- 默认 **40 份/平台/天**，可在控制台「每日上限」临时调整（`0` = 不限制，不推荐），或用 `APPLY_DAILY_LIMIT` 设默认。
+- 口径：以 `applications` 表按**本地日期**统计（不是内存计数）—— 重启/多进程/多脚本都一致。
+- 只读查询：`GET /api/apply/quota?platform=boss` → `{used, limit, remaining, blocked, blockedReason, blockedMinutesLeft}`。
+
+### 3. 平台风控信号识别 + 自动封锁
+把「页面信号 → 类别 → 可执行处置」收敛成纯函数 `server/services/riskSignals.ts`（可单测）：
+
+| 类别 | 典型文案 | 处置 |
+|---|---|---|
+| `account_risk` | 账号异常 / 环境异常 / 存在风险 | **不要重试**；人工过校验 + 主动发消息，封 12 小时 |
+| `rate_limited` | **今日沟通人数已达上限** / 操作过于频繁 | **整批中止**并封 6 小时（避免连续重试升级风控） |
+| `captcha` | 访问验证 / 请按住滑块 | 人工过一次即可继续（不封锁） |
+
+命中 `account_risk` / `rate_limited` 后会**立即中止整批**，并写持久封锁标志（`app_kv`）；
+封锁期内后续批次**直接短路不投递**（参考同类开源项目的 `PUSH_LIMIT` 持久标志）。
+控制台会显示封锁原因与剩余时间，人工处理完可点「我已人工处理，解除封锁」提前解封
+（`POST /api/apply/risk-unblock`）。
+
+> 三者的共同原则：**宁可少投，也不把账号玩坏**。批量投递的失败原因会归类汇总进结果摘要
+> （如「未投递原因：匹配度过低×7」），不会再出现「跑完却不知道为什么不投」。
+
+---
+
 ## 一岗一简历（按 JD 定制）
 
 对标职得鸭核心卖点。`server/services/apply/resumeTailor.ts` → `tailorResume(profile, job)`：
