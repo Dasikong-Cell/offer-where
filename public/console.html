@@ -260,13 +260,23 @@
               <div><label class="f">来源（source）</label>
                 <select id="batchSource"></select></div>
             </div>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">目标城市（投递/采集按此过滤）</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <select id="batchCity" style="flex:1"></select>
+                  <button class="btn sm" id="batchLocate" type="button" title="用出口 IP 定位当前城市">📍 定位</button>
+                </div>
+                <span class="muted small" id="locateStatus" style="margin-top:4px;display:block"></span>
+              </div>
+              <div><label class="f">最低匹配分（0 = 不限制）</label>
+                <input id="batchMinScore" type="number" min="0" max="100" step="1" value="40" /></div>
+            </div>
             <label class="f">职位关键词（逗号分隔，留空=全部）</label>
             <input id="batchKeywords" placeholder="如：Java,后端,实习" />
             <div class="row2" style="margin-top:10px">
-              <div><label class="f">最低匹配分（0 = 不限制）</label>
-                <input id="batchMinScore" type="number" min="0" max="100" step="1" value="40" /></div>
               <div><label class="f">每日投递上限（0 = 不限制）</label>
                 <input id="batchDailyLimit" type="number" min="0" max="500" step="1" value="40" /></div>
+              <div></div>
             </div>
             <div class="note small" style="margin-top:6px" id="batchQuotaNote">匹配分即首页/职位记录里显示的分数。平台对批量投递有账号级风控，每日上限用于保号。</div>
             <div style="margin-top:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
@@ -742,6 +752,37 @@ function fillPlatformSelects(){
   $('#replyPlatform').innerHTML = '<option value="boss">BOSS直聘</option><option value="liepin">猎聘</option>';
   $('#batchSource').innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
 }
+
+/* 目标城市下拉（来自 /api/cities，缺省=昆明） */
+async function fillCitySelect(){
+  const el = $('#batchCity');
+  try{
+    const data = await api('/api/cities');
+    const list = data.cities || [];
+    const opts = ['<option value="">全部城市</option>']
+      + list.map(c=>'<option value="'+esc(c.name)+'"'+(c.name===data.default?' selected':'')+'>'+esc(c.name)+'（'+esc(c.province)+'）</option>')
+      + '';
+    el.innerHTML = opts;
+  }catch(e){ el.innerHTML = '<option value="">全部城市</option>'; }
+}
+
+/* 📍 定位：用出口 IP 反查当前城市，命中内置表则直接选中（只建议，不改档案） */
+$('#batchLocate').addEventListener('click', async ()=>{
+  const btn = $('#batchLocate'); const old = btn.textContent; const st = $('#locateStatus');
+  btn.disabled = true; btn.textContent = '📍 定位中'; if(st) st.textContent = '';
+  try{
+    const r = await api('/api/geo/locate');
+    if(r.matchedName){
+      $('#batchCity').value = r.matchedName;
+      if(st) st.textContent = r.note || ('已定位到「'+r.matchedName+'」');
+      if(st) st.style.color = '';
+    }else{
+      if(st) st.textContent = r.note || '定位失败，请手动选择';
+      if(st) st.style.color = '#f85149';
+    }
+  }catch(e){ if(st){ st.textContent = '定位失败：'+e.message; st.style.color = '#f85149'; } }
+  finally{ btn.disabled = false; btn.textContent = old; }
+});
 $('#deliverTabs').addEventListener('click', e=>{
   const b = e.target.closest('button'); if(!b) return;
   $$('#deliverTabs button').forEach(x=>x.classList.toggle('active', x===b));
@@ -768,6 +809,7 @@ $('#batchRun').addEventListener('click', async ()=>{
         excludeApplied: $('#batchExclude').checked,
         keywords: $('#batchKeywords').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
         realJdOnly: $('#batchReal').checked,
+        city: $('#batchCity').value || undefined,
         minScore,
         dailyLimit,
       }
@@ -1276,6 +1318,7 @@ $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') $('#modal')
 
 /* ---------- init ---------- */
 fillPlatformSelects();
+fillCitySelect();
 checkSvc();
 loadDashboard();
 </script>

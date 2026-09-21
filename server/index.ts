@@ -10,7 +10,7 @@ import { promisify } from "util";
 import * as db from "./db.js";
 import { fetchLatestCode, listRecentMails, testConnection } from "./services/mail.js";
 import { execAction, listSessions, closeAll } from "./services/browser.js";
-import { probePlatformConnections } from "./services/connection.js";
+import { probePlatformConnections, DELIVERY_PLATFORMS } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
 import { tailorResume } from "./services/apply/resumeTailor.js";
@@ -45,6 +45,8 @@ import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
+import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
+import { locateByIp } from "./services/geo.js";
 import { JOB_APPLY_AGENT_PROMPT } from "../shared/agentPrompt.js";
 
 const execAsync = promisify(exec);
@@ -1473,6 +1475,54 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
   }
 });
 
+// ============= 城市选择与定位 =============
+
+/**
+ * 城市列表（供控制台「目标城市」下拉）。
+ * ?q=关键 模糊过滤；?platform=boss 会带上该城市在该平台是否可用（无码的平台返回 supported=false）。
+ */
+app.get("/api/cities", (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    const platform = String(req.query.platform || "").trim();
+    const cities = listCities(q).map((c) => ({
+      name: c.name,
+      province: c.province,
+      boss: c.boss,
+      pinyin: c.pinyin || null,
+      supported: platform ? isCitySupported(platform, c.name) : true,
+    }));
+    res.json({ total: cityCount(), matched: cities.length, default: DEFAULT_CITY, cities });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取城市列表失败" });
+  }
+});
+
+/**
+ * 通过出口 IP 定位当前城市（控制台「📍定位」按钮）。
+ * 只返回**建议值**，不直接改档案 —— 由前端确认后写入，避免静默覆盖用户设置。
+ */
+app.get("/api/geo/locate", async (_req, res) => {
+  try {
+    const loc = await locateByIp();
+    const city = loc.city ? findCity(loc.city) : null;
+    res.json({
+      ...loc,
+      /** 是否命中内置城市表（命中才能拿到各平台城市码） */
+      inCityTable: Boolean(city),
+      matchedName: city?.name || null,
+      matchedProvince: city?.province || null,
+      bossCode: city?.boss || null,
+      supportedPlatforms: city ? DELIVERY_PLATFORMS.filter((p) => isCitySupported(p, city.name)) : [],
+      note: loc.city
+        ? (city ? `定位到「${city.name}」（${city.province}）` : `定位到「${loc.city}」，但不在内置城市表中，可手动填写`)
+        : "定位失败（可能是网络受限）：请手动选择城市",
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "定位失败" });
+  }
+});
+
 // ============= 跨平台批量连投（自动筛选 + 投递） =============
 
 /**
@@ -1569,6 +1619,7 @@ app.post("/api/apply/batch", async (req, res) => {
     const result = await runBatchApply(input);
     res.json(result);
   } catch (error: any) {
+    console.error('[batch] 未捕获异常:', error?.stack || error);
     res.status(500).json({ error: error?.message || '批量投递失败' });
   }
 });

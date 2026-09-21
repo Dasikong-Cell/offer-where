@@ -321,16 +321,22 @@ export async function runBatchApply(
   if (struct) {
     for (const j of jobs) {
       if (j.match_score == null) {
-        // AI 语义匹配；失败时 matchResumeToJobAi 内部回退规则匹配
-        const r = await matchResumeToJobAi({
-          resumeBlob: struct.searchBlob,
-          resumeSkills: struct.skills,
-          jd: j.jd || '',
-          requirements: j.requirements || '',
-          position: j.position || '',
-        });
-        scoreMap.set(j.id, r.score);
-        db.updateJob(j.id, { match_score: r.score });
+        // AI 语义匹配；失败时 matchResumeToJobAi 内部回退规则匹配。
+        // 单条打分异常（偶发 AI 响应异常）绝不能拖垮整批：try/catch 兜底为「不评分」，
+        // 该岗位按「无匹配分」处理（若设了 minScore 则自然被分数闸门过滤掉）。
+        try {
+          const r = await matchResumeToJobAi({
+            resumeBlob: struct.searchBlob,
+            resumeSkills: struct.skills,
+            jd: j.jd || '',
+            requirements: j.requirements || '',
+            position: j.position || '',
+          });
+          scoreMap.set(j.id, r.score);
+          db.updateJob(j.id, { match_score: r.score });
+        } catch (e: any) {
+          console.warn(`[Batch] 岗位 ${j.id} 匹配分计算失败（已跳过，不影响其余岗位）：${e?.message}`);
+        }
       } else {
         scoreMap.set(j.id, j.match_score as number);
       }
