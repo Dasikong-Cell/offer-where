@@ -494,6 +494,13 @@ export async function runBatchApply(
       if (!decision.greet) {
         skipped++;
         try { db.updateJob(job.id, { skip_reason: decision.reason }); } catch { /* 留痕失败不阻断 */ }
+        // 「已投递过该岗位」是由 applications 表判定（按公司+职位），而 excludeApplied 过滤的是
+        // jobs.status —— 库内存在"同一公司+职位的重复行"时，未被标记的那行会**每批都被选中又跳过**，
+        // 白白消耗配额与风控额度（实测「多益网络」连续两批被选中）。
+        // 既然 applications 已证明投过，就把该行也标记为 applied，让下一批的 excludeApplied 直接滤掉。
+        if (decision.reason.includes('已投递过')) {
+          try { db.updateJob(job.id, { status: 'applied' }); } catch { /* 忽略 */ }
+        }
         results.push({
           jobId: job.id, company: job.company, position: job.position, platform,
           status: 'skipped', message: `跳过：${decision.reason}`,
