@@ -21,6 +21,12 @@ import { getConversation, exec, getJob, upsertJob, kvSet } from '../server/db.js
 import { decideGreet, isExcludeHit } from '../server/services/apply/greetDecision.js';
 import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
 import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js';
+import { SUPPORTED_PLATFORMS, PENDING_PLATFORMS, REGISTERED_PLATFORMS } from '../server/services/apply/index.js';
+import { PLATFORM_PAGE } from '../server/services/platformHealth.js';
+import { DELIVERY_PLATFORMS } from '../server/services/connection.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_DAILY_LIMIT, resolveDailyLimit, todayAppliedCount,
   readPlatformRiskBlock, writePlatformRiskBlock, clearPlatformRiskBlock,
@@ -304,6 +310,42 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
   check('broken pipe 文案识别为管道噪声', isPipeNoise(new Error('Error: EPIPE: broken pipe, write')));
   check('真实业务错误不误判为管道噪声', !isPipeNoise(new Error('SQLITE_ERROR: no such table')) && !isPipeNoise('boom'));
   check('关闭态错误识别不受影响（回归）', isClosingRelatedError(new Error('Target closed')));
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ E. 平台注册完整性（新增平台必须「多处同步」） ══════');
+// 背景：新增一个平台要同步 6 处，漏一处就会「界面能选、跑起来报不支持」的半注册。
+// 这条测试把它变成机械校验 —— 以后加平台，改完跑一次 npm test 就知道漏没漏。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const cdp = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/browser/cdp.json'), 'utf8')) as Record<string, string>;
+  const consoleHtml = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+  const launcher = fs.readFileSync(path.join(ROOT, 'start_platforms.bat'), 'utf8');
+
+  check('REGISTERED = SUPPORTED ∪ PENDING（无重复）',
+    REGISTERED_PLATFORMS.length === SUPPORTED_PLATFORMS.length + PENDING_PLATFORMS.length
+    && new Set(REGISTERED_PLATFORMS).size === REGISTERED_PLATFORMS.length,
+    `registered=${REGISTERED_PLATFORMS.length} supported=${SUPPORTED_PLATFORMS.length} pending=${PENDING_PLATFORMS.length}`);
+  check('SUPPORTED 与 PENDING 互不重叠（已实现的不能仍在待接入里）',
+    !SUPPORTED_PLATFORMS.some((p) => PENDING_PLATFORMS.includes(p)));
+  check('控制台下拉覆盖全部已登记平台', DELIVERY_PLATFORMS.length === REGISTERED_PLATFORMS.length,
+    `console/connection=${DELIVERY_PLATFORMS.length} registered=${REGISTERED_PLATFORMS.length}`);
+
+  for (const p of REGISTERED_PLATFORMS) {
+    const missing: string[] = [];
+    if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(String(cdp[p] || ''))) missing.push('cdp.json');
+    if (!PLATFORM_PAGE[p]?.home) missing.push('platformHealth.PLATFORM_PAGE');
+    if (!consoleHtml.includes(`{id:'${p}'`)) missing.push('console.html PLATFORMS');
+    // 启动脚本按**端口**校验：允许多个平台共用同一窗口（如 offerbiu 与 official 共用 9227）
+    const port = String(cdp[p] || '').split(':').pop() || '';
+    if (!port || !launcher.includes(`:${port}:`)) missing.push('start_platforms.bat 端口表');
+    if (!DELIVERY_PLATFORMS.includes(p)) missing.push('connection.DELIVERY_PLATFORMS');
+    check(`平台注册多处同步：${p}`, missing.length === 0, missing.length ? `缺 ${missing.join(' / ')}` : '齐全');
+  }
+
+  // 端口唯一性：两个平台共用一个调试端口会导致「登录态串号」
+  const ports = REGISTERED_PLATFORMS.map((p) => cdp[p]).filter(Boolean);
+  check('各平台 CDP 端口互不冲突', new Set(ports).size === ports.length, `${ports.length} 个端口 / ${new Set(ports).size} 个唯一值`);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

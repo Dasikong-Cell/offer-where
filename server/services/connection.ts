@@ -21,9 +21,15 @@ const __dirname = path.dirname(__filename);
 const DATA_ROOT = path.join(__dirname, '..', '..', 'data', 'browser');
 const CDP_CONFIG_PATH = path.join(DATA_ROOT, 'cdp.json');
 
-/** 控制台可投递平台（与 public/console.html 的 PLATFORMS 保持一致）
- *  offerbiu = 企业官网通道（offerbiu.com 采集 + 企业官网表单投递），与 official 共用 9227 窗口。 */
-export const DELIVERY_PLATFORMS = ['boss', 'job51', 'liepin', 'zhilian', 'offerbiu'];
+/** 控制台可投递平台（与 public/console.html 的 PLATFORMS、data/browser/cdp.json 保持一致）
+ *  offerbiu = 企业官网通道（offerbiu.com 采集 + 企业官网表单投递），与 official 共用 9227 窗口。
+ *  ⚠️ 新增平台必须同步：types.ts / cdp.json / 本文件 / platformHealth.ts / console.html / start_platforms.bat
+ *     （合约测试「平台注册完整性」会校验一致性）。 */
+export const DELIVERY_PLATFORMS = [
+  'boss', 'job51', 'liepin', 'zhilian', 'offerbiu', 'nowcoder',
+  // 2026-09-21 新增登记（窗口/巡检已就绪，采集与投递实现待各自实机校准）
+  'easyzhipin', 'job58', 'chinahr', 'dianzhang', 'yupao', 'maimai', 'ganji', 'iguopin', 'yingjiesheng',
+];
 
 function getCdpEndpoint(key: string): string | null {
   try {

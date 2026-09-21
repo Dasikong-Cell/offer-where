@@ -9,7 +9,7 @@
  */
 import type { ApplyPlatform } from './types.js';
 
-export type PlatformKey = Exclude<ApplyPlatform, 'offerbiu' | 'nowcoder'>;
+export type PlatformKey = 'zhilian' | 'boss' | 'job51' | 'liepin';
 
 export interface PlatformCfg {
   key: PlatformKey;

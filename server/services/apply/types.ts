@@ -2,7 +2,32 @@
  * 跨平台专用投递脚本：公共类型
  */
 
-export type ApplyPlatform = 'boss' | 'zhilian' | 'job51' | 'nowcoder' | 'offerbiu' | 'liepin';
+/**
+ * 支持的投递平台。
+ *
+ * ⚠️ 新增一个平台必须**六处同步**（漏一处就会出现"界面能选、跑起来报不支持"的半注册）：
+ *   ① 本文件（类型）           ② `data/browser/cdp.json`（端口映射）
+ *   ③ `services/connection.ts:DELIVERY_PLATFORMS`   ④ `services/platformHealth.ts:PLATFORM_PAGE`（巡检）
+ *   ⑤ `public/console.html:PLATFORMS`（控制台）      ⑥ `start_platforms.bat`（Chrome 实例）
+ * 已有合约测试（contract_tests「平台注册完整性」）自动校验这六处一致，改完跑 `npm test` 即可。
+ */
+export type ApplyPlatform =
+  | 'boss'          // BOSS直聘
+  | 'zhilian'       // 智联招聘
+  | 'job51'         // 前程无忧（51job）
+  | 'nowcoder'      // 牛客网
+  | 'liepin'        // 猎聘
+  | 'offerbiu'      // 企业官网 / 微信推文聚合（邮箱通道）
+  // ── 2026-09-21 新增登记（基础设施已就绪；采集/投递的 DOM 实现待各平台实机校准）──
+  | 'easyzhipin'    // 易直聘（www.easyzhipin.com）
+  | 'job58'         // 58同城招聘（jobs.58.com）
+  | 'chinahr'       // 中华英才网（www.chinahr.com）
+  | 'dianzhang'     // 店长直聘（www.dianzhangzhipin.com，BOSS 同集团）
+  | 'yupao'         // 鱼泡直聘（www.yupao.com）
+  | 'maimai'        // 脉脉高聘（maimai.cn）
+  | 'ganji'         // 赶集招聘（www.ganji.com，58 同集团）
+  | 'iguopin'       // 国聘（www.iguopin.com）
+  | 'yingjiesheng'; // 应届生求职网（www.yingjiesheng.com）
 
 /** 投递动作：一键/批量自动/关键词搜索投递/仅搜索收集/HR复聊/求职信 */
 export type ApplyAction = 'hello' | 'auto' | 'keyword' | 'search' | 'again' | 'letter';

@@ -546,9 +546,20 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const PLATFORMS = [
   {id:'boss', name:'BOSS直聘', color:'#16c2a3'},
   {id:'liepin', name:'猎聘', color:'#0a64ee'},
-  {id:'job51', name:'51job', color:'#ff5e00'},
+  {id:'job51', name:'前程无忧(51job)', color:'#ff5e00'},
   {id:'zhilian', name:'智联招聘', color:'#ff4d4f'},
   {id:'offerbiu', name:'offerbiu', color:'#7c5cff'},
+  {id:'nowcoder', name:'牛客网', color:'#00b3ff'},
+  // 2026-09-21 新增登记：窗口/巡检已就绪；采集与投递实现待各自实机校准（见 README「支持平台」）
+  {id:'easyzhipin', name:'易直聘', color:'#00b96b'},
+  {id:'job58', name:'58同城招聘', color:'#ff6a00'},
+  {id:'chinahr', name:'中华英才网', color:'#e0234e'},
+  {id:'dianzhang', name:'店长直聘', color:'#00c2a8'},
+  {id:'yupao', name:'鱼泡直聘', color:'#1e88e5'},
+  {id:'maimai', name:'脉脉高聘', color:'#00b8d4'},
+  {id:'ganji', name:'赶集招聘', color:'#f5a623'},
+  {id:'iguopin', name:'国聘', color:'#d32f2f'},
+  {id:'yingjiesheng', name:'应届生求职网', color:'#5e35b1'},
 ];
 const pfName = id => (PLATFORMS.find(p=>p.id===id)||{}).name || id;
 

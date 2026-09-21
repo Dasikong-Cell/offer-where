@@ -25,6 +25,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { execCdpAction } from './cdpDriver.js';
+import { DELIVERY_PLATFORMS } from './connection.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const CDP_JSON = path.join(__dir, '..', '..', 'data', 'browser', 'cdp.json');
@@ -54,6 +55,81 @@ export const PLATFORM_PAGE: Record<string, { home: string; logged: string[]; ano
     home: 'https://www.zhaopin.com/',
     logged: ['退出登录', '我的智联', '个人中心', '我的简历'],
     anon: ['登录/注册', '密码登录', '立即登录', '微信登录', '扫码登录', '获取验证码'],
+  },
+
+  // ── 2026-09-21 新增登记的平台 ──────────────────────────────────────────────
+  // ⚠️ anon 词来自**调试窗口实机访问首页采集**（匿名态，2026-09-21）；
+  //    logged 词为通用保守值（未实机校准）—— 各自登录一次后可用控制台 🩺 复核并按需补充。
+  //    保守取值的好处：匹配不上只会判 unknown（不误报"已登录"），不会造成误放行。
+  nowcoder: {
+    // 牛客网（校招/笔试面试社区 + 岗位）。补登记：此前在 SUPPORTED_PLATFORMS 里却缺窗口/巡检配置
+    home: 'https://www.nowcoder.com/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['登录', '注册', '登录/注册'],
+  },
+  offerbiu: {
+    // 官网/微信推文聚合通道（邮箱直投为主）。与 official 共用 9227 窗口，故无独立端口
+    home: 'https://www.offerbiu.com/',
+    logged: ['退出登录', '个人中心'],
+    anon: ['登录', '注册'],
+    note: '与 official 共用 9227 窗口；主链路是邮箱直投（不经页面登录）',
+  },
+  easyzhipin: {
+    // 落地页为主（「我要求职」引导下载 APP），求职主流程在 APP 内，Web 端可用性待评估
+    home: 'https://www.easyzhipin.com/',
+    logged: ['退出登录', '个人中心'],
+    anon: ['企业登录', '扫码登录', '登录', '下载易直聘APP'],
+    note: '易直聘以 APP 为主，Web 端目前是落地页；投递链路需先评估 Web 可操作性',
+  },
+  job58: {
+    // ⚠️ 不是 jobs.58.com（那是「58集团社会招聘」自招官网）；求职频道是城市子域 {城市}.58.com/job/
+    home: 'https://km.58.com/job/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['用户登录', '短信登录', '账号登录', '免费注册', 'App扫码登录', '忘记密码'],
+    note: '未登录会重定向到 passport.58.com/login；城市前缀（km=昆明）需与目标城市一致',
+  },
+  chinahr: {
+    // 中华英才网已并入「新华英才」，域名仍为 chinahr.com
+    home: 'https://www.chinahr.com/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['登录|注册', '登录/注册', '企业入口', '登录'],
+  },
+  dianzhang: {
+    // BOSS 同集团（店长/服务业垂直）
+    home: 'https://www.dianzhangzhipin.com/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['注册', '登录'],
+  },
+  yupao: {
+    // 鱼泡直聘（蓝领/建筑垂直），首页会按 IP 城市自动切换
+    home: 'https://www.yupao.com/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['登录丨注册', '登录', '注册', '我要找工作'],
+  },
+  maimai: {
+    // 脉脉高聘 = 脉脉旗下的招聘模块
+    home: 'https://maimai.cn/gaopin',
+    logged: ['退出登录', '个人中心', '招聘管理'],
+    anon: ['登录/注册', '登录', '注册'],
+  },
+  ganji: {
+    // 58 同集团。⚠️ 首次访问常触发风控验证码（整页替换），故 anon 词含验证码特征
+    home: 'https://www.ganji.com/zhaopin/',
+    logged: ['退出登录', '个人中心'],
+    anon: ['微信扫码登录', '赶集招聘扫码登录', '账号登录', '验证码校验', '请输入验证码'],
+    note: '风控较严：首次访问可能直接落到 antibot 验证码页，需人工过一次',
+  },
+  iguopin: {
+    // 国聘（央企国企招聘平台）
+    home: 'https://www.iguopin.com/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['登录/注册', '登录', '注册', '我要招人'],
+  },
+  yingjiesheng: {
+    // 应届生求职网（校招垂直）
+    home: 'https://www.yingjiesheng.com/',
+    logged: ['退出登录', '个人中心', '我的简历'],
+    anon: ['登录/注册', '登录', '注册', '通知'],
   },
 };
 
@@ -175,11 +251,15 @@ export async function probeOne(platform: string, deep = true): Promise<PlatformH
 
 /**
  * 批量巡检。
- * @param platforms 平台列表，缺省 = 主要投递平台
+ * @param platforms 平台列表，缺省 = **全部已登记平台**（DELIVERY_PLATFORMS，15 个）
  * @param deep      true 时导航页面做权威判定（慢，约 8s/平台）；false 只测 CDP 连接
+ *
+ * ⚠️ 缺省值此前是硬编码的 4 个平台 —— 新增平台后巡检看不到它们（"登记了却巡检不到"）。
+ *    现与 DELIVERY_PLATFORMS 同源。并发执行（Promise.all），未启动的平台秒级失败，
+ *    因此把 4 个扩到 15 个不会线性拖慢（实测总耗时仍主要取决于已启动窗口数）。
  */
 export async function probePlatformHealth(platforms?: string[], deep = true): Promise<PlatformHealth[]> {
-  const list = platforms?.length ? platforms : ['boss', 'job51', 'liepin', 'zhilian'];
+  const list = platforms?.length ? platforms : DELIVERY_PLATFORMS;
   return Promise.all(list.map((p) => probeOne(p, deep)));
 }
 
