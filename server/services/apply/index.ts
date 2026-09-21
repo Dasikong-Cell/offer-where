@@ -9,6 +9,8 @@ import { runOfferbiu, runOfferbiuEmail } from './offerbiu.js';
 import { runLiepin } from './liepin.js';
 import { runIguopin } from './iguopin.js';
 import { runYupao } from './yupao.js';
+import { runChinahr } from './chinahr.js';
+import { runYingjiesheng } from './yingjiesheng.js';
 import { runEngine } from './engine.js';
 import type { ApplyInput, ApplyPlatform, ApplyResult } from './types.js';
 
@@ -16,6 +18,8 @@ export const SUPPORTED_PLATFORMS: ApplyPlatform[] = [
   'boss', 'zhilian', 'job51', 'nowcoder', 'offerbiu', 'liepin',
   // 2026-09-21 接入：国聘（API 采集 + 详情页投递）、鱼泡直聘（列表/详情采集 + 聊一聊投递）
   'iguopin', 'yupao',
+  // 2026-09-21 接入：中华英才网（无 URL 搜索，/job/ 推荐列表 → 详情页投递）、应届生求职网（51job 城市码 → 频道页卡片 → 详情页投递）
+  'chinahr', 'yingjiesheng',
 ];
 
 /**
@@ -29,7 +33,7 @@ export const SUPPORTED_PLATFORMS: ApplyPlatform[] = [
  * 接入某个平台时：实现 `runXxx` → 从本数组移除 → 加入 SUPPORTED_PLATFORMS（并在 console 上标注）。
  */
 export const PENDING_PLATFORMS: ApplyPlatform[] = [
-  'easyzhipin', 'job58', 'chinahr', 'dianzhang', 'maimai', 'ganji', 'yingjiesheng',
+  'easyzhipin', 'job58', 'dianzhang', 'maimai', 'ganji',
 ];
 
 /** 已登记（含待接入）的全部平台 —— 控制台下拉与巡检的口径 */
@@ -95,6 +99,10 @@ export async function runApply(input: ApplyInput): Promise<ApplyResult> {
       return runIguopin(input);
     case 'yupao':
       return runYupao(input);
+    case 'chinahr':
+      return runChinahr(input);
+    case 'yingjiesheng':
+      return runYingjiesheng(input);
     default:
       // 已登记但投递实现待接入：给出可执行的下一步，而不是笼统的"不支持"
       if (isPendingPlatform(String(input.platform))) {
