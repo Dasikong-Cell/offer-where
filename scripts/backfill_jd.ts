@@ -48,7 +48,9 @@ const DRY_RUN = flag('dry-run');
  */
 const DETAIL_URL: Record<string, RegExp> = {
   boss: /\/job_detail\/[^/]+\.html/,
-  liepin: /\/lptjob\/[^/]+/,
+  // 2026-09-23 修正：猎聘详情页实测已是 `https://www.liepin.com/job/{数字id}.shtml`
+  //（旧形态 `/lptjob/xxx` 已失效 → 会让「无详情页直链」误判、回填恒 0）
+  liepin: /\/job\/\d+\.shtml/,
   job51: /jobs\.51job\.com\/[^/]+\/[^/]+\.html/,
   zhilian: /zhaopin\.com\/jobdetail\//,
 };
