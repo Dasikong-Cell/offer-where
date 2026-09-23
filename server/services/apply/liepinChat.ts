@@ -15,6 +15,7 @@
  */
 
 import type { ChatDriver, ConvSummary, ParsedMessage } from './chatTypes.js';
+import { acceptResumeRequestGeneric, detectResumeRequestClause, type ExFn } from './resumeCard.js';
 
 const PORT = Number(process.env.PORT) || 4400;
 const PLATFORM = 'liepin';
@@ -22,13 +23,23 @@ const BASE = `http://127.0.0.1:${PORT}/api/browser/exec`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function ex(action: string, extra: any = {}): Promise<any> {
+/** 测试钩子：桩函数替换底层 CDP 调用（仅测试用，生产代码不调用）。 */
+let _exOverride: ExFn | null = null;
+export function __setExForTest(fn: ExFn | null): void {
+  _exOverride = fn;
+}
+
+async function realEx(action: string, extra: any = {}): Promise<any> {
   const r = await fetch(BASE, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ platform: PLATFORM, action, ...extra }),
   });
   return r.json();
+}
+/** 统一入口：未注入桩时走真实 CDP；注入后走桩（测试断言副作用次数用）。 */
+function ex(action: string, extra: any = {}): Promise<any> {
+  return (_exOverride || realEx)(action, extra);
 }
 
 /** 进猎聘 IM 聊天面板（首页点页头 .im-ui-basic-entry 入口） */
@@ -112,7 +123,7 @@ export async function openConversation(key: string): Promise<boolean> {
   return (r.data as string) === 'opened';
 }
 
-export async function readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string }> {
+export async function readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string; resumeRequest?: boolean }> {
   const r = await ex('eval', {
     script: `(()=>{
       const WRAP='.im-ui-message-item-wrapper';
@@ -128,13 +139,16 @@ export async function readConversation(): Promise<{ messages: ParsedMessage[]; l
         const isMine=!!li.querySelector('.im-ui-txt.send')||/send/.test(cls)||!!li.querySelector('.im-ui-message-item-send');
         msgs.push({side: isMine?'me':'hr', text:txt});
       }
-      return JSON.stringify({msgs});
+      // 「请求附件简历」结构化卡片（跨平台检测，见 resumeCard.ts）：命中才置 resumeRequest，
+      // 否则回落工具栏「发简历」（runAutoReply 路由铁律：卡片在则绝不回退工具栏）。
+      const resumeRequest = (${detectResumeRequestClause()});
+      return JSON.stringify({msgs, resumeRequest});
     })()`,
   });
   const d = JSON.parse((r.data as string) || '{"msgs":[]}');
   const messages: ParsedMessage[] = d.msgs || [];
   const hrs = messages.filter((m: ParsedMessage) => m.side === 'hr');
-  return { messages, lastHr: hrs.length ? hrs[hrs.length - 1].text : '' };
+  return { messages, lastHr: hrs.length ? hrs[hrs.length - 1].text : '', resumeRequest: !!d.resumeRequest };
 }
 
 export async function sendText(text: string): Promise<boolean> {
@@ -183,6 +197,12 @@ export async function sendResume(): Promise<boolean> {
   return (r.data as string) === 'clicked' || (r.data as string) === 'file-clicked';
 }
 
+/** 同意猎聘「请求附件简历」结构化卡片（跨平台通用实现，见 resumeCard.ts）。
+ *  ⚠️ 真实副作用：会把在线简历发给 HR；引擎只在真实发送模式调用。一次调用只点一次。 */
+export async function acceptResumeRequest(): Promise<boolean> {
+  return acceptResumeRequestGeneric(ex);
+}
+
 /** 猎聘平台 ChatDriver 实现 */
 export const liepinChatDriver: ChatDriver = {
   platform: PLATFORM,
@@ -192,4 +212,5 @@ export const liepinChatDriver: ChatDriver = {
   readConversation,
   sendText,
   sendResume,
+  acceptResumeRequest,
 };

@@ -17,6 +17,7 @@ const PLATFORM = 'boss';
 const BASE = `http://127.0.0.1:${PORT}/api/browser/exec`;
 
 import type { ChatDriver, ConvSummary, ParsedMessage } from './chatTypes.js';
+import { acceptResumeRequestGeneric } from './resumeCard.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -224,79 +225,15 @@ export async function readConversation(): Promise<{
 }
 
 /**
- * 同意平台「请求附件简历」卡片（2026-09-23 新增）。
+ * 同意平台「请求附件简历」卡片（2026-09-23 抽出跨平台通用实现，见 resumeCard.ts）。
  *
  * ⚠️ 有真实副作用：点下去会把在线简历发给 HR，引擎只在真实发送模式下调用。
- * ⚠️ **一次调用只点一次**（不做轮内重试）—— 详见函数内注释（重复发送事故）。
- * 双路径兜底：① 会话流卡片 `.message-card-buttons` 里的「同意」；② 顶部提示条 `.respond-popover .btn-agree`。
- * 点击后复核按钮是否变为禁用态（=已处理），避免"点了但没生效"被静默吞掉。
+ * ⚠️ **一次调用只点一次**（不做轮内重试）—— 通用实现内已含 ALREADY 已发送态守卫与复核，
+ *    详见 resumeCard.ts 与 3 连发事故复盘。
+ * 双路径兜底：① 会话流卡片里的「同意」；② 顶部提示条 `.respond-popover .btn-agree`。
  */
 export async function acceptResumeRequest(): Promise<boolean> {
-  // 注意：禁用态是 class `disabled`（SPAN 无 disabled 属性），三处判据必须一致，否则会「点了还判未处理」
-  const BTN_DISABLED = `const btnDisabled=function(b){
-    const cls=String(b.className||'');
-    if(/(^|\\s)disabled(\\s|$)/.test(cls)) return true;
-    if(b.disabled===true) return true;
-    try{ if(getComputedStyle(b).pointerEvents==='none') return true; }catch(e){}
-    return false;
-  };`;
-  const CLICK = `(()=>{
-    ${BTN_DISABLED}
-    const conv=document.querySelector('.chat-conversation');
-    if(!conv) return 'NO_CONV';
-    const wraps=[].slice.call(conv.querySelectorAll('.message-card-wrap,[class*=message-card-wrap]'));
-    for(const w of wraps){
-      const wt=(w.innerText||'').replace(/\\s+/g,'');
-      if(wt.indexOf('附件简历')<0||wt.indexOf('是否同意')<0) continue;
-      const btns=[].slice.call(w.querySelectorAll('.card-btn,button'));
-      const allAgree=btns.filter(function(b){return /^同意/.test((b.innerText||'').trim());});
-      if(!allAgree.length) continue;
-      // ⚠️ 已发送态守卫：该卡片的「同意」按钮**已全部禁用**（上次已点 / 平台已处理）→ 直接报 ALREADY，
-      // 绝不重复点击。这是防「同一份简历连发多遍」的纵深防线：即便 acceptResumeRequest 被重复调用，
-      // 只要 UI 已切到禁用态就不会再发（实测 2026-09-23 的 3 连发事故即卡在未识别禁用态）。
-      if(allAgree.every(function(b){return btnDisabled(b);})) return 'ALREADY';
-      const agree=allAgree.filter(function(b){return !btnDisabled(b);});
-      if(agree.length){ agree[0].click(); return 'CARD'; }
-    }
-    const pop=conv.querySelector('.respond-popover');
-    if(pop&&(pop.innerText||'').indexOf('附件简历')>=0){
-      const b=pop.querySelector('.btn-agree')||[].slice.call(pop.querySelectorAll('button,.btn')).find(function(e){return /^同意/.test((e.innerText||'').trim());});
-      if(b&&!btnDisabled(b)){ b.click(); return 'POPOVER'; }
-    }
-    return 'NOT_FOUND';
-  })()`;
-
-  const CHECK = `(()=>{
-    ${BTN_DISABLED}
-    const conv=document.querySelector('.chat-conversation');
-    if(!conv) return false;
-    const wraps=[].slice.call(conv.querySelectorAll('.message-card-wrap,[class*=message-card-wrap]'));
-    for(const w of wraps){
-      const wt=(w.innerText||'').replace(/\\s+/g,'');
-      if(wt.indexOf('附件简历')<0||wt.indexOf('是否同意')<0) continue;
-      const btns=[].slice.call(w.querySelectorAll('.card-btn,button'));
-      if(btns.some(function(b){return /^同意/.test((b.innerText||'').trim())&&!btnDisabled(b);})) return true;
-    }
-    const pop=conv.querySelector('.respond-popover');
-    if(pop&&(pop.innerText||'').indexOf('附件简历')>=0){
-      const b=pop.querySelector('.btn-agree');
-      if(b&&!btnDisabled(b)) return true;
-    }
-    return false;
-  })()`;
-
-  // ⚠️ 只点一次，**刻意不做轮内重试**：
-  // 发简历是不可逆的外部副作用。实测教训（2026-09-23）：早期版本在轮内重试 3 次，
-  // 恰逢禁用态判据失效，结果同一份简历给同一位 HR 连发 3 遍，聊天里出现 3 条「已发送附件简历」系统消息。
-  // 幂等优先于即时成功 —— 若这次没点成，卡片仍是待处理状态，下一轮会被重新检测到并再试，
-  // 天然具备「跨轮重试」，且间隔足够长，不会重复轰炸 HR。
-  const c = await ex('eval', { script: CLICK });
-  const hit = String(c.data || '');
-  if (hit === 'ALREADY') return true; // 已发送态：按钮已禁用，无需再点（防重复发送）
-  if (hit === 'NOT_FOUND' || hit === 'NO_CONV') return false;
-  await sleep(2500);
-  const chk = await ex('eval', { script: CHECK });
-  return chk.data === false; // 按钮变为禁用态 = 已处理
+  return acceptResumeRequestGeneric(ex);
 }
 
 /** 在输入框输入文本（contenteditable + Vue v-model 兼容） */

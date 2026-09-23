@@ -37,8 +37,10 @@ export interface ChatDriver {
   /**
    * 读取当前会话全部消息，区分 HR / 我，返回最新一条 HR 消息与 HR 发布的职位。
    * `resumeRequest`：是否存在**待处理**的平台结构化「请求附件简历」卡片
-   * （BOSS 的 `我想要一份您的附件简历，您是否同意 / 拒绝 / 同意`）——
+   * （如 BOSS 的 `我想要一份您的附件简历，您是否同意 / 拒绝 / 同意`、猎聘等同类卡片）——
    * 这类请求必须走卡片上的「同意」按钮，走工具栏「发简历」是另一条路径，卡片会一直挂着。
+   * 检测为跨平台通用实现（resumeCard.ts 的 detectResumeRequestClause），凡实现了
+   * acceptResumeRequest 的平台都应在 readConversation 里回传此标志。
    */
   readConversation(): Promise<{
     messages: ParsedMessage[];

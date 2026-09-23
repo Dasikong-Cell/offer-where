@@ -16,6 +16,8 @@
 import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
 import { acceptResumeRequest, __setExForTest } from '../server/services/apply/bossChat.js';
+import { acceptResumeRequestGeneric, detectResumeRequestClause } from '../server/services/apply/resumeCard.js';
+import { liepinChatDriver, __setExForTest as __setExForTestLiepin } from '../server/services/apply/liepinChat.js';
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
@@ -579,6 +581,88 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   }, emit);
   check('G7 无卡片纯文本请求 → 走工具栏 sendResume', calls.sendResume === 1, `sendResume=${calls.sendResume}`);
   check('G7 无卡片 → 不调用 acceptResumeRequest（没有卡片可点）', calls.acceptResume === 0, `acceptResume=${calls.acceptResume}`);
+}
+
+// G8 通用 acceptResumeRequestGeneric 平台无关语义（2026-09-23 跨平台化回归）
+// 证明「点卡片同意」逻辑不绑定 BOSS：直接用通用函数 + 桩 ex 即可断言副作用次数与早返回。
+{
+  let st: { clickResult: string; checkResult: any } = { clickResult: 'CARD', checkResult: false };
+  let calls = { click: 0, otherEval: 0 };
+  const fakeEx = async (action: string, extra: any = {}) => {
+    if (action === 'eval') {
+      const s = String(extra.script || '');
+      if (s.includes('.click()')) { calls.click++; return { data: st.clickResult }; } // 仅 CLICK 脚本含 .click()
+      calls.otherEval++;
+      return { data: st.checkResult };
+    }
+    return { data: null };
+  };
+  const runGuard = async () => {
+    calls = { click: 0, otherEval: 0 };
+    return acceptResumeRequestGeneric(fakeEx);
+  };
+
+  st = { clickResult: 'CARD', checkResult: false };
+  const rA = await runGuard();
+  check('G8a 通用正常路径 → 已处理(true)', rA === true, `r=${rA}`);
+  check('G8a ⚠️ 通用实现一次调用恰好点击一次（防 3 连发）', calls.click === 1, `click=${calls.click}`);
+  check('G8a 点击后复核一次(CHECK)', calls.otherEval === 1, `otherEval=${calls.otherEval}`);
+
+  st = { clickResult: 'ALREADY', checkResult: false };
+  const rB = await runGuard();
+  check('G8b 通用已发送态 → 已处理(true)', rB === true, `r=${rB}`);
+  check('G8b ⚠️ 已发送态早返回（无 CHECK、未浪费等待）', calls.click === 1 && calls.otherEval === 0, `click=${calls.click} otherEval=${calls.otherEval}`);
+
+  st = { clickResult: 'NOT_FOUND', checkResult: false };
+  const rC = await runGuard();
+  check('G8c 通用无卡片 → 未处理(false)', rC === false, `r=${rC}`);
+  check('G8c 无卡片仅探测一次', calls.click === 1 && calls.otherEval === 0, `click=${calls.click} otherEval=${calls.otherEval}`);
+}
+
+// G9 liepin 接入通用卡片处理（2026-09-23 跨平台化）
+// 证明 liepinChatDriver 已暴露 acceptResumeRequest 且走通用实现（经注入 ex 验证）；
+// 以及「未实现该能力的平台」被引擎优雅跳过（走工具栏，不报错）。
+{
+  check('G9 liepinChatDriver 暴露 acceptResumeRequest 能力', typeof liepinChatDriver.acceptResumeRequest === 'function');
+  let st: { clickResult: string; checkResult: any } = { clickResult: 'CARD', checkResult: false };
+  let calls = { click: 0, otherEval: 0 };
+  const fakeEx = async (action: string, extra: any = {}) => {
+    if (action === 'eval') {
+      const s = String(extra.script || '');
+      if (s.includes('.click()')) { calls.click++; return { data: st.clickResult }; }
+      calls.otherEval++;
+      return { data: st.checkResult };
+    }
+    return { data: null };
+  };
+  __setExForTestLiepin(fakeEx);
+  try {
+    const r = await liepinChatDriver.acceptResumeRequest!();
+    check('G9 liepin acceptResumeRequest 走通用实现 → 已处理(true)', r === true, `r=${r}`);
+    check('G9 liepin 一次调用恰好点击一次', calls.click === 1, `click=${calls.click}`);
+    check('G9 liepin 点击后复核一次', calls.otherEval === 1, `otherEval=${calls.otherEval}`);
+  } finally {
+    __setExForTestLiepin(null);
+  }
+
+  // 能力存在性路由：未实现 acceptResumeRequest 的平台（如尚未接入聊天驱动的智联/51job）应被跳过，
+  // 纯文本简历请求回落工具栏 sendResume，不抛错。
+  fresh();
+  const c2 = { sendResume: 0 };
+  const noCardDriver: ChatDriver = {
+    platform: 'zhilian',
+    openChat: async () => {},
+    listConversations: async () => [{ key: 'zhilian|HR|', name: 'HR', company: '', lastMsg: '请把简历发我看看', unread: true, raw: '' }],
+    openConversation: async () => true,
+    readConversation: async () => ({ messages: [{ side: 'hr', text: '请把简历发我看看' }], lastHr: '请把简历发我看看', position: 'Java开发', resumeRequest: false }),
+    sendText: async () => true,
+    sendResume: async () => { c2.sendResume++; return true; },
+  };
+  registerChatDriver('zhilian', noCardDriver);
+  const { evs, emit } = collect();
+  await runAutoReply('zhilian', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'] }, emit);
+  check('G9 无 acceptResumeRequest 的平台 → 引擎跳过（绝不调用）', (noCardDriver as any).acceptResumeRequest === undefined);
+  check('G9 无卡片纯文本请求 → 走工具栏 sendResume', c2.sendResume === 1, `sendResume=${c2.sendResume}`);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
