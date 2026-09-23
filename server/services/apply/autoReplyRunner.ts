@@ -275,6 +275,8 @@ export async function runAutoReply(
           phone: (profRow.phone as string) || null,
           education: (profRow.education as string) || null,
           major: (profRow.major as string) || null,
+          // 期望城市：让 AI 知道求职城市边界，避免编造现居地 / 擅自接受异地岗位
+          city: (profRow.expectedCity as string) || null,
         }
       : undefined;
     const decision = decide(lastHr, { hrName: c.name, company: c.company, position: hrPosition, round, profile });

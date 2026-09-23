@@ -15,6 +15,7 @@
  */
 import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
+import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled } from '../server/services/authToken.js';
@@ -82,6 +83,24 @@ check('提取 Authorization: Bearer', extractToken({ headers: { authorization: '
 check('空请求头得到空令牌', extractToken({ headers: {} }) === '');
 check('常量时间比较：相等为真', safeEqual('tok123', 'tok123'));
 check('常量时间比较：不等为假', !safeEqual('tok123', 'tok124') && !safeEqual('tok123', 'tok1234'));
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A3. 回复话术的「事实边界」兜底（防编造个人信息） ══════');
+// 背景（2026-09-23 实测）：模型被直接问「你现在人在哪个城市」时，
+// 会把「期望城市」当现居地写出来（如「我目前在昆明这边」）。
+// 这是发给真实 HR、发出去就撤不回的消息，故 prompt 之外再加一道机械校验。
+{
+  const r1 = guardFabricatedLocation('我目前在昆明这边，面试的话具体时间再聊', '昆明、深圳');
+  check('命中「我目前在+城市」→ 替换为安全话术', r1.stripped && !/我目前在/.test(r1.text));
+  check('替换话术保留期望城市', r1.text.includes('昆明'));
+  check('命中「我人在+城市」', guardFabricatedLocation('我人在深圳，可以现场面试', '昆明、深圳').stripped);
+  check('未在期望城市里的城市同样拦截（防臆测）', guardFabricatedLocation('我目前在北京', '昆明、深圳').stripped);
+  check('无期望城市时也给出安全话术', guardFabricatedLocation('我在昆明', null).text.includes('沟通'));
+  // 防误伤：正常表达不得被改写
+  check('不误伤「我在找工作状态」', !guardFabricatedLocation('我在找工作状态，可以尽快到岗', '昆明').stripped);
+  check('不误伤「我目前不在本地」', !guardFabricatedLocation('我目前不在本地，面试安排再沟通', '昆明').stripped);
+  check('不误伤普通回复', !guardFabricatedLocation('您好，我对这个岗位很感兴趣', '昆明').stripped);
+}
 
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ B. 自动回复引擎合约（mock 驱动，无需真实浏览器） ══════');

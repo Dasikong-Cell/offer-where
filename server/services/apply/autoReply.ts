@@ -37,6 +37,8 @@ export interface ReplyContext {
     phone?: string | null;
     education?: string | null;
     major?: string | null;
+    /** 期望工作城市（来自 profile.expectedCity）：用于异地岗位判断，并避免 AI 编造现居地 */
+    city?: string | null;
   };
 }
 
@@ -367,6 +369,41 @@ export function formatHistory(history?: { side: 'hr' | 'me'; text: string }[], m
     .join('\n');
 }
 
+/** 常见城市名：用于输出侧机械校验「现居地宣称」 */
+const CITY_NAMES = [
+  '北京', '上海', '广州', '深圳', '杭州', '成都', '武汉', '西安', '南京', '苏州',
+  '天津', '重庆', '长沙', '郑州', '合肥', '厦门', '青岛', '大连', '福州', '济南',
+  '昆明', '南昌', '宁波', '无锡', '佛山', '东莞', '珠海', '中山', '惠州', '沈阳',
+  '哈尔滨', '长春', '石家庄', '太原', '贵阳', '南宁', '兰州', '乌鲁木齐', '海口', '三亚',
+];
+
+/**
+ * 「我(目前在) + 城市名」——注意不能宽泛匹配 `我在`，否则「我在找工作」会被误伤。
+ * 只有后接已知城市名才视为「声称现居地」。
+ */
+const CITY_CLAIM = new RegExp(`我(?:目前|现在|本人|现在人)?(?:人)?在\\s*(?:${CITY_NAMES.join('|')})`);
+
+/**
+ * 输出侧事实兜底（2026-09-23）：
+ * 实测模型对「不得声称现居地」的指令遵守不稳定 —— 被直接问「你现在人在哪个城市」时，
+ * 仍会把「期望城市」当现居地写出来（如「我目前在昆明这边」）。prompt 调优存在边际，
+ * 故在返回前再加一道机械校验：命中即整句替换为安全中性表述。
+ * 宁可话术通用一点，也不能编造候选人的个人信息 —— 这是发给真实 HR 的消息，不可撤回。
+ */
+export function guardFabricatedLocation(
+  text: string,
+  city?: string | null,
+): { text: string; stripped: boolean } {
+  if (!CITY_CLAIM.test(text)) return { text, stripped: false };
+  const c = (city || '').trim();
+  return {
+    text: c
+      ? `我主要在看${c}的机会，具体的面试安排咱们沟通一下就好。`
+      : `我主要在看合适的机会，具体的面试安排咱们沟通一下就好。`,
+    stripped: true,
+  };
+}
+
 /**
  * 用大模型生成 HR 回复话术（语境感知、自然口语），失败/未配置自动回退规则模板。
  *
@@ -397,6 +434,7 @@ export async function composeReplyWithAi(
   const edu = ctx.profile?.education || '本科';
   const major = ctx.profile?.major || '软件工程';
   const phone = ctx.profile?.phone || '（简历里都有）';
+  const city = (ctx.profile?.city || '').trim();
   const com = ctx.company || '贵公司';
   const pos = ctx.position || '相关岗位';
 
@@ -424,6 +462,20 @@ export async function composeReplyWithAi(
 要求：
 - 口语化、自然，1-3 句话，像真人求职者，不堆砌关键词、不套模板、不油腻。
 - 绝不编造简历里没有的公司、经历、数据、证书。
+- 绝不编造「我的信息」里没有给出的**个人信息**：籍贯 / 老家 / 现居城市 / 家庭成员 / 年龄 / 婚育 / 期望薪资等，
+  一律不得臆测、不得想象、不得用「应该是」式推断。被问到这类问题时，只用中性说法带过，或把话题引回岗位本身。
+- 也不要编造**在职/离职状态、工作年限、是否有 offer 在手**等未给出的经历信息
+  （本候选人是在校/应届背景，不要提「离职手续」「上家单位」之类说法）。
+- 【现居地·硬规则】你**不知道**候选人的现居城市。任何情况下都不得写「我在XX」「我人在XX」「我目前在XX」这类话。
+  若对方问「你现在人在哪 / 在哪个城市 / 能不能来现场面试」，**直接照这个句式回**：
+  「我主要在看${city || '目标城市'}的机会，具体的面试安排咱们沟通一下就好。」
+  （句中城市只能来自上面的「期望工作城市」，不得替换成其他城市。）
+- 绝不替候选人做承诺：不擅自接受或拒绝**工作地点、薪资、到岗时间、面试形式（线上/线下）与具体时间安排**等条件 —— 这些必须由本人确认。
+  凡「我的信息」给出的期望城市之外的地点，一律不要表态「我可以接受」；
+  面试安排用「具体时间和形式我们沟通就好」这类中性说法，不要直接应下「现场面试可以配合」。
+- 若岗位所在地与「期望城市」不同：**既不要表态接受，也不要主动拒绝**（主动劝退会直接丢掉机会）。
+  只用中性说法回应，例如「这个岗位在 XX 是吗？方便先介绍下具体的工作内容和情况吗」，最多说明自己的期望城市，
+  **是否继续由本人判断**，不要替候选人下「不合适」的结论。
 - 必须结合「最近对话上下文」回应：承接上文，不要答非所问。
 - 上下文中已经说过的内容（已报过学历、已约过时间、已发过简历等）**不要重复说**，
   也不要出现与之前承诺矛盾的表述（例如前面说"明天可以"，后面又说"随时都行"）。
@@ -433,6 +485,7 @@ export async function composeReplyWithAi(
 
   const USER = `【目标岗位】${com} ｜ ${pos}
 【我的信息】姓名=${n || '（未提供）'} 学历=${edu} 专业=${major} 电话=${phone}
+【期望工作城市】${city || '（未提供）'}（这只是求职意向城市，**不是现居地**；禁止据此声称"我人在某地/我在XX"，也不要声称自己在任何具体城市）
 【对方意图】${intentHint[intent]}
 【对方刚说的话】${hrMessage || ''}
 【最近对话】
@@ -441,7 +494,10 @@ ${histText || '（无）'}
 
   const ai = await chatText(USER, SYSTEM, { temperature: 0.7, timeoutMs: 20000 });
   if (ai && ai.trim()) {
-    return { text: signIfNeeded(ai.trim().replace(/^["'「]|["'」]$/g, ''), opts), source: 'ai' };
+    const cleaned = ai.trim().replace(/^["'「]|["'」]$/g, '');
+    // 输出侧事实兜底：命中「我在 + 城市」即替换 —— 模型偶尔仍会把「期望城市」当现居地宣称
+    const guarded = guardFabricatedLocation(cleaned, ctx.profile?.city);
+    return { text: signIfNeeded(guarded.text, opts), source: 'ai' };
   }
   return { text: signIfNeeded(fallback, opts), source: 'rule' };
 }
