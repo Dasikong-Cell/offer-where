@@ -18,6 +18,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { ensureHealthy } from './browserHealth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -593,6 +594,8 @@ export async function execCdpAction(
 ): Promise<BrowserActionResult> {
   try {
     const ep = endpoint || 'http://127.0.0.1:9222';
+    // 自愈：端口挂了（窗口崩溃）先按原 profile 拉起再行动，避免整批 need_manual。
+    await ensureHealthy(ep);
     const s = await ensureSession(platform, ep);
 
     switch (action) {

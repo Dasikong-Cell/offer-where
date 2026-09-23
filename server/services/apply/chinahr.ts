@@ -92,11 +92,26 @@ export async function runChinahr(input: ApplyInput): Promise<ApplyResult> {
       if (r.ok) { clicked = true; break; }
     }
     await sleep(3000);
-    const after = await pageText(platform);
-    const shot = await tryScreenshot(platform);
+    let after = await pageText(platform);
+    let shot = await tryScreenshot(platform);
     // 命中「取消投递」= 已投；或「已投递/投递成功/已申请」
     if (/已投递|投递成功|已申请|简历已投递|取消投递/.test(after)) {
       return { platform, status: 'applied', company, position, screenshot: shot, logs: logs.logs, message: `已在中华英才网向「${company || position || '该岗位'}」投递简历` };
+    }
+    // 中华英才网点击投递按钮后会弹出「是否直接使用现有简历直接申请本职位」确认框，
+    // 需再点「直接投递」（使用现有简历）才真正投出；否则停留在弹窗、实际未投递。
+    // 注意：用精确文本匹配点击，避免子串误中「修改简历直接投递」。
+    if (/是否直接使用现有简历|直接申请本职位/.test(after)) {
+      logs.step('确认弹窗', true, '检测到简历确认对话框，点击「直接投递」完成申请');
+      await bexec(platform, 'eval', {
+        script: `(function(){var els=document.querySelectorAll('button,a,[role="button"]');for(var i=0;i<els.length;i++){var s=(els[i].innerText||'').replace(/\\s+/g,' ').trim();if(s==='直接投递'&&els[i].offsetHeight>0){els[i].click();return 'ok';}}return 'none';})()`,
+      }, logs, '点击「直接投递」确认');
+      await sleep(3000);
+      after = await pageText(platform);
+      shot = await tryScreenshot(platform);
+      if (/已投递|投递成功|已申请|简历已投递|取消投递/.test(after)) {
+        return { platform, status: 'applied', company, position, screenshot: shot, logs: logs.logs, message: `已在中华英才网向「${company || position || '该岗位'}」投递简历` };
+      }
     }
     if (clicked) {
       return { platform, status: 'need_manual', company, position, screenshot: shot, logs: logs.logs, message: '已点击投递，但未能确认成功（中华英才网可能跳 APP 或需二次确认），请在调试窗口确认' };

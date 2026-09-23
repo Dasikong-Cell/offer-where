@@ -62,6 +62,9 @@ scripts/_probe_*.ts
 scripts/_tmp_*.ts
 _probe_*.ts
 _tmp_*.ts
+# 同上，但命名不带前导下划线（历史上 scripts/probe_*.ts 漏网会被提交）
+scripts/*probe*.ts
+scripts/*_tmp*.ts
 
 # ── 编辑器 / 系统文件 ─────────────────────────────────
 .vscode/

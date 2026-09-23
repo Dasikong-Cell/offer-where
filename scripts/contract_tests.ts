@@ -17,6 +17,7 @@ import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
+import { extractToken, safeEqual, isAuthEnabled } from '../server/services/authToken.js';
 import { getConversation, exec, getJob, upsertJob, kvSet } from '../server/db.js';
 import { decideGreet, isExcludeHit } from '../server/services/apply/greetDecision.js';
 import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
@@ -63,6 +64,24 @@ check('写请求 + 无 Origin 本机脚本放行', checkRequestOrigin({ method: 
   check('EXTRA_ORIGINS 追加生效且去尾斜杠', ext.has('http://192.168.1.20:4400'));
   check('EXTRA_ORIGINS 来源放行（局域网共用）', checkRequestOrigin({ method: 'POST', origin: 'http://192.168.1.20:4400', allowed: ext }).ok);
 }
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A2. 访问令牌鉴权（分发 / 局域网暴露时的写接口闸门） ══════');
+check('回环监听默认不启用鉴权（本机自用零影响）', !isAuthEnabled('127.0.0.1') && !isAuthEnabled('localhost'));
+check('非回环监听自动启用鉴权', isAuthEnabled('0.0.0.0') && isAuthEnabled('192.168.1.20'));
+{
+  const old = process.env.REQUIRE_AUTH;
+  process.env.REQUIRE_AUTH = '1';
+  check('REQUIRE_AUTH=1 强制启用', isAuthEnabled('127.0.0.1'));
+  process.env.REQUIRE_AUTH = '0';
+  check('REQUIRE_AUTH=0 强制关闭', !isAuthEnabled('0.0.0.0'));
+  if (old === undefined) delete process.env.REQUIRE_AUTH; else process.env.REQUIRE_AUTH = old;
+}
+check('提取 X-Auth-Token 头', extractToken({ headers: { 'x-auth-token': 'abc' } }) === 'abc');
+check('提取 Authorization: Bearer', extractToken({ headers: { authorization: 'Bearer xyz' } }) === 'xyz');
+check('空请求头得到空令牌', extractToken({ headers: {} }) === '');
+check('常量时间比较：相等为真', safeEqual('tok123', 'tok123'));
+check('常量时间比较：不等为假', !safeEqual('tok123', 'tok124') && !safeEqual('tok123', 'tok1234'));
 
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ B. 自动回复引擎合约（mock 驱动，无需真实浏览器） ══════');

@@ -21,6 +21,8 @@
  *   const ex = makeEx('boss'); ex('eval', { script })  // 平台固定时的闭包写法
  */
 
+import { authHeaders } from './apiAuth.ts';
+
 const PORT = Number(process.env.PORT) || 4400;
 
 /**
@@ -88,7 +90,7 @@ export async function ex(
   const { platform: p, action, args } = buildPayload(platform, actionOrBody, maybeArgs);
   const r = await fetch(BROWSER_EXEC_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
     body: JSON.stringify({ platform: p, action, ...args }),
   });
   return (await r.json()) as ExecResult;

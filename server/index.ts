@@ -10,6 +10,7 @@ import { promisify } from "util";
 import * as db from "./db.js";
 import { fetchLatestCode, listRecentMails, testConnection } from "./services/mail.js";
 import { execAction, listSessions, closeAll } from "./services/browser.js";
+import { relaunchAll, checkAllHealth } from "./services/browserHealth.js";
 import { probePlatformConnections, DELIVERY_PLATFORMS } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
@@ -44,6 +45,7 @@ import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
+import { getAuthToken, isAuthEnabled, isAuthorizedStrict } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
 import { locateByIp } from "./services/geo.js";
@@ -138,6 +140,19 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── 访问令牌（可选鉴权）：仅写方法校验 ──
+// 默认 HOST=127.0.0.1（回环）时关闭 → 本机自用零影响；
+// 一旦暴露到局域网（HOST=0.0.0.0）自动开启，或显式 REQUIRE_AUTH=1 强制开启。
+const AUTH_ENABLED = isAuthEnabled(HOST);
+if (AUTH_ENABLED) {
+  app.use((req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    if (isAuthorizedStrict(req)) return next();
+    res.status(401).json({ error: '缺少或无效的访问令牌（请在请求头带 X-Auth-Token，令牌见 data/.auth_token）' });
+  });
+  logRun('INFO', `访问令牌鉴权已开启（令牌文件 data/.auth_token）`);
+}
+
 // ── 5xx 统一落日志 + 告警 ──
 // 多数路由自己 try/catch 后直接返回 500 JSON，不会走到终末错误中间件；
 // 这里在响应结束时兜底统计，保证「接口真的挂了」也能进 run_log 并触发邮件告警。
@@ -164,14 +179,34 @@ app.use('/data/resume_tailored', express.static(TAILORED_DIR));
 // 静态资源：投递控制台（单一入口 App，public/console.html）
 const CONSOLE_DIR = path.join(__dirname, '..', 'public');
 if (!fs.existsSync(CONSOLE_DIR)) fs.mkdirSync(CONSOLE_DIR, { recursive: true });
+// 控制台统一走 `/`（那里按需注入访问令牌）；直接开 /console.html 会拿到未注入令牌的页面
+app.get('/console.html', (_req, res) => { res.redirect('/'); });
+
 app.use(express.static(CONSOLE_DIR));
-app.get("/", (_req, res) => { res.sendFile(path.join(CONSOLE_DIR, 'console.html')); });
+app.get("/", (_req, res) => {
+  const file = path.join(CONSOLE_DIR, 'console.html');
+  if (!AUTH_ENABLED) { res.sendFile(file); return; }
+  // 鉴权开启：把令牌注入页面（同源，外部站点读不到），控制台 fetch 自动携带
+  try {
+    const html = fs.readFileSync(file, 'utf8').replace(
+      '</head>',
+      `<script>window.__AUTH_TOKEN__=${JSON.stringify(getAuthToken())};</script></head>`,
+    );
+    res.type('html').send(html);
+  } catch {
+    res.sendFile(file);
+  }
+});
 
 // 缓存可用模型列表
 let cachedModels: Array<{ modelId: string; name: string; description?: string }> = [];
 const defaultModel = "claude-sonnet-4";
 
 // 健康检查
+app.get("/api/ping", (_req, res) => {
+  // 极轻探活：不触碰 DB / AI / 浏览器，供脚本与 watchdog 判断「进程是否已就绪」
+  res.json({ ok: true, uptimeMs: Math.round(process.uptime() * 1000) });
+});
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
 });
@@ -607,6 +642,27 @@ app.get("/api/browser/connections", async (req, res) => {
 app.post("/api/browser/close-all", async (req, res) => {
   await closeAll();
   res.json({ success: true });
+});
+
+// 浏览器自愈：检测所有管理端口，下线的一键按原 profile 拉起（登录态保留）。
+// 等价于把外部 ensure_chrome.sh 搬进服务进程，可经 API 触发，无需手动跑脚本。
+app.post("/api/browser/ensure-all", async (req, res) => {
+  try {
+    const result = await relaunchAll();
+    const up = Object.values(result).filter(Boolean).length;
+    res.json({ ok: true, result, up, total: Object.keys(result).length });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message || "浏览器拉起失败" });
+  }
+});
+
+// 浏览器端口健康诊断（只读，不拉起）。
+app.get("/api/browser/health", async (req, res) => {
+  try {
+    res.json({ ok: true, health: await checkAllHealth() });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message || "健康检查失败" });
+  }
 });
 
 // ============= 投递记录 API =============
@@ -2284,7 +2340,8 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 
 // 启动服务器
 const server = app.listen(PORT, HOST, () => {
-  logRun('INFO', `API 服务器已启动 http://${HOST}:${PORT}｜数据库 SQLite(data/chat.db)`);
+  // 真实冷启动耗时：从「进程创建」算起（含 tsx 转译 + ESM 依赖加载），比模块体内的计时准确
+  logRun('INFO', `API 服务器已启动 http://${HOST}:${PORT}｜数据库 SQLite(data/chat.db)｜冷启动 ${Math.round(process.uptime() * 1000)}ms`);
   console.log(`
 ╔════════════════════════════════════════════╗
 ║                                            ║
@@ -2305,6 +2362,25 @@ const server = app.listen(PORT, HOST, () => {
   }
   // 非阻塞：释放过期磁盘占用（截图超期、DB 备份仅留最近若干份）
   cleanupData({}).catch((e) => logRun('ERROR', `cleanupData 启动清理异常: ${e}`));
+});
+
+// 启动期错误（典型：端口被占用）——必须显式处理，否则落到 uncaughtException，
+// 用户只能在日志/告警里看到一句 EADDRINUSE 栈，不知道「已有实例在跑」。
+server.on('error', (err: any) => {
+  try {
+    if (err?.code === 'EADDRINUSE') {
+      logRun('ERROR', `端口 ${PORT} 已被占用：请先关闭正在运行的实例，或设置 PORT 换端口`);
+      try {
+        console.error(`\n[启动失败] 端口 ${PORT} 已被占用。请先关闭已运行的实例，或用 PORT=4401 换端口后重试。\n`);
+      } catch { /* stdout 管道可能已断开，忽略 */ }
+      process.exit(1);
+    }
+    logRun('ERROR', `listen error: ${err?.stack || err}`);
+    try { console.error(`[启动失败] ${err?.message || err}`); } catch { /* ignore */ }
+    process.exit(1);
+  } catch {
+    process.exit(1);
+  }
 });
 
 // 退出时关闭所有浏览器，避免残留进程

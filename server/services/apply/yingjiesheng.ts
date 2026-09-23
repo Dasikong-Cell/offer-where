@@ -14,8 +14,8 @@ import { detectRiskSignal, riskStatusOf } from '../riskSignals.js';
 
 const HOME_URL = 'https://www.yingjiesheng.com/';
 
-/** 投递入口候选文案（「立即申请」主投，「先聊聊」沟通型投递） */
-const APPLY_LABELS = ['立即申请', '先聊聊', '投简历', '申请职位', '在线投递'];
+/** 投递入口候选文案（「立即投递/立即申请」主投，「先聊聊」沟通型投递） */
+const APPLY_LABELS = ['立即投递', '立即申请', '先聊聊', '投简历', '申请职位', '在线投递', '投递简历'];
 
 function needsLogin(url: string, text: string): boolean {
   if (/\/login|\/passport|login\.html/.test(url)) return true;
@@ -32,7 +32,7 @@ export async function runYingjiesheng(input: ApplyInput): Promise<ApplyResult> {
 
   try {
     await bexec(platform, 'navigate', { url: jobUrl || HOME_URL, waitUntil: 'domcontentloaded' }, logs, jobUrl ? '打开岗位详情页' : '打开应届生求职网首页');
-    await sleep(4000);
+    await sleep(7000);
 
     {
       const text = await pageText(platform);

@@ -573,14 +573,16 @@ const PLATFORMS = [
 ];
 const pfName = id => (PLATFORMS.find(p=>p.id===id)||{}).name || id;
 
+const AUTH_TOKEN = (typeof window!=='undefined' && window.__AUTH_TOKEN__) || '';
+const authHeaders = () => (AUTH_TOKEN ? {'X-Auth-Token': AUTH_TOKEN} : {});
 async function api(path, opts={}){
-  const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts));
+  const res = await fetch(path, Object.assign({headers:Object.assign({'Content-Type':'application/json'}, authHeaders())}, opts));
   let data=null; try{ data = await res.json(); }catch(e){}
   if(!res.ok) throw new Error((data&&data.error)||('HTTP '+res.status));
   return data;
 }
 async function apiText(path, opts={}){
-  const res = await fetch(path, opts);
+  const res = await fetch(path, Object.assign({}, opts, {headers:Object.assign({}, authHeaders(), (opts&&opts.headers)||{})}));
   return res.text();
 }
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e; }
@@ -929,7 +931,7 @@ $('#replyPlatform').addEventListener('change', checkReplyLogin);
 /* ---------- email apply (offerbiu) ---------- */
 async function emailStream(path, body, outEl, barEl){
   outEl.textContent=''; if(barEl) barEl.style.width='0%';
-  const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+  const res = await fetch(path, {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, authHeaders()), body: JSON.stringify(body||{})});
   const reader = res.body.getReader(); const dec = new TextDecoder(); let buf=''; let n=0;
   while(true){
     const {done, value} = await reader.read(); if(done) break;

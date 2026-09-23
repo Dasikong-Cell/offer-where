@@ -20,7 +20,8 @@ function needsLogin(url: string, text: string): boolean {
 export async function runNowcoder(input: ApplyInput): Promise<ApplyResult> {
   const logs = new ApplyLogger();
   const platform = 'nowcoder';
-  const resumePath = input.profile.resume_path || undefined;
+  // 牛客「立即申请」后的弹窗会预选平台在线简历（如「杨欣宇简历_优化版」），
+  // 直接用它在平台内投递；**不**上传本地 PDF（批量传的是源码简历，会覆盖/劣化在线优化版）。
   const jobUrl = input.jobUrl || input.job?.apply_url || undefined;
   const company = input.job?.company ?? null;
   const position = input.job?.position ?? null;
@@ -70,9 +71,9 @@ export async function runNowcoder(input: ApplyInput): Promise<ApplyResult> {
     }
 
     if (jobUrl) {
-      // 内投入口
+      // 内投入口（牛客详情页按钮文案实测为「立即申请」；其余为兼容其它版式）
       let applied = false;
-      for (const label of ['投递', '立即投递', '投简历', '申请职位', '在线投递']) {
+      for (const label of ['立即申请', '投递', '立即投递', '投简历', '申请职位', '在线投递']) {
         const rr = await bexec(platform, 'click', { text: label, timeout: 6000 }, logs, `点击「${label}」`);
         if (rr.ok) { applied = true; break; }
       }
@@ -80,20 +81,14 @@ export async function runNowcoder(input: ApplyInput): Promise<ApplyResult> {
         const shot = await tryScreenshot(platform);
         return { platform, status: 'need_manual', message: '未找到「投递/投简历」按钮，该岗位可能外链企业官网，请用「官网投递」入口', logs: logs.logs, company, position, screenshot: shot };
       }
-      await sleep(2500);
+      await sleep(3000); // 等「申请职位：<职位>」弹窗渲染（内含在线简历 + 「投递简历」按钮）
 
-      // 上传附件简历
-      if (resumePath) {
-        for (const sel of ['input[type=file]', '.resume-upload input', 'input[accept*="pdf"]']) {
-          const ur = await bexec(platform, 'upload', { selector: sel, filePath: resumePath, timeout: 8000 }, logs, '上传简历附件');
-          if (ur.ok) break;
-        }
+      // 弹窗二次确认：牛客确认按钮文案实测为「投递简历」（命中即停，避免误点页面其它「确定」）
+      for (const label of ['投递简历', '确认投递', '确认申请', '提交']) {
+        const rr = await bexec(platform, 'click', { text: label, timeout: 6000 }, logs, `点击确认「${label}」`);
+        if (rr.ok) break;
       }
-      // 提交（弹窗二次确认）
-      for (const label of ['确认投递', '提交', '确定', '发送']) {
-        await bexec(platform, 'click', { text: label, timeout: 4000 }, logs, `点击「${label}」`);
-      }
-      await sleep(2000);
+      await sleep(2500);
 
       text = await pageText(platform);
       const shot = await tryScreenshot(platform);

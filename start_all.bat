@@ -95,7 +95,17 @@ if errorlevel 1 (
 )
 
 echo 打开投递控制台...
-timeout /t 2 >nul
+REM Wait until backend is ready (cold start is ~6s). Poll /api/ping instead of a fixed sleep,
+REM otherwise the console opens too early and shows a connection error.
+set /a _try=0
+:wait_ready
+curl -s -m 2 http://127.0.0.1:4400/api/ping >nul 2>nul
+if not errorlevel 1 goto :ready
+set /a _try+=1
+if %_try% GEQ 40 goto :ready
+timeout /t 1 >nul
+goto :wait_ready
+:ready
 start "" http://127.0.0.1:4400/
 echo.
 echo 已为每个平台打开独立 Chrome 窗口（并排排列）。
