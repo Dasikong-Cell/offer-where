@@ -31,13 +31,17 @@ const arg = (n: string, d?: string) => {
 const LIMIT = Math.max(1, Number(arg('limit', '40')));
 const DETAIL_LIMIT = Math.max(0, Number(arg('detail-limit', String(LIMIT))));
 const CITY = arg('city', '');
+// 详情页间隔：猎聘风控阈值低 —— 实测 3.5s 间隔连开 ~20 个详情页仍被判「账号行为异常」，
+// 故默认放慢到 8s，并可用 --interval= 调整（宁可慢，不要被锁）。
+const INTERVAL = Math.max(2000, Number(arg('interval', '8000')));
 const KEYWORD = arg('keyword', 'java,前端,后端,开发,软件,测试,运维,算法,python,数据分析,全栈,实施');
 
 /** 技术岗保留 / 非技术排除（与其它采集器口径一致） */
 const KEEP = ['开发', 'java', '前端', '软件', '程序', '技术', '工程师', 'web', '后端', '全栈',
   'api', '算法', '测试', '运维', '数据', 'python', 'go', 'c++', '计算机', 'net', '架构', '嵌入式', 'ai', '研发', '服务端'];
 const EXCLUDE = ['销售', '顾问', '运营', '客服', '人事', '财务', '行政', '文员', '护士', '老师', '教师',
-  '导购', '司机', '普工', '中介', '主播', '兼职', '打包', '分拣', '配送', '保安', '保洁', '服务员', '收银', '乘务', '消防', '幼师', '家教', '产品经理', '美术'];
+  '导购', '司机', '普工', '中介', '主播', '兼职', '打包', '分拣', '配送', '保安', '保洁', '服务员', '收银', '乘务', '消防', '幼师', '家教', '产品经理', '美术',
+  '前台', '酒店', '餐饮', '店长', '美发', '美容'];
 
 /** 列表页：收集 `{url, pos}`（pos 取锚文本，最稳） */
 const LIST_EVAL = `(function(){
@@ -141,7 +145,7 @@ const DETAIL_EVAL = `(function(){
           continue;
         }
         console.log(`[${pool.length + 1}] ✅ ${String(item.position).slice(0, 24)} | ${String(item.company || '').slice(0, 14)} | ${item.salary || '-'} | ${item.city || '-'} | JD ${(item.jd || '').length}`);
-        await sleep(3500); // 详情页间隔：放慢以降低被风控概率
+        await sleep(INTERVAL); // 详情页间隔：放慢以降低被风控概率（猎聘阈值低）
       }
       pool.push(item);
     }
