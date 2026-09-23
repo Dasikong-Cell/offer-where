@@ -15,6 +15,15 @@ import type { ApplyPlatform } from './types.js';
 import type { ChatDriver } from './chatTypes.js';
 import { bossChatDriver } from './bossChat.js';
 import { liepinChatDriver } from './liepinChat.js';
+import {
+  zhilianChatDriver,
+  job51ChatDriver,
+  nowcoderChatDriver,
+  iguopinChatDriver,
+  yupaoChatDriver,
+  chinahrChatDriver,
+  yingjieshengChatDriver,
+} from './platformsChat.js';
 import { decide, composeReplyWithAi, isPositionRelated, parsePositions } from './autoReply.js';
 import { getConversation, upsertConversation, getProfile, listJobs } from '../../db.js';
 import { tryAcquire, release } from './sessionLock.js';
@@ -48,10 +57,20 @@ function resolveHrPosition(company: string | null, platform: string): string | n
   return hit?.position || null;
 }
 
-/** 支持自动回复的平台 → 对应聊天驱动（新增平台在此登记即生效，引擎零改动） */
+/** 支持自动回复的平台 → 对应聊天驱动（新增平台在此登记即生效，引擎零改动）。
+ *  boss/liepin 为已真机校准的专属实现；其余 7 个 Web IM 平台经 genericChatDriver 配置化工厂
+ *  生成（启发式基线，calibrated:false，待 scripts/probe_chat.ts 真机校准后再投产）。
+ *  offerbiu 为邮件通道，由 offerbiu-email-direct-apply 处理，不在此登记。 */
 export const DRIVERS: Partial<Record<ApplyPlatform, ChatDriver>> = {
   boss: bossChatDriver,
   liepin: liepinChatDriver,
+  zhilian: zhilianChatDriver,
+  job51: job51ChatDriver,
+  nowcoder: nowcoderChatDriver,
+  iguopin: iguopinChatDriver,
+  yupao: yupaoChatDriver,
+  chinahr: chinahrChatDriver,
+  yingjiesheng: yingjieshengChatDriver,
 };
 
 /** 注册/覆盖某平台的聊天驱动：新增平台扩展用；测试中亦用于注入 mock 驱动 */
@@ -146,7 +165,7 @@ export async function runAutoReply(
 
   const driver = getChatDriver(platform);
   if (!driver) {
-    emit({ type: 'error', message: `平台 ${platform} 暂不支持自动回复（目前仅 boss / liepin）` });
+    emit({ type: 'error', message: `平台 ${platform} 暂无聊天驱动（自动回复不支持该平台；offerbiu 等邮件通道不在此引擎）` });
     return { sent: 0, skipped: 0 };
   }
 

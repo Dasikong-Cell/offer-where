@@ -18,6 +18,10 @@ import { runAutoReply, registerChatDriver } from '../server/services/apply/autoR
 import { acceptResumeRequest, __setExForTest } from '../server/services/apply/bossChat.js';
 import { acceptResumeRequestGeneric, detectResumeRequestClause } from '../server/services/apply/resumeCard.js';
 import { liepinChatDriver, __setExForTest as __setExForTestLiepin } from '../server/services/apply/liepinChat.js';
+import {
+  zhilianChatDriver, job51ChatDriver, nowcoderChatDriver, iguopinChatDriver,
+  yupaoChatDriver, chinahrChatDriver, yingjieshengChatDriver,
+} from '../server/services/apply/platformsChat.js';
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
@@ -144,12 +148,12 @@ function collect() {
 const okProbe = async () => ({ verdict: 'ok' });
 const fresh = () => { release('boss', 'reply'); release('boss', 'apply'); };
 
-// B1 未注册平台
+// B1 未注册平台（offerbiu 走邮件通道，本引擎故意不登记；其余 9 平台均已登记）
 {
   fresh();
   const { evs, emit } = collect();
-  const r = await runAutoReply('zhilian', { probe: okProbe }, emit);
-  check('未注册平台 → 报错且不动浏览器', r.sent === 0 && evs.some((e) => e.type === 'error' && String(e.message).includes('暂不支持')));
+  const r = await runAutoReply('offerbiu', { probe: okProbe }, emit);
+  check('未注册平台 → 报错且不动浏览器', r.sent === 0 && evs.some((e) => e.type === 'error' && String(e.message).includes('不支持该平台')));
 }
 
 // B2 登录态 offline → 拦截
@@ -652,7 +656,7 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const noCardDriver: ChatDriver = {
     platform: 'zhilian',
     openChat: async () => {},
-    listConversations: async () => [{ key: 'zhilian|HR|', name: 'HR', company: '', lastMsg: '请把简历发我看看', unread: true, raw: '' }],
+    listConversations: async () => [{ key: `${RUN_TAG}-g9-zhilian`, name: 'HR', company: '', lastMsg: '请把简历发我看看', unread: true, raw: '' }],
     openConversation: async () => true,
     readConversation: async () => ({ messages: [{ side: 'hr', text: '请把简历发我看看' }], lastHr: '请把简历发我看看', position: 'Java开发', resumeRequest: false }),
     sendText: async () => true,
@@ -663,6 +667,50 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   await runAutoReply('zhilian', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'] }, emit);
   check('G9 无 acceptResumeRequest 的平台 → 引擎跳过（绝不调用）', (noCardDriver as any).acceptResumeRequest === undefined);
   check('G9 无卡片纯文本请求 → 走工具栏 sendResume', c2.sendResume === 1, `sendResume=${c2.sendResume}`);
+}
+
+// G10 跨平台化验收（2026-09-23 续）：其余 7 个 Web IM 平台经 genericChatDriver 工厂生成，
+// 必须全部暴露 acceptResumeRequest 且走通用实现（一次点击 / 已发送态早返回 / 无卡片早返回）。
+{
+  // 恢复被 G9 临时覆盖的 zhilian 真实驱动
+  registerChatDriver('zhilian', zhilianChatDriver);
+  type TestableDriver = ChatDriver & { __setExForTest: (fn: any) => void };
+  const drivers: TestableDriver[] = [
+    zhilianChatDriver, job51ChatDriver, nowcoderChatDriver, iguopinChatDriver,
+    yupaoChatDriver, chinahrChatDriver, yingjieshengChatDriver,
+  ] as TestableDriver[];
+  for (const d of drivers) {
+    check(`G10 ${d.platform} 暴露 acceptResumeRequest 能力`, typeof d.acceptResumeRequest === 'function');
+    let st: { clickResult: string; checkResult: any } = { clickResult: 'CARD', checkResult: false };
+    let calls = { click: 0, otherEval: 0 };
+    const fakeEx = async (action: string, extra: any = {}) => {
+      if (action === 'eval') {
+        const s = String(extra.script || '');
+        if (s.includes('.click()')) { calls.click++; return { data: st.clickResult }; } // 仅 CLICK 脚本含 .click()
+        calls.otherEval++;
+        return { data: st.checkResult };
+      }
+      return { data: null };
+    };
+    d.__setExForTest(fakeEx);
+    try {
+      const r = await d.acceptResumeRequest!();
+      check(`G10 ${d.platform} 走通用实现 → 已处理(true)`, r === true, `r=${r}`);
+      check(`G10 ${d.platform} ⚠️ 一次调用恰好点击一次（防 3 连发）`, calls.click === 1, `click=${calls.click}`);
+      check(`G10 ${d.platform} 点击后复核一次`, calls.otherEval === 1, `otherEval=${calls.otherEval}`);
+    } finally {
+      d.__setExForTest(null);
+    }
+  }
+}
+
+// G11 引擎入口守卫：未登记聊天驱动的平台（如 offerbiu 邮件通道）应明确报错并退出，
+// 绝不静默空跑（否则会出现「跑了 N 个、发了 0 条」而无任何提示的诡异现象）。
+{
+  const { evs, emit } = collect();
+  const res = await runAutoReply('offerbiu', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1 }, emit);
+  check('G11 未登记平台 → 引擎报错（非静默空跑）', evs.some((e) => e.type === 'error'), `errs=${evs.filter((e) => e.type === 'error').length}`);
+  check('G11 未登记平台 → 零发送零跳过', res.sent === 0 && res.skipped === 0, `sent=${res.sent} skipped=${res.skipped}`);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
