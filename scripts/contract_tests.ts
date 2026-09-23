@@ -549,6 +549,38 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('G5c 无卡片仅探测一次', calls.click === 1 && calls.otherEval === 0, `click=${calls.click} otherEval=${calls.otherEval}`);
 }
 
+// G6 路由铁律（2026-09-23 用户明确）：结构化卡片存在时，即便 acceptResumeRequest 点击**失败**，
+// 也**绝不回退工具栏 sendResume**（工具栏是另一条路径，卡片会一直挂着待处理）。点击失败就让
+// 卡片保持待处理态，下一轮重新检测再点（跨轮重试更安全）。
+{
+  fresh();
+  const conv = mkConv(25, 'K公司');
+  // resumeRequest=true（卡片在）+ acceptOk=false（这次没点成）
+  const { driver, calls } = makeDriver([conv], '请把简历发我看看', 'Java开发', { resumeRequest: true, acceptOk: false });
+  registerChatDriver('boss', driver);
+  const { evs, emit } = collect();
+  await runAutoReply('boss', {
+    probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'],
+  }, emit);
+  check('G6 卡片在 → 仍尝试 acceptResumeRequest 一次', calls.acceptResume === 1, `acceptResume=${calls.acceptResume}`);
+  check('G6 ⚠️ 卡片在（即便点击失败）绝不回退工具栏 sendResume', calls.sendResume === 0, `sendResume=${calls.sendResume}`);
+  check('G6 上报 accept-resume(ok=false) 表示点击未成功', evs.some((e) => e.type === 'accept-resume' && e.ok === false));
+}
+
+// G7 对照：无结构化卡片的纯文本简历请求（如「请把简历发我」）→ 走工具栏 sendResume，不点卡片
+{
+  fresh();
+  const conv = mkConv(26, 'L公司');
+  const { driver, calls } = makeDriver([conv], '请把简历发我看看', 'Java开发'); // resumeRequest 默认 false
+  registerChatDriver('boss', driver);
+  const { evs, emit } = collect();
+  await runAutoReply('boss', {
+    probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'],
+  }, emit);
+  check('G7 无卡片纯文本请求 → 走工具栏 sendResume', calls.sendResume === 1, `sendResume=${calls.sendResume}`);
+  check('G7 无卡片 → 不调用 acceptResumeRequest（没有卡片可点）', calls.acceptResume === 0, `acceptResume=${calls.acceptResume}`);
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}`);
 

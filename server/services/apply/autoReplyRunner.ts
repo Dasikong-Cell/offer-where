@@ -348,8 +348,14 @@ export async function runAutoReply(
     }
 
     let done = false;
-    // 若已在上面通过卡片「同意」把简历发出去，就不再走工具栏发一次（避免重复发送）
-    if (decision.intent === 'ask_resume' && !acceptedResume) {
+    // ⚠️ 路由铁律（2026-09-23，用户明确确认）：BOSS「我想要一份您的附件简历，您是否同意」
+    // 是平台**结构化卡片**，必须点卡片上的「同意」才算处理完；走工具栏「发简历」是另一条路径，
+    // 卡片会一直挂着待处理（实机已验证）。
+    // 因此：只要 readConversation 检测到结构化卡片（resumeRequest=true），无论 acceptResumeRequest
+    // 点击成功与否，**绝不回退工具栏 sendResume** —— 点击失败就留待下一轮重新检测再点（跨轮重试
+    // 更安全，不会重复轰炸 HR）。工具栏「发简历」只用于「无结构化卡片的纯文本简历请求」（如
+    // 「请把简历发我」且无卡片），避免卡片一直挂着待处理的错误路径。
+    if (decision.intent === 'ask_resume' && !read.resumeRequest) {
       const r = await driver.sendResume();
       emit({ type: 'send-resume', name: c.name, ok: r });
       done = done || r;
