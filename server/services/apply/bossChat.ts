@@ -20,13 +20,25 @@ import type { ChatDriver, ConvSummary, ParsedMessage } from './chatTypes.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function ex(action: string, extra: any = {}): Promise<any> {
+type ExFn = (action: string, extra?: any) => Promise<any>;
+/** 测试钩子：桩函数替换底层 CDP 调用（仅测试用，生产代码不调用）。
+ *  用于断言 acceptResumeRequest 等带副作用函数「恰好点击一次」，防回归。 */
+let _exOverride: ExFn | null = null;
+export function __setExForTest(fn: ExFn | null): void {
+  _exOverride = fn;
+}
+
+async function realEx(action: string, extra: any = {}): Promise<any> {
   const r = await fetch(BASE, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ platform: PLATFORM, action, ...extra }),
   });
   return r.json();
+}
+/** 统一入口：未注入桩时走真实 CDP；注入后走桩（测试断言副作用次数用）。 */
+function ex(action: string, extra: any = {}): Promise<any> {
+  return (_exOverride || realEx)(action, extra);
 }
 
 /** 进聊天页（重新导航 + 点消息，兼容标签被风控重置） */
@@ -215,8 +227,9 @@ export async function readConversation(): Promise<{
  * 同意平台「请求附件简历」卡片（2026-09-23 新增）。
  *
  * ⚠️ 有真实副作用：点下去会把在线简历发给 HR，引擎只在真实发送模式下调用。
+ * ⚠️ **一次调用只点一次**（不做轮内重试）—— 详见函数内注释（重复发送事故）。
  * 双路径兜底：① 会话流卡片 `.message-card-buttons` 里的「同意」；② 顶部提示条 `.respond-popover .btn-agree`。
- * 点击后复核按钮是否消失（消失=已处理），避免"点了但没生效"被静默吞掉。
+ * 点击后复核按钮是否变为禁用态（=已处理），避免"点了但没生效"被静默吞掉。
  */
 export async function acceptResumeRequest(): Promise<boolean> {
   // 注意：禁用态是 class `disabled`（SPAN 无 disabled 属性），三处判据必须一致，否则会「点了还判未处理」
@@ -236,7 +249,13 @@ export async function acceptResumeRequest(): Promise<boolean> {
       const wt=(w.innerText||'').replace(/\\s+/g,'');
       if(wt.indexOf('附件简历')<0||wt.indexOf('是否同意')<0) continue;
       const btns=[].slice.call(w.querySelectorAll('.card-btn,button'));
-      const agree=btns.filter(function(b){return /^同意/.test((b.innerText||'').trim())&&!btnDisabled(b);});
+      const allAgree=btns.filter(function(b){return /^同意/.test((b.innerText||'').trim());});
+      if(!allAgree.length) continue;
+      // ⚠️ 已发送态守卫：该卡片的「同意」按钮**已全部禁用**（上次已点 / 平台已处理）→ 直接报 ALREADY，
+      // 绝不重复点击。这是防「同一份简历连发多遍」的纵深防线：即便 acceptResumeRequest 被重复调用，
+      // 只要 UI 已切到禁用态就不会再发（实测 2026-09-23 的 3 连发事故即卡在未识别禁用态）。
+      if(allAgree.every(function(b){return btnDisabled(b);})) return 'ALREADY';
+      const agree=allAgree.filter(function(b){return !btnDisabled(b);});
       if(agree.length){ agree[0].click(); return 'CARD'; }
     }
     const pop=conv.querySelector('.respond-popover');
@@ -266,19 +285,18 @@ export async function acceptResumeRequest(): Promise<boolean> {
     return false;
   })()`;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const c = await ex('eval', { script: CLICK });
-    const hit = String(c.data || '');
-    if (hit === 'NOT_FOUND' || hit === 'NO_CONV') {
-      // 首次就没找到 → 确实没有待处理请求；重试时找不到 → 视为已被处理
-      return attempt > 0;
-    }
-    await sleep(2500);
-    const chk = await ex('eval', { script: CHECK });
-    if (chk.data === false) return true; // 按钮消失 = 已处理
-    await sleep(1500);
-  }
-  return false;
+  // ⚠️ 只点一次，**刻意不做轮内重试**：
+  // 发简历是不可逆的外部副作用。实测教训（2026-09-23）：早期版本在轮内重试 3 次，
+  // 恰逢禁用态判据失效，结果同一份简历给同一位 HR 连发 3 遍，聊天里出现 3 条「已发送附件简历」系统消息。
+  // 幂等优先于即时成功 —— 若这次没点成，卡片仍是待处理状态，下一轮会被重新检测到并再试，
+  // 天然具备「跨轮重试」，且间隔足够长，不会重复轰炸 HR。
+  const c = await ex('eval', { script: CLICK });
+  const hit = String(c.data || '');
+  if (hit === 'ALREADY') return true; // 已发送态：按钮已禁用，无需再点（防重复发送）
+  if (hit === 'NOT_FOUND' || hit === 'NO_CONV') return false;
+  await sleep(2500);
+  const chk = await ex('eval', { script: CHECK });
+  return chk.data === false; // 按钮变为禁用态 = 已处理
 }
 
 /** 在输入框输入文本（contenteditable + Vue v-model 兼容） */

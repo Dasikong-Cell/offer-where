@@ -15,6 +15,7 @@
  */
 import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
+import { acceptResumeRequest, __setExForTest } from '../server/services/apply/bossChat.js';
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
@@ -498,6 +499,54 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('G4 事件带 via=cooldown-bypass', evs.some((e) => e.type === 'accept-resume' && e.via === 'cooldown-bypass'));
   check('G4 冷却例外 → 不重复发话术', calls.sendText === 0, `sendText=${calls.sendText}`);
   check('G4 仍标记 hr-cooldown 跳过', evs.some((e) => e.type === 'skipped' && e.reason === 'hr-cooldown'));
+}
+
+// G5 直接对 bossChat.acceptResumeRequest 做「副作用次数」护栏（2026-09-23 回归）
+// 此前 G1–G4 都 mock 掉 driver，测不到 bossChat.ts 内部「重试循环连点 3 次」这类 bug。
+// 这里注入桩 ex，断言：① 一次调用**恰好点击一次**（CLICK 脚本只发一遍，杜绝 3 连发）；
+//          ② 已发送态（CLICK 返回 ALREADY）**零点击**（纵深防线，重复调用不重发）。
+{
+  type FakeState = { clickResult: string; checkResult: any };
+  let st: FakeState = { clickResult: 'CARD', checkResult: false };
+  let calls = { click: 0, otherEval: 0 };
+  const fakeEx = async (action: string, extra: any = {}) => {
+    if (action === 'eval') {
+      const s = String(extra.script || '');
+      if (s.includes('.click()')) { calls.click++; return { data: st.clickResult }; } // 仅 CLICK 脚本含 .click()
+      calls.otherEval++;
+      return { data: st.checkResult };
+    }
+    return { data: null };
+  };
+  const runGuard = async () => {
+    calls = { click: 0, otherEval: 0 };
+    __setExForTest(fakeEx);
+    try {
+      const r = await acceptResumeRequest();
+      return r;
+    } finally {
+      __setExForTest(null);
+    }
+  };
+
+  // G5a 正常成功路径：CLICK=CARD（点了）→ CHECK=按钮已禁用(false)=已处理
+  st = { clickResult: 'CARD', checkResult: false };
+  const rA = await runGuard();
+  check('G5a 正常路径 → 返回已处理(true)', rA === true, `r=${rA}`);
+  check('G5a ⚠️ 一次调用恰好点击一次（防 3 连发回归）', calls.click === 1, `click=${calls.click}`);
+  check('G5a 点击后复核一次(CHECK)', calls.otherEval === 1, `otherEval=${calls.otherEval}`);
+
+  // G5b 已发送态：CLICK=ALREADY（同意按钮已禁用）→ 直接视为已处理，且不进入 2.5s 等待/CHECK（早返回）
+  st = { clickResult: 'ALREADY', checkResult: false };
+  const rB = await runGuard();
+  check('G5b 已发送态 → 返回已处理(true)', rB === true, `r=${rB}`);
+  check('G5b ⚠️ 已发送态早返回（无 CHECK、未浪费等待）', calls.click === 1 && calls.otherEval === 0, `click=${calls.click} otherEval=${calls.otherEval}`);
+
+  // G5c 无卡片：CLICK=NOT_FOUND → 未处理(false)，同样只探测一次、无后续 CHECK
+  st = { clickResult: 'NOT_FOUND', checkResult: false };
+  const rC = await runGuard();
+  check('G5c 无卡片 → 返回未处理(false)', rC === false, `r=${rC}`);
+  check('G5c 无卡片仅探测一次', calls.click === 1 && calls.otherEval === 0, `click=${calls.click} otherEval=${calls.otherEval}`);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
