@@ -24,6 +24,13 @@ import { probeOne } from '../platformHealth.js';
 const DEFAULT_AI_NAME = '懒懒';
 
 /**
+ * 冷却期内仍去检查「简历请求卡片」的会话数上限（2026-09-23）。
+ * HR 请求附件简历是一次明确请求、且 HR 在等，不该被 hrCooldownSec 挡住；
+ * 但检查卡片必须先打开会话，故单轮限额，防止冷却期会话很多时每轮都产生大开销。
+ */
+const COOLDOWN_CARD_SCAN_MAX = 8;
+
+/**
  * 根据公司名从岗位库推断「HR 发布的职位」。
  * 我们投递时记录了公司+岗位，故按公司反查最可靠；查不到（HR 主动找来、库里无对应岗位）返回 null。
  */
@@ -64,6 +71,8 @@ export interface ReplyEvent {
     | 'skipped'
     | 'intent'
     | 'dry'
+    | 'accept-resume'
+    | 'accept-resume-preview'
     | 'send-resume'
     | 'send-text'
     | 'sent'
@@ -208,6 +217,8 @@ export async function runAutoReply(
 
   let sent = 0;
   let skipped = 0;
+  /** 单轮内为「检查简历请求卡片」而额外打开冷却期会话的次数上限（见下方冷却例外） */
+  let cooldownCardScans = 0;
 
   for (const c of limited) {
     if (signal?.aborted) {
@@ -223,6 +234,24 @@ export async function runAutoReply(
       if (lastReplied) {
         const sinceMs = Date.now() - new Date(String(lastReplied)).getTime();
         if (sinceMs < hrCooldownSec * 1000) {
+          // 冷却例外（2026-09-23）：平台「请求附件简历」卡片是 HR 的一次明确请求 —— HR 正在等，
+          // 不该被"刚回复过"挡住；且卡片被同意后即消失，天然只处理一次。
+          // 代价是要打开会话才能看到卡片，故单轮限额，避免冷却期会话多时每轮都大开销。
+          if (cooldownCardScans < COOLDOWN_CARD_SCAN_MAX && typeof driver.acceptResumeRequest === 'function') {
+            cooldownCardScans++;
+            const openedC = await driver.openConversation(c.key);
+            if (openedC) {
+              const r0 = await driver.readConversation();
+              if (r0.resumeRequest) {
+                if (realSend) {
+                  const aok = await driver.acceptResumeRequest();
+                  emit({ type: 'accept-resume', name: c.name, ok: aok, via: 'cooldown-bypass' });
+                } else {
+                  emit({ type: 'accept-resume-preview', name: c.name, via: 'cooldown-bypass' });
+                }
+              }
+            }
+          }
           emit({ type: 'skipped', reason: 'hr-cooldown', name: c.name, sec: Math.round(sinceMs / 1000) });
           skipped++;
           continue;
@@ -239,6 +268,18 @@ export async function runAutoReply(
     const read = await driver.readConversation();
     const lastHr = read.lastHr;
     const history = read.messages || [];
+    // 平台「请求附件简历」卡片（如 BOSS「我想要一份您的附件简历，您是否同意」）：
+    // 必须点卡片上的「同意」才算处理完 —— 走工具栏「发简历」是另一条路径，卡片会一直挂着待处理。
+    // ⚠️ 点击有真实副作用（会向 HR 发出简历），因此**预览模式只提示、绝不点击**。
+    let acceptedResume = false;
+    if (read.resumeRequest) {
+      if (realSend && typeof driver.acceptResumeRequest === 'function') {
+        acceptedResume = await driver.acceptResumeRequest();
+        emit({ type: 'accept-resume', name: c.name, ok: acceptedResume });
+      } else {
+        emit({ type: 'accept-resume-preview', name: c.name });
+      }
+    }
     if (!lastHr) {
       emit({ type: 'skipped', reason: 'no-hr', name: c.name });
       skipped++;
@@ -307,7 +348,8 @@ export async function runAutoReply(
     }
 
     let done = false;
-    if (decision.intent === 'ask_resume') {
+    // 若已在上面通过卡片「同意」把简历发出去，就不再走工具栏发一次（避免重复发送）
+    if (decision.intent === 'ask_resume' && !acceptedResume) {
       const r = await driver.sendResume();
       emit({ type: 'send-resume', name: c.name, ok: r });
       done = done || r;

@@ -149,7 +149,12 @@ export async function openConversation(key: string): Promise<boolean> {
  *  - 系统推送卡片（PK 情况 / 职位推荐等）同样是 item-friend，但内含 .articles-center，
  *    不是真人发的消息，必须跳过，否则会被误当成「HR 说了话」而触发自动回复
  */
-export async function readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string; position?: string | null }> {
+export async function readConversation(): Promise<{
+  messages: ParsedMessage[];
+  lastHr: string;
+  position?: string | null;
+  resumeRequest?: boolean;
+}> {
   const r = await ex('eval', {
     script: `(()=>{
       const conv=document.querySelector('.chat-conversation');
@@ -170,13 +175,110 @@ export async function readConversation(): Promise<{ messages: ParsedMessage[]; l
         if(!txt) continue;
         msgs.push({side: isMine?'me':'hr', text:txt});
       }
-      return JSON.stringify({msgs, pos});
+      // 「请求附件简历」卡片（BOSS 结构化请求，2026-09-23 校准）：
+      //   DIV.message-dialog-both.message-card-wrap.boss-green > DIV.message-card-buttons > SPAN.card-btn「拒绝 / 同意」
+      // 必须点卡片上的「同意」；走工具栏「发简历」是另一条路径 —— 卡片会一直挂着待处理（实测已验证）。
+      // 注意：禁用态是 class「card-btn disabled」（SPAN 没有 disabled 属性，不能用 .disabled 判断！），
+      //    已处理过的卡片按钮会变成 class disabled + pointer-events:none。
+      // 判据：卡片文本含「附件简历 + 是否同意」，且存在未禁用的「同意」按钮。
+      const btnDisabled=function(b){
+        const cls=String(b.className||'');
+        if(/(^|\\s)disabled(\\s|$)/.test(cls)) return true;
+        if(b.disabled===true) return true;
+        try{ if(getComputedStyle(b).pointerEvents==='none') return true; }catch(e){}
+        return false;
+      };
+      let resumeRequest=false;
+      const wraps=[].slice.call(conv.querySelectorAll('.message-card-wrap,[class*=message-card-wrap]'));
+      for(const w of wraps){
+        const wt=(w.innerText||'').replace(/\\s+/g,'');
+        if(wt.indexOf('附件简历')<0||wt.indexOf('是否同意')<0) continue;
+        const btns=[].slice.call(w.querySelectorAll('.card-btn,button'));
+        const agree=btns.filter(function(b){return /^同意/.test((b.innerText||'').trim())&&!btnDisabled(b);});
+        if(agree.length){ resumeRequest=true; break; }
+      }
+      return JSON.stringify({msgs, pos, resumeRequest});
     })()`,
   });
   const d = JSON.parse((r.data as string) || '{"msgs":[]}');
   const messages: ParsedMessage[] = d.msgs || [];
   const hrs = messages.filter((m: ParsedMessage) => m.side === 'hr');
-  return { messages, lastHr: hrs.length ? hrs[hrs.length - 1].text : '', position: d.pos || null };
+  return {
+    messages,
+    lastHr: hrs.length ? hrs[hrs.length - 1].text : '',
+    position: d.pos || null,
+    resumeRequest: !!d.resumeRequest,
+  };
+}
+
+/**
+ * 同意平台「请求附件简历」卡片（2026-09-23 新增）。
+ *
+ * ⚠️ 有真实副作用：点下去会把在线简历发给 HR，引擎只在真实发送模式下调用。
+ * 双路径兜底：① 会话流卡片 `.message-card-buttons` 里的「同意」；② 顶部提示条 `.respond-popover .btn-agree`。
+ * 点击后复核按钮是否消失（消失=已处理），避免"点了但没生效"被静默吞掉。
+ */
+export async function acceptResumeRequest(): Promise<boolean> {
+  // 注意：禁用态是 class `disabled`（SPAN 无 disabled 属性），三处判据必须一致，否则会「点了还判未处理」
+  const BTN_DISABLED = `const btnDisabled=function(b){
+    const cls=String(b.className||'');
+    if(/(^|\\s)disabled(\\s|$)/.test(cls)) return true;
+    if(b.disabled===true) return true;
+    try{ if(getComputedStyle(b).pointerEvents==='none') return true; }catch(e){}
+    return false;
+  };`;
+  const CLICK = `(()=>{
+    ${BTN_DISABLED}
+    const conv=document.querySelector('.chat-conversation');
+    if(!conv) return 'NO_CONV';
+    const wraps=[].slice.call(conv.querySelectorAll('.message-card-wrap,[class*=message-card-wrap]'));
+    for(const w of wraps){
+      const wt=(w.innerText||'').replace(/\\s+/g,'');
+      if(wt.indexOf('附件简历')<0||wt.indexOf('是否同意')<0) continue;
+      const btns=[].slice.call(w.querySelectorAll('.card-btn,button'));
+      const agree=btns.filter(function(b){return /^同意/.test((b.innerText||'').trim())&&!btnDisabled(b);});
+      if(agree.length){ agree[0].click(); return 'CARD'; }
+    }
+    const pop=conv.querySelector('.respond-popover');
+    if(pop&&(pop.innerText||'').indexOf('附件简历')>=0){
+      const b=pop.querySelector('.btn-agree')||[].slice.call(pop.querySelectorAll('button,.btn')).find(function(e){return /^同意/.test((e.innerText||'').trim());});
+      if(b&&!btnDisabled(b)){ b.click(); return 'POPOVER'; }
+    }
+    return 'NOT_FOUND';
+  })()`;
+
+  const CHECK = `(()=>{
+    ${BTN_DISABLED}
+    const conv=document.querySelector('.chat-conversation');
+    if(!conv) return false;
+    const wraps=[].slice.call(conv.querySelectorAll('.message-card-wrap,[class*=message-card-wrap]'));
+    for(const w of wraps){
+      const wt=(w.innerText||'').replace(/\\s+/g,'');
+      if(wt.indexOf('附件简历')<0||wt.indexOf('是否同意')<0) continue;
+      const btns=[].slice.call(w.querySelectorAll('.card-btn,button'));
+      if(btns.some(function(b){return /^同意/.test((b.innerText||'').trim())&&!btnDisabled(b);})) return true;
+    }
+    const pop=conv.querySelector('.respond-popover');
+    if(pop&&(pop.innerText||'').indexOf('附件简历')>=0){
+      const b=pop.querySelector('.btn-agree');
+      if(b&&!btnDisabled(b)) return true;
+    }
+    return false;
+  })()`;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const c = await ex('eval', { script: CLICK });
+    const hit = String(c.data || '');
+    if (hit === 'NOT_FOUND' || hit === 'NO_CONV') {
+      // 首次就没找到 → 确实没有待处理请求；重试时找不到 → 视为已被处理
+      return attempt > 0;
+    }
+    await sleep(2500);
+    const chk = await ex('eval', { script: CHECK });
+    if (chk.data === false) return true; // 按钮消失 = 已处理
+    await sleep(1500);
+  }
+  return false;
 }
 
 /** 在输入框输入文本（contenteditable + Vue v-model 兼容） */
@@ -259,4 +361,5 @@ export const bossChatDriver: ChatDriver = {
   readConversation,
   sendText,
   sendResume,
+  acceptResumeRequest,
 };

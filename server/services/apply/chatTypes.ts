@@ -34,10 +34,26 @@ export interface ChatDriver {
   listConversations(): Promise<ConvSummary[]>;
   /** 按 key 打开某个会话；返回是否打开成功 */
   openConversation(key: string): Promise<boolean>;
-  /** 读取当前会话全部消息，区分 HR / 我，返回最新一条 HR 消息与 HR 发布的职位 */
-  readConversation(): Promise<{ messages: ParsedMessage[]; lastHr: string; position?: string | null }>;
+  /**
+   * 读取当前会话全部消息，区分 HR / 我，返回最新一条 HR 消息与 HR 发布的职位。
+   * `resumeRequest`：是否存在**待处理**的平台结构化「请求附件简历」卡片
+   * （BOSS 的 `我想要一份您的附件简历，您是否同意 / 拒绝 / 同意`）——
+   * 这类请求必须走卡片上的「同意」按钮，走工具栏「发简历」是另一条路径，卡片会一直挂着。
+   */
+  readConversation(): Promise<{
+    messages: ParsedMessage[];
+    lastHr: string;
+    position?: string | null;
+    resumeRequest?: boolean;
+  }>;
   /** 在输入框输入并发送纯文本 */
   sendText(text: string): Promise<boolean>;
   /** 发送简历附件（在线简历 / 已导入的本地 PDF） */
   sendResume(): Promise<boolean>;
+  /**
+   * 可选能力：处理平台上「请求附件简历」的结构化卡片（点「同意」把简历发出去）。
+   * 返回 true = 已成功同意；未实现该能力的平台可省略此方法（引擎会跳过）。
+   * ⚠️ 该操作**有真实副作用**（会向 HR 发出简历），只在真实发送模式下调用。
+   */
+  acceptResumeRequest?(): Promise<boolean>;
 }

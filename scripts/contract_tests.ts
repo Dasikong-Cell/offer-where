@@ -19,7 +19,7 @@ import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled } from '../server/services/authToken.js';
-import { getConversation, exec, getJob, upsertJob, kvSet } from '../server/db.js';
+import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet } from '../server/db.js';
 import { decideGreet, isExcludeHit } from '../server/services/apply/greetDecision.js';
 import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
 import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js';
@@ -105,20 +105,29 @@ console.log('\n══════ A3. 回复话术的「事实边界」兜底（
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ B. 自动回复引擎合约（mock 驱动，无需真实浏览器） ══════');
 
-interface MockCalls { openChat: number; openConversation: number; sendText: number; sendResume: number; texts: string[]; }
+interface MockCalls {
+  openChat: number; openConversation: number; sendText: number; sendResume: number;
+  acceptResume: number; texts: string[];
+}
 
-function makeDriver(convs: ConvSummary[], hrMsg: string, position: string | null) {
-  const calls: MockCalls = { openChat: 0, openConversation: 0, sendText: 0, sendResume: 0, texts: [] };
+function makeDriver(
+  convs: ConvSummary[],
+  hrMsg: string,
+  position: string | null,
+  opts?: { resumeRequest?: boolean; acceptOk?: boolean },
+) {
+  const calls: MockCalls = { openChat: 0, openConversation: 0, sendText: 0, sendResume: 0, acceptResume: 0, texts: [] };
   const driver: ChatDriver = {
     platform: 'boss',
     async openChat() { calls.openChat++; },
     async listConversations() { return convs.map((c) => ({ ...c })); },
     async openConversation() { calls.openConversation++; return true; },
     async readConversation() {
-      return { messages: [{ side: 'hr' as const, text: hrMsg }], lastHr: hrMsg, position };
+      return { messages: [{ side: 'hr' as const, text: hrMsg }], lastHr: hrMsg, position, resumeRequest: !!opts?.resumeRequest };
     },
     async sendText(t: string) { calls.sendText++; calls.texts.push(t); return true; },
     async sendResume() { calls.sendResume++; return true; },
+    async acceptResumeRequest() { calls.acceptResume++; return opts?.acceptOk !== false; },
   };
   return { driver, calls };
 }
@@ -412,6 +421,83 @@ console.log('\n══════ F. 安全不变量：preview 必须透传 ═�
     });
   }
   check(`runApply 调用点全部透传 preview（共 ${sites} 处）`, sites > 0 && missing === 0, missing ? `${missing} 处缺失` : '全部透传');
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ G. 简历请求卡片「同意」（有真实副作用，预览必须不点） ══════');
+// 背景（2026-09-23）：BOSS 的「我想要一份您的附件简历，您是否同意」是**平台结构化卡片**，
+// 必须点卡片上的「同意」；走工具栏「发简历」是另一条路径 —— 卡片会一直挂着待处理（实机已验证）。
+// 核心不变量：**预览模式绝不能点击** —— 点下去会把简历真实发给 HR，预览必须保持零副作用。
+
+// G1 真实发送 + 有卡片 → 点「同意」，且不再重复走工具栏发简历
+{
+  fresh();
+  const conv = mkConv(21, 'G公司');
+  const { driver, calls } = makeDriver([conv], '我想要一份您的附件简历，您是否同意 拒绝 同意', 'Java开发', { resumeRequest: true });
+  registerChatDriver('boss', driver);
+  const { evs, emit } = collect();
+  const r = await runAutoReply('boss', {
+    probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'],
+  }, emit);
+  check('G1 有卡片 → 调用 acceptResumeRequest', calls.acceptResume === 1, `acceptResume=${calls.acceptResume}`);
+  check('G1 发出 accept-resume(ok=true) 事件', evs.some((e) => e.type === 'accept-resume' && e.ok === true));
+  check('G1 已同意卡片 → 不再重复走工具栏发简历', calls.sendResume === 0, `sendResume=${calls.sendResume}`);
+  check('G1 仍会发话术告知 HR', calls.sendText === 1 && r.sent === 1, `sendText=${calls.sendText} sent=${r.sent}`);
+  check('G1 会话已落库', !!getConversation(conv.key));
+}
+
+// G2 预览模式 + 有卡片 → 绝不点击（点了就真的发出去了）
+{
+  fresh();
+  const conv = mkConv(22, 'H公司');
+  const { driver, calls } = makeDriver([conv], '我想要一份您的附件简历，您是否同意 拒绝 同意', 'Java开发', { resumeRequest: true });
+  registerChatDriver('boss', driver);
+  const { evs, emit } = collect();
+  await runAutoReply('boss', {
+    probe: okProbe, useAi: false, realSend: false, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'],
+  }, emit);
+  check('G2 预览 → 绝不调用 acceptResumeRequest', calls.acceptResume === 0, `acceptResume=${calls.acceptResume}`);
+  check('G2 预览 → 绝不调用 sendResume', calls.sendResume === 0, `sendResume=${calls.sendResume}`);
+  check('G2 预览 → 只发 accept-resume-preview 提示事件', evs.some((e) => e.type === 'accept-resume-preview'));
+  check('G2 预览 → 未写库', !getConversation(conv.key));
+}
+
+// G3 无卡片 → 完全不受影响（回归保护）
+{
+  fresh();
+  const conv = mkConv(23, 'I公司');
+  const { driver, calls } = makeDriver([conv], '你好，方便聊聊吗', 'Java开发');
+  registerChatDriver('boss', driver);
+  const { evs, emit } = collect();
+  await runAutoReply('boss', {
+    probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0, targetPositions: ['Java开发'],
+  }, emit);
+  check('G3 无卡片 → 不调用 acceptResumeRequest', calls.acceptResume === 0, `acceptResume=${calls.acceptResume}`);
+  check('G3 无卡片 → 无任何 accept-resume 事件', !evs.some((e) => e.type === 'accept-resume' || e.type === 'accept-resume-preview'));
+}
+
+// G4 冷却期内仍处理卡片（HR 的简历请求不该被"刚回复过"挡住）
+{
+  fresh();
+  const conv = mkConv(24, 'J公司');
+  // 先把该会话置为「刚回复过」→ 进入 hrCooldownSec 冷却（默认 3600s）
+  upsertConversation({
+    conv_key: conv.key, platform: 'boss', hr_name: conv.name, company: conv.company,
+    position: 'Java开发', stage: 'active', last_hr_message: '旧的HR消息', last_reply: '旧回复',
+    last_hr_message_at: new Date().toISOString(), last_replied_at: new Date().toISOString(),
+    round: 1, ai_name: '懒懒', ai_source: 'ai',
+  });
+  const { driver, calls } = makeDriver([conv], '我想要一份您的附件简历，您是否同意 拒绝 同意', 'Java开发', { resumeRequest: true });
+  registerChatDriver('boss', driver);
+  const { evs, emit } = collect();
+  // 不传 hrCooldownSec → 走默认冷却；命中冷却后应仍为卡片开例外
+  await runAutoReply('boss', {
+    probe: okProbe, useAi: false, realSend: true, throttleSec: 1, targetPositions: ['Java开发'],
+  }, emit);
+  check('G4 冷却期内 → 仍同意简历请求卡片', calls.acceptResume === 1, `acceptResume=${calls.acceptResume}`);
+  check('G4 事件带 via=cooldown-bypass', evs.some((e) => e.type === 'accept-resume' && e.via === 'cooldown-bypass'));
+  check('G4 冷却例外 → 不重复发话术', calls.sendText === 0, `sendText=${calls.sendText}`);
+  check('G4 仍标记 hr-cooldown 跳过', evs.some((e) => e.type === 'skipped' && e.reason === 'hr-cooldown'));
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
