@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_DAILY_LIMIT, resolveDailyLimit, todayAppliedCount,
   readPlatformRiskBlock, writePlatformRiskBlock, clearPlatformRiskBlock,
+  humanizedGap,
 } from '../server/services/apply/batch.js';
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
 
@@ -747,6 +748,27 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const ab = computeAbReport();
   check('H5 A/B 报告结构正确', ab && typeof ab.total === 'number' && Array.isArray(ab.strategies), `total=${ab?.total}`);
   check('H5 A/B 报告 total>=0', (ab?.total ?? -1) >= 0);
+}
+
+// H6 模拟真人节奏（对标 CareerBoom.ai）：humanize 关闭时退化为固定间隔（调试可复现），
+// 开启时双层抖动且永不出现负间隔 / 不会比基础间隔慢到离谱（<= 2.6× 兜底）。
+{
+  // 关闭 → 必须等于 base（无抖动），否则调试时节奏不可复现
+  check('H6 humanize=false → 固定间隔(=base)', humanizedGap(20000, false) === 20000, `g=${humanizedGap(20000, false)}`);
+  // 开启 → 在 [0.75×, 2.6×] 内，且多次采样不全相等（即确实在抖动）
+  const base = 20000;
+  let minG = Infinity, maxG = -Infinity; const seen = new Set<number>();
+  for (let k = 0; k < 200; k++) {
+    const g = humanizedGap(base, true);
+    minG = Math.min(minG, g); maxG = Math.max(maxG, g); seen.add(g);
+    if (g < 0) { check('H6 间隔不为负', false, `g=${g}`); break; }
+  }
+  check('H6 humanize=true → 间隔 >= 0.75×base', minG >= Math.floor(base * 0.75), `min=${minG}`);
+  check('H6 humanize=true → 间隔 <= 2.6×base（含偶发长间隔兜底）', maxG <= Math.ceil(base * 2.6), `max=${maxG}`);
+  check('H6 humanize=true → 确实在抖动（多次采样不全相等）', seen.size > 1, `distinct=${seen.size}`);
+  // 显式区间优先：传 [min,max] 时落在区间内
+  const rg = humanizedGap(base, true, [3000, 5000]);
+  check('H6 显式区间优先（落 [min,max]）', rg >= 3000 && rg <= 5000, `g=${rg}`);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

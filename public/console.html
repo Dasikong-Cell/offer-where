@@ -285,6 +285,7 @@
               <label class="toggle"><input type="checkbox" id="batchExclude" checked /> 排除已投递</label>
               <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
               <label class="toggle"><input type="checkbox" id="batchRemote" /> 仅远程岗位</label>
+              <label class="toggle"><input type="checkbox" id="batchHumanize" checked /> 模拟真人节奏</label>
               <label class="toggle"><input type="checkbox" id="batchPreview" /> 仅预览（不真正投递）</label>
               <button class="btn primary" id="batchRun">开始投递</button>
             </div>
@@ -947,6 +948,8 @@ $('#batchRun').addEventListener('click', async ()=>{
       source: $('#batchSource').value || undefined,
       // 平台通道只读预览：零真实投递地验证链路（服务端对应 ApplyInput.preview）
       preview: $('#batchPreview').checked,
+      // 模拟真人节奏（对标 CareerBoom.ai）：默认开；取消勾选则固定 intervalMs（调试用）
+      humanize: $('#batchHumanize').checked,
       criteria: {
         excludeApplied: $('#batchExclude').checked,
         keywords: $('#batchKeywords').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),

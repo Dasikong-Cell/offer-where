@@ -134,6 +134,11 @@ export interface BatchInput {
   headless?: boolean;               // 默认非无头（便于人工过滑块）
   sinceMinutes?: number;            // 验证码邮件时间窗
   intervalMs?: number;              // 两次投递间隔（默认 20000）
+  /** 模拟真人操作节奏（对标 CareerBoom.ai）：开启时做拟人抖动 + 偶发长间隔 + 点击前微停顿；默认 true。关闭则固定 intervalMs（测试/调试用） */
+  humanize?: boolean;
+  /** 拟人间隔随机区间 [min,max]（ms）；提供时覆盖 intervalMs 的 ±25% 抖动，直接在范围内均匀取间隔 */
+  minIntervalMs?: number;
+  maxIntervalMs?: number;
   /** 启用运行时间段限制（读取 app_kv 里该平台的 schedule 配置）；到点自动停 */
   useSchedule?: boolean;
 }
@@ -260,6 +265,35 @@ async function reclaimTabs(
   } catch { /* 回收失败不影响投递结果 */ }
 }
 
+/**
+ * 拟人节流（对标 CareerBoom.ai「模拟真人操作节奏」—— 它靠这个把封号风险压到最低）：
+ * 等间距请求本身就是强机器特征。这里在基础间隔上做双层抖动：
+ *   1) 常规：±25% 均匀抖动（破等间距）
+ *   2) 偶发「走神 / 喝口水」长间隔：约 8% 概率拉长到 1.8–2.6×（更像人会中途停顿）
+ * 仅在 humanize 开启时生效；关闭则退化为固定 intervalMs（测试 / 调试用，节奏可复现）。
+ */
+export function humanizedGap(base: number, humanize: boolean, range?: [number, number]): number {
+  if (!humanize || base <= 0) return base;
+  let g: number;
+  if (range && range[0] > 0 && range[1] >= range[0]) {
+    g = randomInt(range[0], range[1]);
+  } else {
+    g = Math.round(base * (0.75 + randomInt(0, 50) / 100)); // ±25%
+  }
+  // 8% 概率触发「长间隔」——真人不会永远匀速，偶尔会停顿更久（直接基于 base，1.8–2.6×，不叠加上面抖动）
+  if (randomInt(0, 99) < 8) {
+    g = Math.round(base * (1.8 + randomInt(0, 80) / 100)); // 1.8–2.6× base
+  }
+  return Math.max(0, g);
+}
+
+/** 点击「投递」前的「读页面」微停顿（400–1600ms），仅真实投递时生效，节奏更像人 */
+async function humanPreClickPause(humanize: boolean): Promise<void> {
+  if (!humanize) return;
+  const d = randomInt(400, 1600);
+  await new Promise<void>((r) => setTimeout(r, d));
+}
+
 export async function runBatchApply(
   input: BatchInput,
   onEvent?: (e: BatchEvent) => void,
@@ -381,6 +415,12 @@ export async function runBatchApply(
   const limit = Math.max(1, Math.min(Number(input.limit) || 10, 100));
   const picked = filtered.slice(0, limit);
   const intervalMs = Math.max(0, Number(input.intervalMs ?? 20000));
+  // 模拟真人节奏（对标 CareerBoom.ai）：默认开启；关闭则固定 intervalMs（节奏可复现，便于调试）
+  const humanize = input.humanize !== false;
+  const intervalRange: [number, number] | undefined =
+    (input.minIntervalMs && input.maxIntervalMs && input.maxIntervalMs >= input.minIntervalMs)
+      ? [Number(input.minIntervalMs), Number(input.maxIntervalMs)]
+      : undefined;
   const dailyLimit = resolveDailyLimit(input.criteria?.dailyLimit);
   const quotaPlatform = input.platform && input.platform !== 'auto' ? input.platform : '';
   const quotaNote = dailyLimit > 0
@@ -525,15 +565,23 @@ export async function runBatchApply(
     }
 
     if (i > 0 && intervalMs > 0) {
-      // 拟人节流：固定间隔本身就是一个机器特征（等间距请求）。
-      // 这里在 ±25% 区间内随机抖动，让节奏更像人（对标职得鸭的随机目标量 + 随机等待）。
-      const jittered = Math.max(0, Math.round(intervalMs * (0.75 + randomInt(0, 50) / 100)));
-      await new Promise<void>(r => setTimeout(r, jittered));
+      // 拟人节流（对标 CareerBoom.ai「模拟真人操作节奏」）：固定等间距是强机器特征，
+      // 用 humanizedGap 做双层抖动（±25% 常规 + 偶发 1.8–2.6× 长间隔），节奏更像人、降封号风险。
+      const gap = humanizedGap(intervalMs, humanize, intervalRange);
+      if (gap > intervalMs * 1.5) {
+        console.log(`[batch] 拟人长间隔休息 ${gap}ms（模拟真人中途停顿，降风控识别）`);
+      }
+      await new Promise<void>((r) => setTimeout(r, gap));
     }
     onEvent?.({
       type: 'progress', index: i, total: picked.length, jobId: job.id,
       company: job.company, position: job.position, platform,
     });
+    // 点击「投递」前的「读页面」微停顿（仅真实投递时）：模拟真人在点按钮前扫一眼岗位，
+    // 与上面的间隔抖动共同构成「不像机器人」的节奏（对标 CareerBoom.ai）。预览模式跳过以保持快速。
+    if (humanize && input.preview !== true) {
+      await humanPreClickPause(humanize);
+    }
     let res: ApplyResult;
     try {
       res = await runApply({
