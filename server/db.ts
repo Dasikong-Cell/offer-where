@@ -826,6 +826,23 @@ export function detectRemote(text: unknown): number {
   return /(远程|居家办公|在家办公|remote|telecommute|\bwfh\b|弹性办公|异地办公|可远程)/.test(t) ? 1 : 0;
 }
 
+/**
+ * 存量岗位远程标记回填：对所有 remote 为 NULL 的岗位按文本重新识别。
+ * 供 /api/jobs/backfill-remote 与一次性迁移脚本复用（不直接依赖 HTTP）。
+ */
+export function backfillRemoteJobs(): { scanned: number; updated: number } {
+  const rows = query<{ id: string; jd: string | null; card_text: string | null; position: string | null; requirements: string | null; company: string | null }>(
+    'SELECT id, jd, card_text, position, requirements, company FROM jobs WHERE remote IS NULL',
+  );
+  let updated = 0;
+  for (const r of rows) {
+    const v = detectRemote([r.jd, r.card_text, r.position, r.requirements, r.company].join(' '));
+    updateJob(r.id, { remote: v });
+    updated++;
+  }
+  return { scanned: rows.length, updated };
+}
+
 export function upsertJob(job: {
   id?: string;
   source?: string;

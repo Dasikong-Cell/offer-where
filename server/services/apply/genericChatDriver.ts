@@ -73,6 +73,11 @@ export interface ChatDriverConfig {
 
   /** 真机校准状态：false = 启发式基线（生产前需校准） */
   calibrated?: boolean;
+  /** 架构上是否支持本引擎自动回复：false = 该平台无可用 Web IM（如 51job/鱼泡/中华英才 HR 走 App），
+   * 即使登录也无法驱动，引擎应直接跳过而非空跑导航。缺省 true。 */
+  autoReplySupported?: boolean;
+  /** autoReplySupported=false 时的说明（返回给用户 / 日志） */
+  disabledReason?: string;
 }
 
 export function buildChatDriver(cfg: ChatDriverConfig): ChatDriver & { __setExForTest: (fn: ExFn | null) => void; config: ChatDriverConfig } {

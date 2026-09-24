@@ -68,10 +68,12 @@ export const zhilianChatDriver: ChatDriver = buildChatDriver(cfg({
 
 // ── 前程无忧 51job ──（2026-09-24 校准阻塞：首页已登录，但直跳 i.51job.com 个人中心返回 403 反爬，
 //   顶栏无「消息」入口；51job 求职侧 IM 在「我的投递→聊一聊」深链，无独立消息中心 URL 可导航。
-//   解决：需人工在浏览器养熟 profile 并定位真实聊天收件箱 URL，再回填 chatUrl/entrySelector。）
+//   ★ 架构判定：即使登录也无可导航的 Web IM 收件箱 → 自动回复在本平台**架构上不可用**，引擎直接跳过。
 export const job51ChatDriver: ChatDriver = buildChatDriver(cfg({
   platform: 'job51',
   chatUrl: 'https://www.51job.com/',
+  autoReplySupported: false,
+  disabledReason: '51job 求职侧无独立 Web 消息中心（深链在「我的投递→聊一聊」且直跳个人中心反爬 403），无法驱动自动回复',
 }));
 
 // ── 牛客网（IM 独立页 /im）──（2026-09-24 校准阻塞：profile 未登录，/im 返回 404「页面找不到了」。
@@ -91,17 +93,22 @@ export const iguopinChatDriver: ChatDriver = buildChatDriver(cfg({
 
 // ── 鱼泡网（蓝领，Web IM）──（2026-09-24 校准阻塞：profile 已登录，但顶栏仅 首页/职位/公司/校园/意外险/下载APP/我要招聘，
 //   全站无「消息/沟通」入口——鱼泡为蓝领直聘平台，HR 沟通走 APP 而非 Web IM，Web 侧无可驱动的会话列表。
-//   建议：本平台自动回复暂不启用（保持 calibrated:false，引擎不会误发，只是不回）。）
+//   ★ 架构判定：HR 沟通走 App，Web 侧无会话列表 → 自动回复在本平台**架构上不可用**，引擎直接跳过。
 export const yupaoChatDriver: ChatDriver = buildChatDriver(cfg({
   platform: 'yupao',
   chatUrl: 'https://www.yupao.com/',
+  autoReplySupported: false,
+  disabledReason: '鱼泡为蓝领直聘平台，HR 沟通走 App 而非 Web IM，Web 侧无会话列表可驱动',
 }));
 
 // ── 中华英才网 ──（2026-09-24 校准阻塞：profile 已登录，但点开「杨欣宇」下拉仅 我的简历/退出，全站无「消息」入口，
-//   新华英才（58 系）求职侧无独立 Web HR 聊天收件箱。解决：确认是否真有 Web IM，否则同鱼泡处理。）
+//   新华英才（58 系）求职侧无独立 Web HR 聊天收件箱。
+//   ★ 架构判定：无独立 Web HR 聊天收件箱 → 自动回复在本平台**架构上不可用**，引擎直接跳过。
 export const chinahrChatDriver: ChatDriver = buildChatDriver(cfg({
   platform: 'chinahr',
   chatUrl: 'https://www.chinahr.com/',
+  autoReplySupported: false,
+  disabledReason: '中华英才网求职侧无独立 Web HR 聊天收件箱（下拉仅「我的简历/退出」），无法驱动自动回复',
 }));
 
 // ── 应届生（yingjiesheng）──（2026-09-24 校准阻塞：profile 未登录（页显「登录/注册」）。

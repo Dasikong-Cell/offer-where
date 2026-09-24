@@ -771,6 +771,19 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('H6 显式区间优先（落 [min,max]）', rg >= 3000 && rg <= 5000, `g=${rg}`);
 }
 
+// ── H7 段：自动回复「架构不支持」平台标记（51job/鱼泡/中华英才 无可用 Web IM）──
+{
+  const cfgOf = (d: ChatDriver) => (d as unknown as { config?: { autoReplySupported?: boolean; disabledReason?: string } }).config;
+  check('H7 job51 标记不支持自动回复', cfgOf(job51ChatDriver)?.autoReplySupported === false, cfgOf(job51ChatDriver)?.disabledReason || '');
+  check('H7 yupao 标记不支持自动回复', cfgOf(yupaoChatDriver)?.autoReplySupported === false, cfgOf(yupaoChatDriver)?.disabledReason || '');
+  check('H7 chinahr 标记不支持自动回复', cfgOf(chinahrChatDriver)?.autoReplySupported === false, cfgOf(chinahrChatDriver)?.disabledReason || '');
+  check('H7 zhilian 仍支持自动回复', cfgOf(zhilianChatDriver)?.autoReplySupported !== false);
+  check('H7 待登录平台(nowcoder/iguopin/yingjiesheng)仍标记支持',
+    cfgOf(nowcoderChatDriver)?.autoReplySupported !== false &&
+    cfgOf(iguopinChatDriver)?.autoReplySupported !== false &&
+    cfgOf(yingjieshengChatDriver)?.autoReplySupported !== false);
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}`);
 

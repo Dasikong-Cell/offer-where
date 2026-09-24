@@ -808,16 +808,8 @@ app.get("/api/jobs/remote-stat", (_req, res) => {
 /** 存量岗位远程标记回填：对所有 remote 为 NULL 的岗位按文本重新识别 */
 app.post("/api/jobs/backfill-remote", (_req, res) => {
   try {
-    const rows = db.query<{ id: string; jd: string | null; card_text: string | null; position: string | null; requirements: string | null; company: string | null }>(
-      "SELECT id, jd, card_text, position, requirements, company FROM jobs WHERE remote IS NULL",
-    );
-    let updated = 0;
-    for (const r of rows) {
-      const v = db.detectRemote([r.jd, r.card_text, r.position, r.requirements, r.company].join(' '));
-      db.updateJob(r.id, { remote: v });
-      updated++;
-    }
-    res.json({ ok: true, scanned: rows.length, updated });
+    const r = db.backfillRemoteJobs();
+    res.json({ ok: true, scanned: r.scanned, updated: r.updated });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "回填失败" });
   }

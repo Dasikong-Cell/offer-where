@@ -169,6 +169,14 @@ export async function runAutoReply(
     return { sent: 0, skipped: 0 };
   }
 
+  // 架构不支持（平台无可用 Web IM，如 51job/鱼泡/中华英才 HR 走 App）：直接跳过，
+  // 不空跑导航、不误发。这类平台即使登录也无法驱动自动回复。
+  const dcfg = (driver as unknown as { config?: { autoReplySupported?: boolean; disabledReason?: string } }).config;
+  if (dcfg && dcfg.autoReplySupported === false) {
+    emit({ type: 'error', message: `平台 ${platform} 架构上不支持自动回复（${dcfg.disabledReason || '无可用 Web IM'}）。跳过，建议改用该平台 App 沟通。` });
+    return { sent: 0, skipped: 0 };
+  }
+
   emit({ type: 'start', platform, unreadOnly, limit, realSend });
 
   // 会话独占锁：同一平台同一时刻只允许「投递」或「回复」之一占用浏览器，
