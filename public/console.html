@@ -735,18 +735,24 @@ $('#abBackfill').addEventListener('click', async ()=>{
   finally{ btn.disabled=false; }
 });
 
-/* 投递操作证据回溯 */
+/* 投递操作证据回溯（对标 CareerBoom.ai「每次投递生成操作录屏」） */
 async function loadEvidence(){
   const out=$('#eviResult'); if(!out) return; out.innerHTML='加载中…';
   try{
-    const rows=await api('/api/applications?limit=200');
-    const withEvi=(rows||[]).filter(a=>a.evidence_path);
-    if(!withEvi.length){ out.innerHTML='<div class="note">暂无操作证据（真实投递后自动截图留存）。</div>'; return; }
-    let html='<div class="note small" style="margin-bottom:8px">共 '+withEvi.length+' 份投递已留存操作截图。</div><div style="display:flex;flex-wrap:wrap;gap:12px">';
-    for(const a of withEvi.slice(0,30)){
+    const r=await api('/api/apply/evidence');
+    const rows=(r&&r.items)||[];
+    if(!rows.length){ out.innerHTML='<div class="note">暂无操作证据（真实投递后自动截图留存至 data/evidence）。</div>'; return; }
+    let html='<div class="note small" style="margin-bottom:8px">共 '+rows.length+' 份投递已留存操作截图（点击放大）。</div><div style="display:flex;flex-wrap:wrap;gap:12px">';
+    for(const a of rows.slice(0,30)){
+      const strat=String(a.strategy||'').split('|');
+      const letterTag = strat[0]==='letter' ? '带求职信' : (strat[0]==='no_letter' ? '无求职信' : (strat[0]||'未打标'));
+      const rvTag = strat[1]||'—';
       html+='<div style="width:200px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff">'
         +'<a href="'+esc(a.evidence_path)+'" target="_blank"><img src="'+esc(a.evidence_path)+'" style="width:100%;height:120px;object-fit:cover;display:block" onerror="this.style.display=\'none\'"></a>'
-        +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(a.position||''))+'<br><span class="muted">'+esc(a.platform)+' · '+(a.created_at||'').slice(0,10)+'</span></div></div>';
+        +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(a.position||''))+'<br>'
+        +'<span class="muted">'+esc(a.platform)+' · '+(a.created_at||'').slice(0,10)+'</span><br>'
+        +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#eef4ff;color:#2a5bd7;font-size:11px">'+esc(letterTag)+'</span> '
+        +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#f3f3f3;color:#555;font-size:11px">'+esc('简历:'+rvTag)+'</span></div></div>';
     }
     html+='</div>';
     out.innerHTML=html;

@@ -89,10 +89,31 @@ export async function pageUrl(platform: string): Promise<string> {
   return res.url || '';
 }
 
-/** 截图（失败忽略） */
-export async function tryScreenshot(platform: string): Promise<string | undefined> {
+/**
+ * 截图并统一归档到 data/evidence/<appId>.png（操作录屏回溯，对标 CareerBoom.ai「每次投递生成操作录屏」）。
+ * - 不传 appId：回退旧行为，返回 data/screenshots/<platform>-<ts>.png（兼容其它调用方）。
+ * - 传 appId：把 CDP 写出的临时截图 rename 到按投递记录归档的证据目录，返回 /data/evidence/<appId>.png。
+ * 任何失败都返回 undefined（截图只是可选审计证据，绝不应阻断「已投递」主流程）；失败时打印 warn 便于排查。
+ */
+export async function tryScreenshot(platform: string, appId?: string): Promise<string | undefined> {
   const res = await execAction(platform, 'screenshot', { fullPage: false });
-  return res.ok ? res.screenshot : undefined;
+  if (!res.ok || !res.screenshot) {
+    console.warn(`[tryScreenshot] 平台 ${platform} 截图未成功（res.ok=${res.ok}），跳过证据留存`);
+    return undefined;
+  }
+  if (!appId) return res.screenshot; // 兼容旧调用
+  // CDP 截图动作写到 data/screenshots/<platform>-<ts>.png，这里迁移到按投递记录归档的 evidence 目录
+  const fileName = path.basename(res.screenshot); // <platform>-<ts>.png
+  const src = path.join(DATA_DIR, 'screenshots', fileName);
+  const destDir = path.join(DATA_DIR, 'evidence');
+  try {
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+    if (fs.existsSync(src)) fs.renameSync(src, path.join(destDir, `${appId}.png`));
+    return `/data/evidence/${appId}.png`;
+  } catch (e: any) {
+    console.warn(`[tryScreenshot] 证据迁移失败，回退原路径：`, e?.message);
+    return res.screenshot;
+  }
 }
 
 /**

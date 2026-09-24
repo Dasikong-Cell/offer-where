@@ -716,7 +716,7 @@ export async function runBatchApply(
         const rv = getResumeVersion();
         const strategy = `${letter}|${rv}`;
         let evidencePath: string | undefined;
-        try { evidencePath = await tryScreenshot(platform); } catch { /* 截图失败不阻断 */ }
+        try { evidencePath = await tryScreenshot(platform, appId); } catch (e: any) { console.warn('[batch] 投递后截图失败，不影响已投递：', e?.message); }
         db.updateApplication(appId, {
           strategy,
           evidence_path: evidencePath || null,

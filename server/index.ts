@@ -173,6 +173,11 @@ const SCREENSHOT_DIR = path.join(__dirname, '..', 'data', 'screenshots');
 if (!fs.existsSync(SCREENSHOT_DIR)) fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 app.use('/data/screenshots', express.static(SCREENSHOT_DIR));
 
+// 静态资源：投递操作证据截图（对标 CareerBoom.ai「每次投递生成操作录屏」）
+const EVIDENCE_DIR = path.join(__dirname, '..', 'data', 'evidence');
+if (!fs.existsSync(EVIDENCE_DIR)) fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
+app.use('/data/evidence', express.static(EVIDENCE_DIR));
+
 // 静态资源：一岗一简历生成的定制简历 PDF/HTML（供前端预览与下载）
 const TAILORED_DIR = path.join(__dirname, '..', 'data', 'resume_tailored');
 if (!fs.existsSync(TAILORED_DIR)) fs.mkdirSync(TAILORED_DIR, { recursive: true });
@@ -1252,6 +1257,26 @@ app.post("/api/apply/ab-backfill", (_req, res) => {
     res.json({ ok: true, backfilled: n });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || '回填失败' });
+  }
+});
+
+/** 投递操作证据回溯清单：返回带 evidence_path 的投递（公司/职位/平台/证据路径/时间/策略），供前端「录屏回溯」面板展示 */
+app.get("/api/apply/evidence", (_req, res) => {
+  try {
+    const rows = db.listApplications(1000).filter((a: any) => a.evidence_path);
+    const items = rows.map((a: any) => ({
+      id: a.id,
+      platform: a.platform,
+      company: a.company,
+      position: a.position,
+      evidence_path: a.evidence_path,
+      strategy: a.strategy || null,
+      status: a.status,
+      created_at: a.created_at,
+    }));
+    res.json({ ok: true, total: items.length, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '证据清单读取失败' });
   }
 });
 
