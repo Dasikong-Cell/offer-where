@@ -1,0 +1,51 @@
+# 对标增强「重新测评」报告（2026-09-24）
+
+## 背景
+上一轮已重启后端（旧进程曾导致全部新对标接口 404）、并把 iguopin(9235)/yingjiesheng(9236) 加回浏览器农场。
+本次在后端刷新后，重新实测对标三款竞品（LoopCV / Resumly / CareerBoom.ai）落地的五项能力。
+
+## 实测结果
+
+### 1. 远程岗位筛选 —— 对标 Resumly ✅ 可用（真实数据）
+- 接口 `GET /api/jobs/remote-stat` → HTTP 200
+- 真实数据：`total 2137 / remote 33 / nonRemote 2104 / unknown 0`
+- 历史回填已生效，控制台「仅远程岗位」开关可直接启用。
+
+### 2. 简历合规检测（ATS 体检）—— 对标 LoopCV ✅ 可用（真实数据）
+- 接口 `POST /api/resume/compliance` → HTTP 200
+- 示例简历实测：得分 **70/100（良好）**，六维结构（联系方式/章节/篇幅/关键词/量化/格式卫生）齐全
+- 返回分级问题（high/medium）+ 整改建议，纯本地可离线、可复现。
+
+### 3. A/B 投递测试 —— 对标 LoopCV ✅ 已产出 letter 策略对照（待回复数据下结论）
+- 接口 `GET /api/apply/ab-report` → HTTP 200
+- 真实运行后数据：`legacy` 840 次 + **`letter|original` 5 次**（本次带求职信真实投递）
+- `letterVsNoLetter`：has(letter)=5 / no(legacy)=840，winner=`inconclusive`
+  —— 结论需「回复率差 ≥10pp 且两组各 ≥5 样本」才给出；当前回复 0，等 recruiter 回复后自动归因。
+- 新增 `GET /api/apply/evidence`：返回带 `evidence_path` 的投递（公司/职位/平台/策略/时间），供前端回溯面板。
+
+### 4. 投递录屏回溯 —— 对标 CareerBoom.ai ✅ 已落盘（真实实证）
+- 完善点：证据文件统一归档到 `data/evidence/<appId>.png`（原散落 `data/screenshots`、与 `batch.ts` 注释声明的目录不一致）；
+  截图失败由静默改为 `console.warn` 可见；`index.ts` 挂载 `/data/evidence` 静态目录；前端 `loadEvidence` 改调新接口并展示策略标签。
+- **真实运行实测**：`data/evidence/` 已落盘 **5 张**有效 PNG（~300KB/张，PNG magic 校验通过），
+  DB `applications.evidence_path` 由 0/840 → **5/845** 非空；`GET /api/apply/evidence` 正确返回 5 条（均 `letter|original`）。
+- 根因澄清：此前 0 证据并非代码缺陷，而是「840 条全是历史数据、从未触达 `applied` 分支」；真实投递即触发。
+
+### 5. 模拟真人节奏 —— 对标 CareerBoom.ai ✅ 已落地
+- `humanizedGap` 双层抖动（±25% 常规 + 8% 概率 1.8–2.6× 长间隔）+ 点击前 400–1600ms 微停顿
+- 已在 `batch.ts` 接线，控制台「模拟真人节奏」开关默认开启；无独立接口，逻辑随后端重启已生效。
+
+## 总体结论
+| 能力 | 接口状态 | 数据实证 | 评级 |
+|------|---------|---------|------|
+| 远程岗位筛选 | ✅ 200 | 2137 岗已标注 | 可用 |
+| 简历合规检测 | ✅ 200 | 六维评分可出 | 可用 |
+| A/B 投递测试 | ✅ 200 | legacy 840 + letter 5 | 有对照（待回复） |
+| 投递录屏回溯 | ✅ 已落盘 | 5 张证据 PNG | 可用 |
+| 模拟真人节奏 | ✅ 已接线 | 逻辑生效 | 可用 |
+
+代码层五项能力全部就位，重启后端后**接口层面 100% 可用**；远程筛选、合规检测已有真实数据支撑，
+A/B（letter 策略已出现）与录屏回溯（5 张实证截图）均已通过真实运行验证。
+
+## 下一步建议
+1. 等待 recruiter 回复后重跑 `ab-report`，即可看到「带求职信 vs 不带」的回复率归因结论。
+2. 控制台「操作证据回溯」面板已可查看 5 张投递截图与策略标签；继续真实投递会自然累积证据。
