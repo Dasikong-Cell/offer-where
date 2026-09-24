@@ -26,7 +26,9 @@ import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled } from '../server/services/authToken.js';
-import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet } from '../server/db.js';
+import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
+import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
+import { computeAbReport } from '../server/services/apply/applyAbTest.js';
 import { decideGreet, isExcludeHit } from '../server/services/apply/greetDecision.js';
 import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
 import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js';
@@ -711,6 +713,40 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const res = await runAutoReply('offerbiu', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1 }, emit);
   check('G11 未登记平台 → 引擎报错（非静默空跑）', evs.some((e) => e.type === 'error'), `errs=${evs.filter((e) => e.type === 'error').length}`);
   check('G11 未登记平台 → 零发送零跳过', res.sent === 0 && res.skipped === 0, `sent=${res.sent} skipped=${res.skipped}`);
+}
+
+// H. 对标增强模块合约（LoopCV / Resumly / CareerBoom 四项新能力）
+//    纯本地、离线、零浏览器依赖：锁定「远程识别」「简历合规体检」「A/B 报告」的确定性行为。
+{
+  // H1 远程岗位识别（对标 Resumly）：命中远程表述→1，否则→0
+  check('H1 远程识别命中「远程办公」', detectRemote('本岗位支持远程办公') === 1, `v=${detectRemote('本岗位支持远程办公')}`);
+  check('H1 远程识别命中英文 remote', detectRemote('remote position available') === 1);
+  check('H1 非远程表述→0（驻场/现场）', detectRemote('需要驻场开发，现场办公') === 0);
+
+  // H2 简历合规体检（对标 LoopCV）：空简历 → ok:false 且给整改建议
+  const empty = checkResumeCompliance({ resumeText: '' });
+  check('H2 空简历 → ok:false', empty.ok === false, `score=${empty.score}`);
+  check('H2 空简历 → 含整改建议', empty.issues.length > 0);
+
+  // H3 完整简历 → 分数落在 [0,100] 且 grade 合法；量化经历被识别
+  const good = checkResumeCompliance({
+    resumeText:
+      '张三 13800138000 z@x.com 教育背景 软件工程专业本科 工作经历 负责3个项目业绩提升40% 技能 熟悉Java 项目经历 服务2万+用户',
+  });
+  check('H3 完整简历 → ok:true', good.ok === true, `score=${good.score}`);
+  check('H3 分数落在 [0,100]', good.score >= 0 && good.score <= 100, `score=${good.score}`);
+  check('H3 grade 合法', ['优秀', '良好', '一般', '偏弱', '缺失'].includes(good.grade), `grade=${good.grade}`);
+  check('H3 识别量化经历', good.stats.quantified === true);
+  check('H3 识别联系方式完整', good.stats.hasPhone && good.stats.hasEmail);
+
+  // H4 含 emoji/表格/全大写 → 格式卫生扣分
+  const dirty = checkResumeCompliance({ resumeText: '张三 13800138000 a@b.com 教育背景 软件工程 🚀 工作经历 | 列1 | 列2 | EXPERIENCE 技能 Java' });
+  check('H4 emoji/表格/全大写被标记', dirty.issues.some((i) => i.rule === '格式卫生'), `issues=${dirty.issues.length}`);
+
+  // H5 A/B 报告（对标 LoopCV）：结构正确、total>=0、strategies 为数组
+  const ab = computeAbReport();
+  check('H5 A/B 报告结构正确', ab && typeof ab.total === 'number' && Array.isArray(ab.strategies), `total=${ab?.total}`);
+  check('H5 A/B 报告 total>=0', (ab?.total ?? -1) >= 0);
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

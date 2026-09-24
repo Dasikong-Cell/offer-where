@@ -196,6 +196,34 @@ try {
   // 忽略错误（列可能已存在）
 }
 
+// 数据库迁移：jobs 增加 remote 列（远程岗位标记，对标 Resumly「远程岗位筛选」）
+try {
+  const jrc = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jrc.some((c) => c.name === 'remote')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN remote INTEGER");
+    console.log("[DB] Added remote column to jobs");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：applications 增加 strategy / evidence_path
+//   · strategy     —— 投递策略标签（对标 LoopCV A/B 测试：如 letter|tailored / no_letter|original）
+//   · evidence_path —— 投递瞬间平台页截图路径（对标 CareerBoom 操作录屏回溯，可审计/降封号风险）
+try {
+  const ac = db.prepare("PRAGMA table_info(applications)").all() as Array<{ name: string }>;
+  if (!ac.some((c) => c.name === 'strategy')) {
+    db.exec("ALTER TABLE applications ADD COLUMN strategy TEXT");
+    console.log("[DB] Added strategy column to applications");
+  }
+  if (!ac.some((c) => c.name === 'evidence_path')) {
+    db.exec("ALTER TABLE applications ADD COLUMN evidence_path TEXT");
+    console.log("[DB] Added evidence_path column to applications");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
 // 数据库迁移：hr_conversations 增加 ai_name / ai_source（标记 AI 回复身份）
 try {
   const ti = db.prepare("PRAGMA table_info(hr_conversations)").all() as Array<{ name: string }>;
@@ -587,6 +615,10 @@ export interface ApplicationRow {
   status: string;
   login_method: string | null;
   message: string | null;
+  /** 投递策略标签（A/B 测试用）：如 `letter|tailored` / `no_letter|original` */
+  strategy?: string | null;
+  /** 投递瞬间平台页截图路径（操作录屏回溯用），如 `/data/screenshots/<id>.png` */
+  evidence_path?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -597,15 +629,17 @@ export function listApplications(limit = 500): ApplicationRow[] {
 
 export function createApplication(app: Omit<ApplicationRow, 'created_at' | 'updated_at'>): ApplicationRow {
   const now = new Date().toISOString();
+  const strategy = app.strategy ?? null;
+  const evidence_path = app.evidence_path ?? null;
   db.prepare(`
-    INSERT INTO applications (id, platform, company, position, salary, city, job_url, status, login_method, message, created_at, updated_at)
-    VALUES (@id, @platform, @company, @position, @salary, @city, @job_url, @status, @login_method, @message, @created_at, @updated_at)
-  `).run({ ...app, created_at: now, updated_at: now });
-  return { ...app, created_at: now, updated_at: now };
+    INSERT INTO applications (id, platform, company, position, salary, city, job_url, status, login_method, message, strategy, evidence_path, created_at, updated_at)
+    VALUES (@id, @platform, @company, @position, @salary, @city, @job_url, @status, @login_method, @message, @strategy, @evidence_path, @created_at, @updated_at)
+  `).run({ ...app, strategy, evidence_path, created_at: now, updated_at: now });
+  return { ...app, strategy, evidence_path, created_at: now, updated_at: now };
 }
 
 export function updateApplication(id: string, updates: Partial<Pick<ApplicationRow,
-  'platform' | 'company' | 'position' | 'salary' | 'city' | 'job_url' | 'status' | 'login_method' | 'message'
+  'platform' | 'company' | 'position' | 'salary' | 'city' | 'job_url' | 'status' | 'login_method' | 'message' | 'strategy' | 'evidence_path'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];
@@ -655,6 +689,8 @@ export interface JobRow {
   jd_source: string | null;
   /** 图片JD的OCR回填状态：NULL/pending=待识别；done=已识别写回jd；failed=识别失败(模型非视觉/无内容)，可 --retry-failed 重跑 */
   ocr_status: string | null;
+  /** 远程岗位标记：1=远程/居家办公，0=非远程（驻场/坐班），NULL=未识别。采集时按文本自动推断，可被显式覆盖 */
+  remote: number | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -778,6 +814,18 @@ export function isCardSummaryJd(text: unknown): boolean {
     || /更新\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(t);
 }
 
+/**
+ * 远程岗位识别（对标 Resumly「远程岗位筛选」）。
+ * 从岗位文本里识别「远程/居家办公/remote/telecommute/wfh」等表述，命中返回 1，否则 0。
+ * 显式「非远程/需坐班/驻场/现场」优先判 0，避免把「不接受远程」误标成远程。
+ */
+export function detectRemote(text: unknown): number {
+  const t = String(text || '').toLowerCase();
+  if (!t) return 0;
+  if (/(非远程|不接受远程|需坐班|必须坐班|驻场|现场办公|onsite|on-site|线?下办公)/.test(t)) return 0;
+  return /(远程|居家办公|在家办公|remote|telecommute|\bwfh\b|弹性办公|异地办公|可远程)/.test(t) ? 1 : 0;
+}
+
 export function upsertJob(job: {
   id?: string;
   source?: string;
@@ -795,6 +843,11 @@ export function upsertJob(job: {
   jd_images?: string | null;
   /** 'text'|'image'|'none'：标记 JD 形态 */
   jd_source?: string | null;
+  /**
+   * 远程岗位标记（1/0）。显式传入则尊重；不传则由 detectRemote 在
+   * jd/card_text/position/requirements/company 文本上自动推断（所有采集器零改动即得远程标记）。
+   */
+  remote?: number | null;
 }): JobRow {
   // 写库口统一清洗（见 sanitizeJobText 注释）
   // ⚠️ 只清洗**调用方真正传了的字段**：upsertJob 是「部分更新」语义（投递流程补 JD 时只传
@@ -806,6 +859,10 @@ export function upsertJob(job: {
   if (job.city !== undefined) cleaned.city = sanitizeJobText(job.city, 30);
   // 薪资也被加密字体污染（`10-20K` → `-K`），用专用清洗（保留合法薪资、丢弃无数字残片）
   if (job.salary !== undefined) cleaned.salary = sanitizeSalary(job.salary);
+  // 远程标记：显式传入（含 0/1）则尊重；未传则按文本自动推断
+  const remoteVal = job.remote !== undefined
+    ? (job.remote ? 1 : 0)
+    : detectRemote([job.jd, job.card_text, job.position, job.requirements, job.company].join(' '));
   job = cleaned;
   const now = new Date().toISOString();
   // 去重键：优先「来源 + 公司 + 职位」，退化到「来源 + apply_url」。
@@ -828,14 +885,14 @@ export function upsertJob(job: {
   //    company/position/apply_url = NULL（实测 boss 12/277、job51 53/101 条被抹掉）。
   //    现在语义为「部分更新」：undefined = 保持原值；显式 null = 清空。
   const UPDATABLE = ['source', 'company', 'position', 'city', 'jd', 'requirements',
-    'salary', 'apply_url', 'deadline', 'card_text', 'jd_images', 'jd_source'] as const;
+    'salary', 'apply_url', 'deadline', 'card_text', 'jd_images', 'jd_source', 'remote'] as const;
   const providedCols = UPDATABLE.filter((c) => (job as Record<string, unknown>)[c] !== undefined);
   // updated_at 始终更新，保证 SET 子句非空（否则只剩逗号会成为非法 SQL）
   const setSql = [...providedCols.map((c) => `${c} = excluded.${c}`), 'updated_at = excluded.updated_at'].join(',\n      ');
 
   db.prepare(`
-    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, status, created_at, updated_at)
-    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, 'candidate', @created_at, @updated_at)
+    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, remote, status, created_at, updated_at)
+    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, @remote, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       ${setSql}
   `).run({
@@ -848,6 +905,7 @@ export function upsertJob(job: {
     card_text: job.card_text ?? null,
     jd_images: job.jd_images ?? null,
     jd_source: job.jd_source ?? null,
+    remote: remoteVal,
     requirements: job.requirements ?? null,
     salary: job.salary ?? null,
     apply_url: job.apply_url ?? null,
@@ -859,7 +917,7 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' | 'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' |   'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'remote' | 'status'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];

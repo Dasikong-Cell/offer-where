@@ -29,6 +29,8 @@ import { getExchangeActions, setExchangeActions, runExchangeActions, summarizeEx
 import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMAGE_INPUTS } from "./services/apply/chatResumeImage.js";
 import { locateJobById } from "./services/apply/jobLocate.js";
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from "./services/apply/index.js";
+import { computeAbReport, backfillLegacyStrategy } from "./services/apply/applyAbTest.js";
+import { checkResumeCompliance } from "./services/apply/resumeCompliance.js";
 import { toApplyProfile } from "./services/apply/common.js";
 import {
   runBatchApply, resolveDailyLimit, todayAppliedCount,
@@ -787,6 +789,40 @@ app.get("/api/jobs/image-jd", (_req, res) => {
   }
 });
 
+/** 远程岗位统计（对标 Resumly「远程岗位筛选」） */
+app.get("/api/jobs/remote-stat", (_req, res) => {
+  try {
+    const rows = db.query<{ remote: number | null }>("SELECT remote FROM jobs");
+    let remote = 0, nonRemote = 0, unknown = 0;
+    for (const r of rows) {
+      if (r.remote === 1) remote++;
+      else if (r.remote === 0) nonRemote++;
+      else unknown++;
+    }
+    res.json({ total: rows.length, remote, nonRemote, unknown });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "查询失败" });
+  }
+});
+
+/** 存量岗位远程标记回填：对所有 remote 为 NULL 的岗位按文本重新识别 */
+app.post("/api/jobs/backfill-remote", (_req, res) => {
+  try {
+    const rows = db.query<{ id: string; jd: string | null; card_text: string | null; position: string | null; requirements: string | null; company: string | null }>(
+      "SELECT id, jd, card_text, position, requirements, company FROM jobs WHERE remote IS NULL",
+    );
+    let updated = 0;
+    for (const r of rows) {
+      const v = db.detectRemote([r.jd, r.card_text, r.position, r.requirements, r.company].join(' '));
+      db.updateJob(r.id, { remote: v });
+      updated++;
+    }
+    res.json({ ok: true, scanned: rows.length, updated });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "回填失败" });
+  }
+});
+
 /** 微信图片JD 的 OCR 回填状态统计（按 ocr_status 分组 + 待处理量） */
 app.get("/api/jobs/ocr-status", (_req, res) => {
   try {
@@ -1205,6 +1241,41 @@ app.post("/api/cover-letter/template", (req, res) => {
 app.delete("/api/cover-letter/template", (_req, res) => {
   clearLetterTemplate();
   res.json({ ok: true });
+});
+
+/** 投递效果 A/B 测试报告（对标 LoopCV）：按 strategy 聚合回复率/面试率，给出胜出策略 */
+app.get("/api/apply/ab-report", (_req, res) => {
+  try {
+    const report = computeAbReport();
+    res.json(report);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'A/B 报告生成失败' });
+  }
+});
+
+/** 存量数据回填：给未打标的历史投递补 `legacy` 标签（仅运行一次；不改变 A/B 结论） */
+app.post("/api/apply/ab-backfill", (_req, res) => {
+  try {
+    const n = backfillLegacyStrategy();
+    res.json({ ok: true, backfilled: n });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '回填失败' });
+  }
+});
+
+/** 简历合规检测（对标 LoopCV「简历合规检测 / ATS 体检」）：纯本地、可离线、结果可复现 */
+app.post("/api/resume/compliance", (req, res) => {
+  try {
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    const report = checkResumeCompliance({
+      profile: req.body?.useProfile === false ? null : profile,
+      resumeText: req.body?.resumeText || null,
+      jd: req.body?.jd || null,
+    });
+    res.json(report);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '简历体检失败' });
+  }
 });
 
 /** 模板试渲染：把变量替换后返回，方便前端所见即所得地预览 */

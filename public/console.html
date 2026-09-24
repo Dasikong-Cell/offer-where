@@ -172,6 +172,8 @@
       <a data-view="resume">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>简历中心</a>
       <div class="grp">进阶</div>
+      <a data-view="enhance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>对标增强</a>
       <a data-view="advanced">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 17l-6.3 4 2.3-7.2-6-4.4h7.6z"/></svg>高级功能</a>
       <a data-view="logs">
@@ -282,6 +284,7 @@
             <div style="margin-top:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
               <label class="toggle"><input type="checkbox" id="batchExclude" checked /> 排除已投递</label>
               <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
+              <label class="toggle"><input type="checkbox" id="batchRemote" /> 仅远程岗位</label>
               <label class="toggle"><input type="checkbox" id="batchPreview" /> 仅预览（不真正投递）</label>
               <button class="btn primary" id="batchRun">开始投递</button>
             </div>
@@ -330,6 +333,49 @@
       </section>
 
       <!-- ============ Records ============ -->
+      <section class="view" id="view-enhance">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>简历合规体检 <span class="tag">对标 LoopCV</span></h2>
+            <p class="note small">纯本地、可离线、结果可复现：按 ATS 解析规则体检（联系方式 / 章节 / 篇幅 / 关键词命中 / 量化成果 / 格式卫生）。</p>
+            <label class="muted small">附上目标岗位 JD（可选，提升关键词命中评估）</label>
+            <textarea id="compJd" class="area" placeholder="粘贴岗位 JD，留空则只做通用体检" style="min-height:64px;margin-top:6px"></textarea>
+            <label class="muted small" style="margin-top:8px;display:block">直接粘贴简历全文（可选，否则用档案构建）</label>
+            <textarea id="compText" class="area" placeholder="可选：粘贴简历全文做体检" style="min-height:64px;margin-top:6px"></textarea>
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="btn primary" id="compRun">开始体检</button>
+            </div>
+            <div id="compResult" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card">
+            <h2>远程岗位筛选 <span class="tag">对标 Resumly</span></h2>
+            <p class="note small">自动识别远程岗位并标记；投递时可勾选「仅远程岗位」只投远程岗。</p>
+            <div id="remoteStat" class="note">统计加载中…</div>
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="btn" id="remoteBackfill">重新识别全部岗位远程标记</button>
+            </div>
+            <div class="note small" style="margin-top:10px">在「投递中心 → 批量投递」里勾选 <b>仅远程岗位</b> 即可启用。</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h2>投递效果 A/B 测试 <span class="tag">对标 LoopCV</span></h2>
+          <p class="note small">每次真实投递自动打标策略（是否带求职信 × 简历版本），按策略归因回复率/面试率，找出胜出策略。</p>
+          <div style="display:flex;gap:10px;margin-top:8px">
+            <button class="btn primary" id="abRun">生成 A/B 报告</button>
+            <button class="btn" id="abBackfill">回填历史未打标数据</button>
+          </div>
+          <div id="abResult" style="margin-top:12px"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h2>投递操作证据回溯 <span class="tag">对标 CareerBoom</span></h2>
+          <p class="note small">每次真实投递自动截取平台页存证，可审计「当时点了什么」，降低封号风险。</p>
+          <div id="eviResult" style="margin-top:12px"></div>
+        </div>
+      </section>
+
       <section class="view" id="view-records">
         <div class="card" style="margin-bottom:16px">
           <h2>覆盖漏斗</h2>
@@ -595,6 +641,7 @@ const VIEW_META = {
   records:{t:'职位记录', s:'投递漏斗 · 岗位列表 · JD 长图'},
   resume:{t:'简历中心', s:'候选人档案 · 简历版本 · 求职信模板'},
   advanced:{t:'高级功能', s:'定制简历 · 面试攻略 · 时间段 · 交换联系'},
+  enhance:{t:'对标增强', s:'简历合规体检 · 远程筛选 · A/B 测试 · 证据回溯'},
   logs:{t:'运行日志', s:'运行日志 · OCR 失败明细 · 投递记录'},
 };
 $$('#nav a').forEach(a=>a.addEventListener('click',()=>navigate(a.dataset.view)));
@@ -608,9 +655,102 @@ function navigate(view){
   if(view==='resume') loadResume();
   if(view==='deliver') loadQuota();
   if(view==='advanced') loadAdvanced();
+  if(view==='enhance') loadEnhance();
   if(view==='logs') loadLogsTab();
 }
 $('#refreshBtn').addEventListener('click', ()=>{ loadDashboard(); if($('#view-records').classList.contains('active')) loadRecords(); });
+
+/* ================= 对标增强（LoopCV / Resumly / CareerBoom） ================= */
+async function loadEnhance(){ loadRemoteStat(); loadEvidence(); }
+async function loadRemoteStat(){
+  const el = $('#remoteStat'); if(!el) return;
+  try{
+    const r = await api('/api/jobs/remote-stat');
+    el.innerHTML = '共 '+r.total+' 个岗位：<b style="color:#ff7a45">远程 '+r.remote+'</b> ｜ 非远程 '+r.nonRemote+' ｜ 未识别 '+r.unknown;
+  }catch(e){ el.textContent = '统计失败：'+e.message; }
+}
+$('#remoteBackfill').addEventListener('click', async ()=>{
+  const btn=$('#remoteBackfill'); btn.disabled=true;
+  try{ const r=await api('/api/jobs/backfill-remote',{method:'POST'}); loadRemoteStat(); alert('已重新识别 '+r.scanned+' 个岗位，更新 '+r.updated+' 个远程标记'); }
+  catch(e){ alert('失败：'+e.message); }
+  finally{ btn.disabled=false; }
+});
+
+/* 简历合规体检 */
+$('#compRun').addEventListener('click', async ()=>{
+  const btn=$('#compRun'); btn.disabled=true; btn.textContent='体检中…';
+  const out=$('#compResult'); out.innerHTML='';
+  try{
+    const body={ jd: $('#compJd').value.trim()||null, resumeText: $('#compText').value.trim()||null, useProfile:true };
+    const r=await api('/api/resume/compliance',{method:'POST',body:JSON.stringify(body)});
+    if(!r.ok){ out.innerHTML='<div class="note warn">'+esc(r.summary||'体检失败')+'</div>'; return; }
+    const color = r.score>=80?'#3fb950':r.score>=60?'#ffd23f':r.score>=40?'#ff9f43':'#f85149';
+    let html = '<div style="display:flex;align-items:center;gap:16px;margin-bottom:10px">'
+      + '<div style="width:84px;height:84px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#fff;background:'+color+'">'+r.score+'</div>'
+      + '<div><div style="font-size:15px;font-weight:600">等级：'+esc(r.grade)+'</div><div class="note small" style="margin-top:4px;max-width:520px">'+esc(r.summary)+'</div></div></div>';
+    if(r.issues && r.issues.length){
+      html += '<div style="margin-top:6px"><b>问题清单（'+r.issues.length+'）</b>';
+      const order={high:0,medium:1,low:2};
+      const sevColor={high:'#f85149',medium:'#ff9f43',low:'#6b7280'};
+      const sorted=[...r.issues].sort((a,b)=>order[a.severity]-order[b.severity]);
+      html += '<ul style="margin:8px 0 0;padding-left:18px">';
+      for(const it of sorted){
+        html += '<li style="margin:6px 0"><span style="color:'+sevColor[it.severity]+';font-weight:600">['+({high:'高',medium:'中',low:'低'}[it.severity])+']</span> <b>'+esc(it.rule)+'</b>：'+esc(it.message)+'<br><span class="note small">建议：'+esc(it.suggestion)+'</span></li>';
+      }
+      html += '</ul></div>';
+    } else { html += '<div class="note" style="margin-top:8px">未发现问题，简历 ATS 友好度良好。</div>'; }
+    out.innerHTML = html;
+  }catch(e){ out.innerHTML='<div class="note warn">体检失败：'+esc(e.message)+'</div>'; }
+  finally{ btn.disabled=false; btn.textContent='开始体检'; }
+});
+
+/* 投递效果 A/B 测试 */
+async function renderAb(){
+  const out=$('#abResult'); out.innerHTML='加载中…';
+  try{
+    const r=await api('/api/apply/ab-report');
+    if(!r.strategies || !r.strategies.length){ out.innerHTML='<div class="note">暂无可分析数据（先真实投递几份，系统会自动打标策略）。</div>'; return; }
+    let html='<div class="note small" style="margin-bottom:8px">'+esc(r.note)+'</div>';
+    html+='<table class="tbl"><thead><tr><th>策略</th><th>投递数</th><th>回复</th><th>回复率</th><th>面试</th><th>面试率</th></tr></thead><tbody>';
+    for(const s of r.strategies){
+      html+='<tr><td>'+esc(s.strategy)+'</td><td>'+s.applications+'</td><td>'+s.replied+'</td><td>'+(s.replyRate)+'%</td><td>'+s.interviewed+'</td><td>'+(s.interviewRate)+'%</td></tr>';
+    }
+    html+='</tbody></table>';
+    if(r.letterVsNoLetter){
+      const lv=r.letterVsNoLetter;
+      const win = lv.winner==='inconclusive' ? '结论不显著' : ('胜出：'+(lv.winner==='letter'?'带求职信':'不带求职信'));
+      html+='<div class="note" style="margin-top:10px"><b>核心 A/B（带求职信 vs 不带）：</b>带求职信 '+lv.has.applications+' 份/回复率 '+lv.has.replyRate+'%，不带 '+lv.no.applications+' 份/回复率 '+lv.no.replyRate+'%。<b style="color:#ff7a45">'+win+'</b> —— '+esc(lv.note)+'</div>';
+    } else {
+      html+='<div class="note" style="margin-top:10px">需同时有「带求职信」与「不带求职信」两组样本才能对比（在批量投递里切换「投递后发求职信」开关即可分流）。</div>';
+    }
+    out.innerHTML=html;
+  }catch(e){ out.innerHTML='<div class="note warn">生成失败：'+esc(e.message)+'</div>'; }
+}
+$('#abRun').addEventListener('click', renderAb);
+$('#abBackfill').addEventListener('click', async ()=>{
+  const btn=$('#abBackfill'); btn.disabled=true;
+  try{ const r=await api('/api/apply/ab-backfill',{method:'POST'}); alert('已回填 '+r.backfilled+' 条历史未打标投递（标记为 legacy）'); renderAb(); }
+  catch(e){ alert('失败：'+e.message); }
+  finally{ btn.disabled=false; }
+});
+
+/* 投递操作证据回溯 */
+async function loadEvidence(){
+  const out=$('#eviResult'); if(!out) return; out.innerHTML='加载中…';
+  try{
+    const rows=await api('/api/applications?limit=200');
+    const withEvi=(rows||[]).filter(a=>a.evidence_path);
+    if(!withEvi.length){ out.innerHTML='<div class="note">暂无操作证据（真实投递后自动截图留存）。</div>'; return; }
+    let html='<div class="note small" style="margin-bottom:8px">共 '+withEvi.length+' 份投递已留存操作截图。</div><div style="display:flex;flex-wrap:wrap;gap:12px">';
+    for(const a of withEvi.slice(0,30)){
+      html+='<div style="width:200px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff">'
+        +'<a href="'+esc(a.evidence_path)+'" target="_blank"><img src="'+esc(a.evidence_path)+'" style="width:100%;height:120px;object-fit:cover;display:block" onerror="this.style.display=\'none\'"></a>'
+        +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(a.position||''))+'<br><span class="muted">'+esc(a.platform)+' · '+(a.created_at||'').slice(0,10)+'</span></div></div>';
+    }
+    html+='</div>';
+    out.innerHTML=html;
+  }catch(e){ out.innerHTML='<div class="note warn">加载失败：'+esc(e.message)+'</div>'; }
+}
 
 /* ---------- service health ---------- */
 async function checkSvc(){
@@ -811,6 +951,7 @@ $('#batchRun').addEventListener('click', async ()=>{
         excludeApplied: $('#batchExclude').checked,
         keywords: $('#batchKeywords').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
         realJdOnly: $('#batchReal').checked,
+        remoteOnly: $('#batchRemote').checked,
         city: $('#batchCity').value || undefined,
         minScore,
         dailyLimit,

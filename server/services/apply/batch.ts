@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
 import { collectBossToDb } from './engine.js';
-import { toApplyProfile } from './common.js';
+import { toApplyProfile, tryScreenshot } from './common.js';
 import { execAction } from '../browser.js';
 import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
@@ -91,6 +91,7 @@ import { composeCoverLetter, markLetterSent } from './coverLetter.js';
 import { runExchangeActions, getExchangeActions, summarizeExchange } from './exchangeContact.js';
 import { ensureChatResumePng, sendChatResumeImage } from './chatResumeImage.js';
 import { checkAndAdvance } from './schedule.js';
+import { getResumeVersion } from './resumeVersion.js';
 import { isClosingRelatedError, randomInt } from '../safeOp.js';
 
 export interface BatchCriteria {
@@ -113,6 +114,8 @@ export interface BatchCriteria {
    * 宁可少投也不能把号玩坏（参考同类开源项目的硬性频率表）。
    */
   dailyLimit?: number;
+  /** 仅投递远程岗位（jobs.remote=1，对标 Resumly「远程岗位筛选」） */
+  remoteOnly?: boolean;
 }
 
 export interface BatchInput {
@@ -353,6 +356,8 @@ export async function runBatchApply(
   const baseFiltered = jobs.filter(j => {
     const blob = blobOf(j);
     if (city && !((j.city || '').toLowerCase().includes(city) || blob.includes(city))) return false;
+    // 远程岗位筛选（对标 Resumly）：remoteOnly 时只保留 jobs.remote=1
+    if (input.criteria?.remoteOnly && j.remote !== 1) return false;
     if (input.criteria?.minSalary != null || input.criteria?.maxSalary != null) {
       const s = parseSalary(j.salary);
       if (input.criteria!.minSalary != null && s.max != null && s.max < input.criteria!.minSalary) return false;
@@ -573,9 +578,10 @@ export async function runBatchApply(
 
     if (res.status === 'applied') {
       applied++;
+      const appId = randomUUID();
       try {
         db.createApplication({
-          id: randomUUID(),
+          id: appId,
           platform,
           company: res.company || job.company || '',
           position: res.position || job.position || '',
@@ -592,6 +598,8 @@ export async function runBatchApply(
       // ── 投递成功后的「追加动作」（对标职得鸭 AI写求职信 / 交换联系方式 / 发简历图）
       // 全部为可选，且**任何一步失败都不影响"已投递"这个既成事实**，只记日志。
       const extras: string[] = [];
+      // 是否真正发出求职信（用于 A/B 策略打标，见下方 strategy 计算）
+      let letterSentThisJob = false;
       try {
         if (input.criteria?.coverLetter) {
           const letter = await composeCoverLetter({
@@ -613,6 +621,7 @@ export async function runBatchApply(
                 if ((await execAction(platform, 'click', { text: t, timeout: 4000 })).ok) break;
               }
               markLetterSent({ platform, job: { id: job.id, company: job.company, position: job.position }, content: letter.content, source: letter.source });
+              letterSentThisJob = true;
               extras.push(`求职信已发送（${letter.source}，${letter.content.length} 字）`);
             } else {
               extras.push('求职信已生成但未找到聊天输入框');
@@ -650,6 +659,22 @@ export async function runBatchApply(
       } catch (e: any) {
         extras.push(`追加动作异常：${e?.message || e}`);
       }
+
+      // ── A/B 策略打标 + 操作录屏回溯（对标 LoopCV / CareerBoom）──
+      // strategy = 「是否带求职信」+「用了哪版简历」，如 `letter|tailored` / `no_letter|original`。
+      // evidence_path = 投递瞬间对平台页截图，存 data/evidence，可审计「当时点了什么」、降低封号风险。
+      try {
+        const letter = (input.criteria?.coverLetter && letterSentThisJob) ? 'letter' : 'no_letter';
+        const rv = getResumeVersion();
+        const strategy = `${letter}|${rv}`;
+        let evidencePath: string | undefined;
+        try { evidencePath = await tryScreenshot(platform); } catch { /* 截图失败不阻断 */ }
+        db.updateApplication(appId, {
+          strategy,
+          evidence_path: evidencePath || null,
+        });
+        if (evidencePath) extras.push(`已留存操作证据截图`);
+      } catch { /* 打标/截图失败不阻断主流程 */ }
 
       if (extras.length) {
         const last = results[results.length - 1];
