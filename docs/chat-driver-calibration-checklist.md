@@ -1,7 +1,8 @@
 # 逐平台聊天驱动校准 Checklist（auto-reply 7 平台）
 
 > 配套代码：`server/services/apply/platformsChat.ts`（7 平台 config）+ `server/services/apply/genericChatDriver.ts`（通用工厂）+ `scripts/probe_chat.ts`（真机探针）。
-> 状态：7 平台当前均为 `calibrated:false` 启发式基线 —— **校准前引擎不误发（消息侧判定未知则跳过、不回），但也不会真正回复，直到本 checklist 走完。**
+> 状态：**zhilian 已真机校准（`calibrated:true`，2026-09-24）**；其余 6 平台仍 `calibrated:false` 启发式基线 —— 校准前引擎不误发（消息侧判定未知则跳过、不回），但也不会真正回复，直到本 checklist 走完。
+> ⚠️ 2026-09-24 实机探测结论：7 平台里仅 zhilian 当前具备校准条件（已登录 + 有独立 Web IM）。job51(403 反爬)/chinahr(无消息入口)/yupao(蓝领无 Web IM) 即便已登录也无可用 Web 收件箱；nowcoder/iguopin/yingjiesheng 三个 profile **未登录**，需先登录再校。详见 §6。
 > 校准目标：把每个平台 IM 的真实 DOM class 回填到 config 并置 `calibrated:true`，使其能真实读消息 / 回话 / 点简历卡片「同意」。
 
 ---
@@ -64,7 +65,7 @@
 
 | 平台 | chatUrl | IM 形态 | 重点校准字段 | 备注 / 坑 |
 |---|---|---|---|---|
-| **zhilian** 智联 | `https://www.zhaopin.com/` | 首页**浮层** IM | `entryTextRe`（消息/沟通/聊天）、`listItemSelector`、`messageSelector`、`mine/hrClassRe` | 浮层入口按文本点；会话列表在浮层内，先确认浮层已展开 |
+| **zhilian** 智联 ✅已校准 | `https://i.zhaopin.com/im` | **独立 IM 页**（首页带 refcode 跳转） | 已回填：`listItemSelector=.im-session-item`、`nameSelector=.im-session-item__name`、`messageSelector=.im-message__bubble`、`textSelector=.im-msg-text`、`mineClassRe=im-message__bubble--me`、`hrElse=true`、`inputSelector=textarea.im-sender__input`、`sendSelector=.im-sender__send-btn` | **2026-09-24 真机验证通过**：抽出 20 会话、readConversation 正确分类 me/hr；HR 气泡无专属 class，靠 `hrElse` 判定。已 `calibrated:true` |
 | **job51** 前程无忧 | `https://www.51job.com/` | 首页**浮层** IM | 同上 | 51job 有滑块风控（采集时已知），校准时人工过滑块、勿并发 |
 | **nowcoder** 牛客 | `https://www.nowcoder.com/im` | **独立页** `/im` | `entryTextRe`（消息/私信/IM，已设）、`listItemSelector`、`messageSelector` | 独立页，无需点浮层入口；消息页结构较标准 |
 | **iguopin** 国聘 | `https://www.iguopin.com/` | 首页**浮层** IM | 同 zhilian | 采集走 API，IM 选择器需真机取 |
@@ -108,12 +109,13 @@ tsx scripts/contract_tests.ts        # 期望 170/170
 
 ## 6. 进度记录（校准一个勾一个）
 
-- [ ] zhilian — `calibrated:true` 日期：____
-- [ ] job51 — `calibrated:true` 日期：____
-- [ ] nowcoder — `calibrated:true` 日期：____
-- [ ] iguopin — `calibrated:true` 日期：____
-- [ ] yupao — `calibrated:true` 日期：____
-- [ ] chinahr — `calibrated:true` 日期：____
-- [ ] yingjiesheng — `calibrated:true` 日期：____
+- [x] **zhilian** — `calibrated:true` 日期：**2026-09-24**（真机验证通过：20 会话 / me+hr 分类正确）
+- [ ] **job51** — 阻塞：首页已登录，但直跳 `i.51job.com` 个人中心 **403 反爬**，顶栏无「消息」入口；51job 求职侧 IM 在「我的投递→聊一聊」深链，无独立收件箱 URL。→ 需人工养熟并定位真实聊天 URL 再校。`calibrated:false`
+- [ ] **nowcoder** — 阻塞：profile **未登录**（`/im` 返回 404「页面找不到了」）。→ 先登录牛客再跑探针。`calibrated:false`
+- [ ] **iguopin** — 阻塞：profile **未登录**（页显「登录/注册」）。仅见 `/chat/?a=kefu`（客服）非 HR 聊天。→ 先登录国聘再跑探针。`calibrated:false`
+- [ ] **yupao** — 阻塞：profile 已登录，但全站**无「消息/沟通」入口**（鱼泡为蓝领直聘，HR 沟通走 APP 而非 Web IM）。→ 建议本平台暂不启用自动回复（保持 `calibrated:false`，引擎不误发）。`calibrated:false`
+- [ ] **chinahr** — 阻塞：profile 已登录，点开「杨欣宇」下拉仅 我的简历/退出，**全站无「消息」入口**（新华英才 58 系求职侧无独立 Web HR 收件箱）。→ 确认是否真有 Web IM，否则同鱼泡处理。`calibrated:false`
+- [ ] **yingjiesheng** — 阻塞：profile **未登录**（页显「登录/注册」）。→ 先登录应届生再跑探针。`calibrated:false`
 
+> 说明：7 平台里当前仅 zhilian 具备校准条件。其余 6 个的阻塞分两类：① **未登录**（nowcoder/iguopin/yingjiesheng，3 个）——用户先在各 profile 登录即可解除；② **已登录但无可用 Web IM**（job51 403 / chinahr 无入口 / yupao 蓝领无 Web IM，3 个）——需确认平台是否提供 Web 侧 HR 聊天，否则该平台自动回复维持关闭。
 > 全部勾完 = 9 平台（boss/liepin + 7）自动回复 + 简历卡片全部投产。

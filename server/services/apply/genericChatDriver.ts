@@ -54,6 +54,9 @@ export interface ChatDriverConfig {
   mineClassRe?: string;
   /** HR 消息 class 正则（如 /\b(friend|left|in|opposite|hr|them|peer|other)\b/i） */
   hrClassRe?: string;
+  /** 非己方即 HR：多数双人聊天 UI 只标记「我方」气泡（如 zhilian 的 --me），HR 侧无专属 class。
+   *  置 true 时：命中 mineClassRe → me，否则该气泡 → hr（自动互斥，无需 HR class）。推荐开启。 */
+  hrElse?: boolean;
   /** 气泡内文本元素选择器（缺省用元素自身 innerText） */
   textSelector?: string;
   /** 系统/非真人消息容器选择器（命中则跳过，防把推送卡片当 HR 说话） */
@@ -188,9 +191,7 @@ export function buildChatDriver(cfg: ChatDriverConfig): ChatDriver & { __setExFo
           const isMine=${JSON.stringify(cfg.mineClassRe || '__MINE__')}!=='__MINE__'
             ? new RegExp(${JSON.stringify(cfg.mineClassRe || '')},'i').test(cls)
             : (new RegExp('\\\\b(mine|self|my|right|send|out|owner|user|me)\\\\b','i').test(cls) || !!li.querySelector('.item-myself,.mine,.self'));
-          const isHr=${JSON.stringify(cfg.hrClassRe || '__HR__')}!=='__HR__'
-            ? new RegExp(${JSON.stringify(cfg.hrClassRe || '')},'i').test(cls)
-            : (new RegExp('\\\\b(friend|left|in|opposite|hr|them|peer|other|bot)\\\\b','i').test(cls) || !!li.querySelector('.item-friend,.friend,.other'));
+          const isHr=${cfg.hrElse ? '!isMine' : `${JSON.stringify(cfg.hrClassRe || '__HR__')}!=='__HR__' ? new RegExp(${JSON.stringify(cfg.hrClassRe || '')},'i').test(cls) : (new RegExp('\\\\b(friend|left|in|opposite|hr|them|peer|other|bot)\\\\b','i').test(cls) || !!li.querySelector('.item-friend,.friend,.other'))`};
           // 只明确判定的一侧才入列：宁可不回，也不误把己方消息当 HR 回
           if(isMine && !isHr) msgs.push({side:'me',text:txt});
           else if(isHr && !isMine) msgs.push({side:'hr',text:txt});
