@@ -871,6 +871,22 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     cfgOf(yingjieshengChatDriver)?.autoReplySupported !== false);
 }
 
+// ── 版本标识 + 检查更新（对齐「商城软件」差距表 2026-09-26：包无版本标识 / 无更新机制）──
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const src = fs.readFileSync(path.join(ROOT, 'server/index.ts'), 'utf8');
+  check('版本接口 /api/version 已注册', src.includes('app.get("/api/version"'),
+    '缺它则用户无法自证自己跑的是哪一版，报障无从谈起');
+  check('更新检查接口 /api/update-check 已注册', src.includes('app.get("/api/update-check"'),
+    '缺它则没有任何新版本提示渠道');
+  // 安全边界：更新检查只许「提示 + 给链接」，绝不能自动下载/安装
+  check('更新检查不含自动下载/安装动作', !/autoInstall|autoDownload|installer/i.test(src),
+    '单机绿色包的更新 = 重新解压，不许有自动写盘行为');
+  const con = fs.readFileSync(path.join(ROOT, 'public/console.html'), 'utf8');
+  check('控制台常显版本并接更新检查', con.includes('async function loadVersion') && con.includes('async function checkUpdate'),
+    '自检卡应有版本行与「检查更新」按钮');
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}`);
 

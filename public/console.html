@@ -206,9 +206,12 @@
         <div class="card" id="selfCheckCard" style="margin-bottom:16px">
           <h2>开箱自检 <span class="tag" id="scSummary">检查中…</span></h2>
           <div id="scList" class="note small" style="padding:4px 0">正在检查首次使用所需条件…</div>
-          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
             <button class="btn sm" id="scRerun">重新检查</button>
+            <button class="btn sm" id="scUpdate">检查更新</button>
+            <span class="note small" id="scVersion" style="align-self:center"></span>
           </div>
+          <div class="note small" id="scUpdateResult" style="margin-top:8px;display:none"></div>
         </div>
 
         <div class="grid cols-4" style="margin-bottom:16px">
@@ -940,6 +943,42 @@ async function loadSelfCheck(){
   }
 }
 
+/* ---------- 版本标识 + 检查更新 ---------- */
+// 背景（2026-09-26 对齐「商城软件」差距表）：包无版本标识、无任何更新机制。
+// 这里把 /api/version 常显在自检卡上，检查更新只做「提示 + 给下载链接」，
+// 不自动下载不自动安装（单机绿色包，更新 = 重新解压）。
+// ⚠️ 必须定义在顶层：scUpdate 的事件监听器在顶层作用域引用 checkUpdate，
+//    放进 loadDashboard 体内会变成局部函数 → 顶层注册时 ReferenceError，整页脚本中断。
+async function loadVersion(){
+  const host = $('#scVersion'); if(!host) return;
+  try{
+    const v = await api('/api/version');
+    if(!v){ host.textContent=''; return; }
+    host.textContent = '当前版本 v' + (v.version||'dev')
+      + (v.commit ? '（' + esc(String(v.commit).slice(0,7)) + (v.dirty ? ' + 未提交改动' : '') + '）' : '')
+      + ' · 仓库 ' + (v.repo||'');
+  }catch(e){ host.textContent = ''; }
+}
+async function checkUpdate(){
+  const host = $('#scUpdateResult'); if(!host) return;
+  host.style.display=''; host.textContent = '正在检查更新…';
+  try{
+    const r = await api('/api/update-check');
+    if(r && r.updateAvailable && r.latest){
+      host.innerHTML = '🆕 有新版本：<b>' + esc(r.latest.tag) + '</b>（当前 v' + esc(r.current.version)
+        + (r.current.commit ? ' / ' + esc(String(r.current.commit).slice(0,7)) : '')
+        + '）。<a href="' + esc(r.latest.url) + '" target="_blank" rel="noopener">前往 Releases 下载</a>'
+        + ' —— 更新方式：下载新包解压覆盖（登录态在 C:\\chrome-cdp-profile*，不在解压目录，重装不丢）。';
+    }else if(r && r.latest){
+      host.textContent = '✅ 已是最新版（' + esc(r.latest.tag) + '，发布于 ' + (r.latest.publishedAt ? esc(String(r.latest.publishedAt).slice(0,10)) : '未知日期') + '）。';
+    }else{
+      host.textContent = 'ℹ️ ' + esc((r && r.note) || '暂无法获取最新版本信息。');
+    }
+  }catch(e){
+    host.textContent = '检查更新失败：' + esc((e && e.message) || String(e));
+  }
+}
+
 async function loadDashboard(){
   let f=null;
   try{ f = await api('/api/stats/funnel'); }catch(e){}
@@ -958,6 +997,7 @@ async function loadDashboard(){
   loadHealth();
   loadTrend();
   loadSelfCheck();
+  loadVersion();
   // platform cards
   const grid = $('#pfGrid'); grid.innerHTML='';
   // ⚠️ /api/platforms/health 返回的是**数组**：{deep, summary, platforms:[...]}
@@ -1039,6 +1079,7 @@ async function loadHealth(){
 }
 $('#hGoLogs').addEventListener('click', ()=>navigate('logs'));
 if($('#scRerun')) $('#scRerun').addEventListener('click', loadSelfCheck);
+if($('#scUpdate')) $('#scUpdate').addEventListener('click', checkUpdate);
 $('#hTestAlert').addEventListener('click', async ()=>{
   const b = $('#hTestAlert'); const old = b.textContent;
   b.disabled = true; b.textContent = '发送中…';

@@ -238,6 +238,64 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
 });
 
+// ── 版本标识：让「我现在跑的是哪一版」可自证 ──────────────────────────────────
+// 背景（2026-09-26 对齐「商城软件」差距表）：version.json 只存在于分发包里，
+// 用户装完后 UI 看不到任何版本信息，报障时无法说明自己是哪一版。
+// 仓库里开发时没有 version.json（gitignore），此时 commit/builtAt 为 null，属正常。
+app.get("/api/version", (_req, res) => {
+  const root = path.join(__dirname, '..');
+  let build: { commit?: string; builtAt?: string; dirty?: boolean } = {};
+  try { build = JSON.parse(fs.readFileSync(path.join(root, 'version.json'), 'utf8')); } catch { /* 开发树无此文件 */ }
+  let pkgVersion = '';
+  try { pkgVersion = String(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || ''); } catch { /* 忽略 */ }
+  res.json({
+    version: pkgVersion || 'dev',
+    commit: build.commit || null,
+    builtAt: build.builtAt || null,
+    dirty: typeof build.dirty === 'boolean' ? build.dirty : null,
+    repo: 'Dasikong-Cell/offer-where',
+  });
+});
+
+// ── 检查更新：对照 GitHub Releases 最新版，提示用户去下载 ────────────────────
+// 只读 GitHub 公开 API，不自动下载、不自动安装（单机绿色包，更新 = 重新解压）。
+// 无外网 / 仓库无 Release 时如实返回，绝不报错打断使用。
+app.get("/api/update-check", async (_req, res) => {
+  const root = path.join(__dirname, '..');
+  let build: { commit?: string } = {};
+  try { build = JSON.parse(fs.readFileSync(path.join(root, 'version.json'), 'utf8')); } catch { /* 忽略 */ }
+  let pkgVersion = '';
+  try { pkgVersion = String(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || ''); } catch { /* 忽略 */ }
+  const current = { version: pkgVersion || 'dev', commit: build.commit || null };
+  const base = { current, repo: 'Dasikong-Cell/offer-where' };
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const r = await fetch('https://api.github.com/repos/Dasikong-Cell/offer-where/releases/latest', {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'offer-where-update-check', Accept: 'application/vnd.github+json' },
+    });
+    if (r.status === 404) {
+      return res.json({ ...base, latest: null, updateAvailable: false, note: '仓库还没有发布过 Release' });
+    }
+    if (!r.ok) {
+      return res.json({ ...base, latest: null, updateAvailable: false, note: `GitHub 返回 ${r.status}，暂时查不到最新版` });
+    }
+    const j: any = await r.json();
+    const tag = String(j.tag_name || '');
+    const latest = { tag, name: String(j.name || tag), url: String(j.html_url || `https://github.com/Dasikong-Cell/offer-where/releases/tag/${tag}`), publishedAt: j.published_at || null };
+    // 判定「已是最新」：tag 与包版本一致，或 tag 里含包的构建提交号（自动 tag 形如 v<日期>-<短提交号>）
+    const sameVersion = tag.replace(/^v/i, '') === current.version;
+    const sameCommit = !!(current.commit && tag.toLowerCase().includes(String(current.commit).toLowerCase()));
+    res.json({ ...base, latest, updateAvailable: !(sameVersion || sameCommit), note: (sameVersion || sameCommit) ? '已是最新版' : '有新版本可下载' });
+  } catch (e: any) {
+    res.json({ ...base, latest: null, updateAvailable: false, note: '检查更新失败（无外网或 GitHub 不可达）：' + String(e?.message || e) });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 // ── 首跑自检：把「还差什么才能投出第一份简历」变成可读清单 ──────────────────────
 // 背景（2026-09-25 开箱实测）：接收方解压后对着控制台无从下手 —— 浏览器窗口没开、
 // 简历没上传、平台没登录，界面不会告诉他「下一步做什么」；更糟的是缺少
