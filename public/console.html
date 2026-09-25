@@ -203,6 +203,17 @@
     <div class="view-wrap">
       <!-- ============ Dashboard ============ -->
       <section class="view active" id="view-dashboard">
+        <!-- 首跑图形化向导：自检有待办时置顶显示，每步带可点的动作按钮 -->
+        <div class="card accent" id="wizardCard" style="margin-bottom:16px;display:none">
+          <h2>首次使用向导 <span class="tag" id="wzStep">检查中…</span></h2>
+          <div class="note small" style="margin:6px 0 4px">按顺序完成下面的步骤；全部完成后本向导自动收起。</div>
+          <div id="wzList"></div>
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+            <button class="btn sm" id="wzRerun">重新检查</button>
+            <button class="btn sm" id="wzHide">本次跳过</button>
+          </div>
+        </div>
+
         <div class="card" id="selfCheckCard" style="margin-bottom:16px">
           <h2>开箱自检 <span class="tag" id="scSummary">检查中…</span></h2>
           <div id="scList" class="note small" style="padding:4px 0">正在检查首次使用所需条件…</div>
@@ -979,6 +990,46 @@ async function checkUpdate(){
   }
 }
 
+/* ---------- 首跑图形化向导 ---------- */
+// 背景（2026-09-26 对齐「商城软件」差距表）：自检卡只「报告缺什么」，不是向导 ——
+// 商城软件的惯例是首跑给分步指引、每步可以点。这里把 selfcheck 的 todo 项
+// 渲染成带动作按钮的步骤清单：开窗口（真调 ensure-all）/ 传简历（跳简历中心）/ 装 Chrome（外链）。
+// ⚠️ 与 loadVersion 一样必须定义在顶层（底部事件监听器会引用 renderWizard）。
+const WZ_DISMISS_KEY = 'wzFirstRunDismissed';
+async function renderWizard(){
+  const card = $('#wizardCard'); if(!card) return;
+  let r = null;
+  try{ r = await api('/api/selfcheck'); }catch(e){ card.style.display='none'; return; }
+  const todos = (r && r.items) ? r.items.filter(i=>i.status==='todo') : [];
+  const dismissed = (sessionStorage.getItem(WZ_DISMISS_KEY)==='1');
+  if(!todos.length || dismissed){ card.style.display='none'; return; }
+  card.style.display='';
+  $('#wzStep').textContent = '还差 ' + todos.length + ' 步';
+  $('#wzList').innerHTML = todos.map((it,idx)=>{
+    let act = '';
+    if(it.id==='windows') act = '<button class="btn sm" data-wz="windows">一键拉起全部平台窗口</button>';
+    else if(it.id==='resume') act = '<button class="btn sm" data-wz="resume">去上传简历</button>';
+    else if(it.id==='chrome') act = '<a class="btn sm" href="https://www.google.com/chrome/" target="_blank" rel="noopener">打开 Chrome 下载页</a>';
+    return '<div class="kv" style="align-items:flex-start;gap:12px;padding:8px 0;border-bottom:1px solid rgba(128,128,128,.18)">'
+      + '<span style="min-width:24px;flex:none;opacity:.7">' + (idx+1) + '.</span>'
+      + '<b style="font-weight:500;flex:none;min-width:96px">' + esc(it.label) + '</b>'
+      + '<span style="flex:1;opacity:.85">' + esc(it.detail) + '</span>'
+      + (act ? '<span style="flex:none">' + act + '</span>' : '')
+      + '</div>';
+  }).join('');
+  $$('#wzList [data-wz]').forEach(b=>b.addEventListener('click',()=>runWizardAction(b.dataset.wz)));
+}
+async function runWizardAction(kind){
+  if(kind==='windows'){
+    const btn = document.querySelector('#wzList [data-wz="windows"]');
+    if(btn){ btn.disabled = true; btn.textContent = '正在拉起…（首次约 10–20 秒）'; }
+    try{ await api('/api/browser/ensure-all',{method:'POST'}); }catch(e){ /* 失败时重跑自检会如实显示 */ }
+    setTimeout(renderWizard, 3000);
+  }else if(kind==='resume'){
+    navigate('resume');
+  }
+}
+
 async function loadDashboard(){
   let f=null;
   try{ f = await api('/api/stats/funnel'); }catch(e){}
@@ -998,6 +1049,7 @@ async function loadDashboard(){
   loadTrend();
   loadSelfCheck();
   loadVersion();
+  renderWizard();
   // platform cards
   const grid = $('#pfGrid'); grid.innerHTML='';
   // ⚠️ /api/platforms/health 返回的是**数组**：{deep, summary, platforms:[...]}
@@ -1080,6 +1132,8 @@ async function loadHealth(){
 $('#hGoLogs').addEventListener('click', ()=>navigate('logs'));
 if($('#scRerun')) $('#scRerun').addEventListener('click', loadSelfCheck);
 if($('#scUpdate')) $('#scUpdate').addEventListener('click', checkUpdate);
+if($('#wzRerun')) $('#wzRerun').addEventListener('click', renderWizard);
+if($('#wzHide')) $('#wzHide').addEventListener('click', ()=>{ sessionStorage.setItem(WZ_DISMISS_KEY,'1'); const c=$('#wizardCard'); if(c) c.style.display='none'; });
 $('#hTestAlert').addEventListener('click', async ()=>{
   const b = $('#hTestAlert'); const old = b.textContent;
   b.disabled = true; b.textContent = '发送中…';

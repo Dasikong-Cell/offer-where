@@ -885,6 +885,12 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const con = fs.readFileSync(path.join(ROOT, 'public/console.html'), 'utf8');
   check('控制台常显版本并接更新检查', con.includes('async function loadVersion') && con.includes('async function checkUpdate'),
     '自检卡应有版本行与「检查更新」按钮');
+  // 首跑图形化向导（2026-09-26 对齐差距表「配置：图形化向导」行）：
+  // 自检卡只「报告缺什么」，向导才提供「每步可以点」的动作。
+  check('首跑图形化向导已接入控制台', con.includes('async function renderWizard') && con.includes('data-wz="windows"') && con.includes('data-wz="resume"'),
+    '向导应把 selfcheck 的 todo 项渲染成带动作按钮的步骤');
+  check('向导动作走真实接口（ensure-all）', con.includes('/api/browser/ensure-all'),
+    '「拉起窗口」必须调用已存在的后端自愈接口，不许是装饰性按钮');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
