@@ -124,7 +124,7 @@ SELECT COUNT(*) FROM applications WHERE position = ? AND (? IS NULL OR ? = '' OR
 原状：`.github/workflows/ci.yml:12` `runs-on: ubuntu-latest`，只跑 `npm ci` + `verify` + `test`（单元/合约）。
 > 而产品是 **Windows-only**：`.bat` 启动器、本机 Chrome/CDP、Windows 路径解析、`pack.ps1`（PowerShell + `tar.exe`）——ubuntu job 一样都覆盖不到；也无浏览器 E2E。
 > ✅ **已整改**：新增 `package-smoke` job（`windows-latest`）→ `npm ci` → 用 runner 自带 node 22 顶替被 gitignore 的 `node/`（`ci.yml:49-54`）→ 跑 `scripts/pack_smoke.ps1`：打包 → 解压到全新目录 → 断言无 `.env`/`data`/`src`/编译产物 → 用**包内 node** 启动 → `/api/ping` + `/api/health` + `/api/apply/quota`（证明原生 SQLite 已加载）+ 控制台 200 + `data/chat.db` 自动重建 → 清理。
-> 📌 **CI #30（`2998a4f`）整轮 Success（5m10s）**：`类型检查 + 门禁 + 测试` 1m20s ✅、`Windows 打包 + 解压即用冒烟` 5m6s ✅ —— **真实交付路径首次在干净 Windows runner 上跑通**。
+> 📌 **CI #30（`2998a4f`）整轮 Success（5m10s）**：`类型检查 + 门禁 + 测试` 1m20s ✅、`Windows 打包 + 解压即用冒烟` 5m6s ✅ —— **真实交付路径首次在干净 Windows runner 上跑通**。随后的 **#31（`fcfb059`）亦 Success**，并把 action 升到 `v5`，`Node.js 20 is deprecated` 告警清零。
 > 残留（非阻塞）：仍无浏览器 E2E（无法在 runner 上跑本机 Chrome/CDP）。
 > ⚠️ 更正：上一轮评估报告写「无 CI 流水线」是**错的**，此项目**有** CI；已在报告更正。
 

@@ -123,13 +123,15 @@
 **整改后评分**（评估时 → 现状）：安全边界 74 → **86**（P1 清零 + 响应头/转义）；可交付性 80 → **84**（P2-1 修复 + 文档补全）；测试覆盖 82 → **90**（**CI 实为存在**——上一轮「无 CI」判断有误已更正；且新增 `package-smoke`(windows-latest) 并以 **CI #30 整轮 Success** 实证真实交付路径）。综合 **83 → ≈86**，**完全达标**。
 > 注：测试数 193 → 197（P1 整改）→ **203**（短板整改新增 H8 已投口径回归等）；本地 `npm test` 全绿，CI 双 job 全绿。
 
-**CI #30（`2998a4f`）实跑结果**：整轮 **Success / 5m10s**
+**CI 实跑结果（连续两轮全绿）**
 
-| job | runner | 结果 | 耗时 |
-|---|---|---|---|
-| 类型检查 + 门禁 + 测试 | ubuntu-latest | ✅ success | 1m20s |
-| Windows 打包 + 解压即用冒烟 | windows-latest | ✅ success | 5m6s |
+| run | commit | 内容 | 整轮 | 门禁+测试 (ubuntu) | 打包冒烟 (windows) |
+|---|---|---|---|---|---|
+| #30 | `2998a4f` | 真·录屏 + 修 CI 恒红 | ✅ Success / 5m10s | ✅ 1m20s | ✅ 5m6s |
+| #31 | `fcfb059` | action 升 v5 | ✅ Success / 5m18s | ✅ 1m21s | ✅ 5m13s |
 
-> ⚠️ 非阻塞告警（GitHub 提示，非本项目缺陷）：`actions/checkout@v4`、`actions/setup-node@v4` 仍以 Node 20 为目标（被强制在 Node 24 上跑）；`ubuntu-latest` 将于 2026-10-19 迁移到 Ubuntu 26。建议后续把两个 action 升到 `@v5`。
+> ✅ **告警已清零**：`#30` 上还有 2 条 `Node.js 20 is deprecated`（`actions/checkout@v4`、`actions/setup-node@v4`）；升到 `@v5` 后 **`#31` 上该告警为 0 条**。
+> ℹ️ 仅剩 1 条 notice（无法干预、与本项目无关）：`ubuntu-latest` 将于 2026-10-19 自动迁移到 Ubuntu 26。
+> 📌 附带发现：CI 耗时从 #7–#28 的 **34–56s**（仅 ubuntu 单 job）变为 **5 分钟级**，正是 `package-smoke`(windows-latest) 加入（#29 起）所致——这是**必要成本**，换来真实交付路径被守住。
 
 **另：本轮「找出不足」新增短板清单** → 见 `docs/shortcomings-2026-09-25.md`（功能/准确性/安全/工程/架构 5 类，含 3 条「先修小事」）。
