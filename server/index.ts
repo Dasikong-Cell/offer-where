@@ -274,14 +274,19 @@ app.get("/api/selfcheck", async (_req, res) => {
   });
 
   // 4) 调试窗口是否已打开（并行探活，全失败也只需 ~1.2s）
+  // ⚠️ start_all.bat 只开 5 个核心平台窗口（BOSS/猎聘/51job/智联/官网），而这里统计的是
+  //    全部已登记端口 —— 首跑用户看到「已打开 5/15」却不知道剩下 10 个怎么开，
+  //    所以把补齐方式直接写进 detail，而不是只报一个比例。
   const ports = Array.from(new Set(Object.values(DEFAULT_CDP_PORTS))).sort((a, b) => a - b);
   const aliveFlags = await Promise.all(ports.map((p) => isPortUp(p, 1200)));
   const alive = ports.filter((_, i) => aliveFlags[i]);
+  const winHint = '其余平台：双击 start_platforms.bat（默认再开 9 个，加 all 全开），或在控制台对应平台卡片点「打开窗口」';
   items.push({
     id: 'windows', label: '平台调试窗口', status: alive.length ? 'ok' : 'todo',
     detail: alive.length
       ? `已打开 ${alive.length}/${ports.length} 个（端口 ${alive.join(', ')}）`
-      : '尚未打开任何平台窗口。双击 start_all.bat（或 start_platforms.bat）后重试',
+        + (alive.length < ports.length ? `。${winHint}` : '（已全部打开）')
+      : `尚未打开任何平台窗口。双击 start_all.bat（开 5 个核心平台）或 start_platforms.bat 后重试`,
   });
 
   // 5) 简历（未上传则投递与「一岗一简历」都无法工作）
