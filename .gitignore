@@ -47,6 +47,12 @@ data/
 .env.*
 !.env.example
 
+# ── 打包时生成的构建标识（pack.ps1 写入并打进 zip，不入库）──
+version.json
+
+# ── 本机会话记忆 / 本地技能（工作区状态的副本，因人而异，不该入库）──
+.workbuddy/
+
 # ── 临时调试脚本（未被任何源码引用）─────────────────────
 _dbinspect.cjs
 _dbjobs.cjs

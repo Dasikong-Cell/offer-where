@@ -26,6 +26,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
+import { detectChromePath } from './localEnv.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,7 +60,7 @@ function loadSpecs(): Map<number, LaunchSpec> {
     '9233': 'C:/chrome-cdp-profile-maimai',
     '9237': 'C:/chrome-cdp-profile-nowcoder',
   };
-  const chromePath = 'C:/Users/吉学静/AppData/Local/Google/Chrome/Application/chrome.exe';
+  const chromePath = detectChromePath();
   const flags = [
     '--no-first-run', '--no-default-browser-check',
     '--disable-background-timer-throttling',
@@ -71,6 +72,10 @@ function loadSpecs(): Map<number, LaunchSpec> {
   let cfg: any = {};
   if (fs.existsSync(CONFIG_PATH)) {
     try { cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch (e) { console.warn('[browserHealth] browserLaunch.json 解析失败，用内置兜底:', (e as Error).message); }
+  }
+  if (!cfg.chromePath && !chromePath) {
+    console.warn('[browserHealth] 未检测到 Google Chrome：崩溃自愈将无法拉起窗口。'
+      + '请安装 Chrome（https://www.google.com/chrome/），或在 browserLaunch.json 里显式配置 chromePath。');
   }
   // browserLaunch.json 为唯一真相源：文件存在且含 profiles 时以它为准，
   // 兜底映射仅在文件缺失/为空时使用（否则删除端口会被 fallback 合并加回，形同虚设）。
@@ -85,7 +90,7 @@ function loadSpecs(): Map<number, LaunchSpec> {
     map.set(port, {
       port,
       profile: String(profile),
-      chromePath: cfg.chromePath || chromePath,
+      chromePath: String(cfg.chromePath || chromePath || ''),
       flags: Array.isArray(cfg.flags) && cfg.flags.length ? cfg.flags : flags,
       waitMs: Number(rl.waitMs) || 12000,
       pollMs: Number(rl.pollMs) || 500,

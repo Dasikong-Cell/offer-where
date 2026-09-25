@@ -69,6 +69,41 @@ try {
   $q = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/apply/quota?platform=boss" -TimeoutSec 8
   if ($q.platform -ne 'boss') { throw "quota endpoint broken: " + ($q | ConvertTo-Json -Compress) }
 
+  # ── P0 regression guard: the port table MUST resolve without data/browser/cdp.json ──
+  # data/ never ships (it holds the resume, DB and login profiles), so a recipient has
+  # no cdp.json. History (2026-09-25 out-of-box test): connection.ts / browser.ts
+  # returned null when the file was missing -> every platform reported "not configured"
+  # and the apply engine degraded to Playwright's own Chromium -> the recipient got
+  # "Chromium 浏览器未下载。请执行：npx playwright install chromium" and the app's
+  # single core feature was dead on arrival. This assert is the guard for that.
+  $conn = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/browser/connections" -TimeoutSec 15
+  $boss = $conn.connections.boss
+  if (-not $boss.endpoint) { throw "port table lost its built-in fallback: boss endpoint is null without data/browser/cdp.json" }
+  if ($boss.endpoint -ne 'http://127.0.0.1:9223') { throw "unexpected default boss endpoint: " + $boss.endpoint }
+
+  # first-run self check must return the checklist (this is what tells a recipient
+  # what is still missing instead of leaving them staring at a blank console)
+  $sc = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/selfcheck" -TimeoutSec 20
+  if (-not $sc.items -or @($sc.items).Count -lt 5) { throw "selfcheck did not return the expected checklist" }
+
+  # response SHAPE guard for the platform health feed. History (2026-09-25): the API
+  # returns {deep, summary, platforms:[...]} (an ARRAY), but console.html indexed it as
+  # a keyed map (health[platformId]) and read non-existent fields (st.status / st.logged
+  # instead of verdict) -> all 15 dashboard cards silently showed "未知" forever while
+  # typecheck and every other test stayed green. deep=0 does not navigate any page, so
+  # this assert is fast and cannot disturb the platform windows.
+  $ph = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/platforms/health?deep=0" -TimeoutSec 40
+  $items = @($ph.platforms)
+  if ($items.Count -lt 10) { throw "platforms/health did not return the full platform array (got $($items.Count))" }
+  $one = $items[0]
+  if (-not $one.platform -or -not $one.verdict) {
+    throw "platforms/health items must expose .platform and .verdict -- console.html maps them by that field"
+  }
+  Write-Host ("      platforms/health: " + $items.Count + " items, sample=" + $one.platform + "/" + $one.verdict)
+
+  # build stamp must be shipped so a recipient can tell which revision they have
+  if (-not (Test-Path (Join-Path $tmp 'version.json'))) { throw "version.json (build stamp) is missing from the package" }
+
   # console document must be served
   $doc = Invoke-WebRequest -Uri "http://127.0.0.1:4401/" -TimeoutSec 8 -UseBasicParsing
   if ($doc.StatusCode -ne 200 -or $doc.RawContentLength -lt 1000) { throw "console not served properly" }

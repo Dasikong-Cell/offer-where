@@ -203,6 +203,14 @@
     <div class="view-wrap">
       <!-- ============ Dashboard ============ -->
       <section class="view active" id="view-dashboard">
+        <div class="card" id="selfCheckCard" style="margin-bottom:16px">
+          <h2>开箱自检 <span class="tag" id="scSummary">检查中…</span></h2>
+          <div id="scList" class="note small" style="padding:4px 0">正在检查首次使用所需条件…</div>
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+            <button class="btn sm" id="scRerun">重新检查</button>
+          </div>
+        </div>
+
         <div class="grid cols-4" style="margin-bottom:16px">
           <div class="card"><div class="stat"><div class="v" id="dTotal">–</div><div class="l">岗位总数</div></div></div>
           <div class="card"><div class="stat"><div class="v" id="dApplied">–</div><div class="l">已投递 / 投递率</div></div></div>
@@ -902,6 +910,36 @@ async function loadTrend(){
   }catch(e){ /* 趋势是只读附加信息，失败不影响看板 */ }
 }
 
+/* ---------- 开箱自检：首跑「还差什么」清单 ---------- */
+// 背景（2026-09-25 开箱实测）：接收方解压后无从下手 —— 窗口没开、简历没传、平台没登录，
+// 界面不会告诉他下一步做什么。这里把 GET /api/selfcheck 的结果渲染成显式清单。
+async function loadSelfCheck(){
+  const host = $('#scList'); if(!host) return;
+  const sum = $('#scSummary');
+  if(sum) sum.textContent = '检查中…';
+  try{
+    const r = await api('/api/selfcheck');
+    if(!r || !r.items){ host.innerHTML = '<div class="muted">自检接口无响应</div>'; if(sum) sum.textContent = '不可用'; return; }
+    const badge = { ok:['已就绪','b-ok'], todo:['待处理','b-bad'], warn:['可选','b-warn'] };
+    host.innerHTML = r.items.map(it=>{
+      const b = badge[it.status] || badge.warn;
+      return '<div class="kv" style="align-items:flex-start;gap:12px;padding:5px 0">'
+        + '<span style="min-width:128px;flex:none">'+esc(it.label)+'</span>'
+        + '<b style="font-weight:400;display:flex;gap:8px;align-items:baseline;flex:1;text-align:left">'
+        +   '<span class="st '+b[1]+'" style="flex:none">'+b[0]+'</span>'
+        +   '<span style="opacity:.85">'+esc(it.detail)+'</span>'
+        + '</b></div>';
+    }).join('');
+    if(sum){
+      sum.textContent = r.todo ? (r.todo + ' 项待处理') : '全部就绪 ✓';
+      sum.className = 'tag';
+    }
+  }catch(e){
+    host.innerHTML = '<div class="muted">自检失败：'+esc((e && e.message) || String(e))+'</div>';
+    if(sum) sum.textContent = '失败';
+  }
+}
+
 async function loadDashboard(){
   let f=null;
   try{ f = await api('/api/stats/funnel'); }catch(e){}
@@ -919,23 +957,35 @@ async function loadDashboard(){
   loadAi();
   loadHealth();
   loadTrend();
+  loadSelfCheck();
   // platform cards
   const grid = $('#pfGrid'); grid.innerHTML='';
-  let health = {};
-  try{ const h = await api('/api/platforms/health'); if(h && typeof h==='object') health = h; }catch(e){}
+  // ⚠️ /api/platforms/health 返回的是**数组**：{deep, summary, platforms:[...]}
+  //    （同一接口在下方 checkReplyLogin() 里就是按 .platforms 取的，这里曾不一致）
+  //    此处原写成 health[p.id] 直接取键 —— 于是 15 张卡片**恒显「未知」**；
+  //    且读的是 st.status / st.logged，而 PlatformHealth 里根本没有这两个字段，
+  //    真正的判定字段叫 verdict。两处一起修正。
+  const health = {};
+  try{
+    const h = await api('/api/platforms/health');
+    (h && Array.isArray(h.platforms) ? h.platforms : []).forEach(x=>{ if(x && x.platform) health[x.platform]=x; });
+  }catch(e){}
+  const VERDICT_BADGE = { 'ok':['已登录','b-ok'], 'not-logged-in':['未登录','b-warn'],
+                          'blocked':['风控','b-warn'], 'offline':['离线','b-bad'], 'unknown':['未知','b-mut'] };
   PLATFORMS.forEach(p=>{
-    const st = health[p.id]||{};
-    let label='未知', cls='b-mut';
-    if(st.connected===false && !st.endpoint){ label='未配置'; cls='b-mut'; }
-    else if(st.status==='logged'||st.logged){ label='已登录'; cls='b-ok'; }
-    else if(st.status==='offline'||st.connected===false){ label='离线'; cls='b-bad'; }
-    else if(st.status==='blocked'){ label='风控'; cls='b-warn'; }
-    else if(st.status==='anon'||st.status==='not-logged-in'){ label='未登录'; cls='b-warn'; }
-    else if(st.connected){ label='已连接'; cls='b-info'; }
+    const st = health[p.id];
+    // 没有该平台的结果（接口失败/尚未巡检）与「巡检过但判不出」是两件事，分开说
+    let label='未检测', cls='b-mut';
+    if(st){
+      const b = VERDICT_BADGE[st.verdict];
+      if(b){ label=b[0]; cls=b[1]; }
+      else if(st.connected){ label='已连接'; cls='b-info'; }
+    }
+    const tip = st ? ((st.detail||'') + (st.action ? ' · ' + st.action : '')) : '尚未巡检：重新打开本页或稍后再试';
     const c = el('div','card pf');
     c.innerHTML = '<div class="top"><div class="ava" style="background:'+p.color+'">'+esc(p.name[0])+'</div>'
       + '<div class="nm">'+esc(p.name)+'<br><span class="st b-mut" style="margin-top:2px;display:inline-block" title="'+esc(TIER_TIP[p.tier]||'')+'">'+esc(TIER_LABEL[p.tier]||'')+'</span></div>'
-      + '<span class="st '+cls+'">'+label+'</span></div>'
+      + '<span class="st '+cls+'" title="'+esc(tip)+'">'+label+'</span></div>'
       + '<div class="row"><button class="btn sm" data-check="'+p.id+'">检查登录</button>'
       + '<button class="btn sm" data-open="'+p.id+'">打开窗口</button></div>';
     grid.appendChild(c);
@@ -988,6 +1038,7 @@ async function loadHealth(){
   }
 }
 $('#hGoLogs').addEventListener('click', ()=>navigate('logs'));
+if($('#scRerun')) $('#scRerun').addEventListener('click', loadSelfCheck);
 $('#hTestAlert').addEventListener('click', async ()=>{
   const b = $('#hTestAlert'); const old = b.textContent;
   b.disabled = true; b.textContent = '发送中…';

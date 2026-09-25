@@ -1,37 +1,37 @@
 ﻿@echo off
 chcp 65001 >nul
 REM ============================================================
-REM Package into a distributable zip (output to desktop)
-REM Excludes: .git, chrome-cdp-profile (private login state), *.log
-REM Includes: source, node_modules, node\ runtime
-REM  => Recipients just unzip and double-click start_all.bat
+REM 分发打包入口 —— 委托给 pack.ps1
+REM
+REM ⚠️ 2026-09-25 变更原因（安全）：
+REM   本脚本原先用 robocopy + Compress-Archive 打包，排除项只有
+REM     /XD .git chrome-cdp-profile data  /XF *.log
+REM   —— **不排除 `.env`**。也就是说跑它打出来的包会带上你的
+REM   API Key / 邮箱授权码等凭据，分发给别人即等于泄露。
+REM   而 pack.ps1 是白名单式打包（未列出的文件一律不进包）+ fail-closed 断言
+REM   （显式校验不存在 .env / data / src / .git 与 server 编译产物），
+REM   所以这里改为直接委托给它，只保留一个入口。
+REM
+REM 新包会额外带 version.json（提交号 + 构建时间），便于追溯是哪个版本。
 REM ============================================================
 set "ROOT=%~dp0"
-set "STAGE=%TEMP%\job-apply-agent-portable"
-REM Resolve the real desktop path (some systems redirect it)
-for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP=%%D"
-if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
-set "ZIP=%DESKTOP%\job-apply-agent-portable.zip"
+if not exist "%ROOT%pack.ps1" (
+  echo [错误] 未找到 pack.ps1，无法打包。
+  pause & exit /b 1
+)
 
-echo 正在准备可移植包（排除 .git / 个人登录 profile / 日志）...
-rd /s /q "%STAGE%" 2>nul
-mkdir "%STAGE%" 2>nul
-robocopy "%ROOT%." "%STAGE%" /E /XD .git chrome-cdp-profile data /XF *.log
-if not exist "%STAGE%\node\node.exe" echo [提示] 未找到自带 node\，接收者需自行安装 Node 并 npm install。
-
-echo 正在压缩到桌面：%ZIP%
-powershell -NoProfile -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%ZIP%' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%pack.ps1"
+set "RC=%ERRORLEVEL%"
 
 echo.
-if exist "%ZIP%" (
-  for %%A in ("%ZIP%") do echo 打包完成：%ZIP%  (大小约 %%~zA 字节)
-  echo.
-  echo 发送给别人后，对方解压步骤：
-  echo   1. 解压到任意目录（路径不要含中文/空格最佳，但已做兼容）
-  echo   2. 双击 创建桌面快捷方式.bat 生成桌面入口（可选）
-  echo   3. 双击 start_all.bat 启动（首次会让你在各平台登录）
-  echo   4. 双击 apply_*.bat 开始投递
+if "%RC%"=="0" (
+  echo 打包完成。发送给别人后，对方解压步骤：
+  echo   1. 解压到任意目录（路径不含中文/空格最佳）
+  echo   2. 双击 start_all.bat 启动（首次让你在各平台登录）
+  echo   3. 看控制台首页「开箱自检」面板确认还差什么
+  echo   4. 先「仅预览」再真实投递
+  echo   （可选）双击 创建桌面快捷方式.bat 生成桌面入口
 ) else (
-  echo [失败] 压缩未生成文件，请检查磁盘空间或权限。
+  echo [失败] 打包未通过校验（退出码 %RC%），请查看上方 pack.ps1 的报错。
 )
 pause

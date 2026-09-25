@@ -1,0 +1,108 @@
+name: Release
+
+# 目的：把「下载即用」的第一关补上。
+# 背景（2026-09-25 开箱实测）：仓库此前**没有任何下载渠道** —— GitHub 与 Gitee
+# 均无 Release、无 tag，.github/workflows 只有 ci.yml。接收方只能拿到源码自己跑
+# 打包脚本，这不符合「软件商城下载即用」的预期；而且手工产的包不携带版本信息，
+# 曾出现「桌面包是整改做到一半的工作树快照、不对应任何提交」的情况，无从追溯。
+#
+# 本工作流：打 tag -> 跑门禁与测试 -> pack.ps1 打包（内含 version.json）-> 上传到 Release。
+#
+# 两种触发方式：
+#   1) 推 tag（推荐，版本号明确）：git tag v1.0.0 && git push origin v1.0.0
+#   2) 手动触发（GitHub 页面 Actions -> Release -> Run workflow）：
+#      只给一个「版本号」输入框；**留空会自动生成** v<日期>-<短提交号>。
+#      加这条是为了让「产出可下载的包」不必依赖本地环境 —— 本机 pre-push 钩子会跑
+#      verify/test，受限环境里可能失败；而打包是 I/O 重的活儿，交给 runner 更合适。
+#
+# Action 版本策略与 ci.yml 保持一致：checkout / setup-node 用 v5（v5 起运行在 Node 24），
+# 用 v4 会触发 GitHub 的 "Node.js 20 is deprecated" 告警。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布版本号，形如 v1.0.0（留空则自动生成 v<日期>-<短提交号>）'
+        required: false
+        type: string
+
+permissions:
+  contents: write   # gh release create 需要
+
+jobs:
+  release:
+    name: 打包并发布
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      # 必须先定 tag：push 事件取 ref，手动触发取输入框（空则自动生成）。
+      # gh release create <tag> 在该 tag 不存在时会自动指向默认分支的当前提交。
+      - name: 解析发布标签
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push') {
+            $tag = '${{ github.ref_name }}'
+          } else {
+            $tag = '${{ inputs.tag }}'
+            if ([string]::IsNullOrWhiteSpace($tag)) {
+              $short = (git rev-parse --short HEAD).Trim()
+              $tag = 'v' + (Get-Date -Format 'yyyy.MM.dd') + '-' + $short
+            }
+          }
+          if ($tag -notmatch '^v') { throw "版本号必须以 v 开头（如 v1.0.0），收到：$tag" }
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "release tag = $tag"
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查 + 控制台语法门禁
+        run: npm run verify
+
+      - name: 回归自检 + 合约测试
+        run: npm test
+
+      # 仓库里 node/ 被 gitignore（只在打包时需要），CI 里用 runner 自带的 node 顶上
+      - name: 准备自带 Node 运行时
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ./node | Out-Null
+          Copy-Item (Get-Command node).Source ./node/node.exe
+
+      # pack.ps1 自带 fail-closed 断言（必含入口/自带 node/控制台；禁含 .env、data、
+      # src、.git、tsc 编译产物），并写入 version.json（提交号 + 构建时间 + 是否脏树）
+      - name: 打包
+        shell: pwsh
+        run: |
+          ./pack.ps1
+          if ($LASTEXITCODE -ne 0) { throw "pack.ps1 failed with $LASTEXITCODE" }
+          $zip = Join-Path ([Environment]::GetFolderPath('Desktop')) 'job-apply-agent-portable.zip'
+          if (-not (Test-Path $zip)) { throw "pack.ps1 did not produce a zip" }
+          Write-Host ("      " + $zip + "  " + [math]::Round((Get-Item $zip).Length / 1MB, 1) + " MB")
+          "ZIP_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 解压即用冒烟（打包产物本身也验一遍）
+        shell: pwsh
+        run: |
+          # pack_smoke 会重新打包一次，这里用它的断言逻辑验的是同一份 pack.ps1 产物；
+          # 若嫌慢可移除本步（ci.yml 每次推 main 都会跑它）。
+          ./scripts/pack_smoke.ps1
+
+      - name: 上传到 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          gh release create $tag "$env:ZIP_PATH" `
+            --title $tag `
+            --notes "Windows 便携包：解压后双击 start_all.bat 即用（自带 Node，无需安装运行时；需已装 Google Chrome）。包内 version.json 记录了对应提交号与构建时间。"
+          Write-Host "release $tag created -> https://github.com/${{ github.repository }}/releases/tag/$tag"

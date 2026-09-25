@@ -35,6 +35,7 @@ import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js
 import { SUPPORTED_PLATFORMS, PENDING_PLATFORMS, REGISTERED_PLATFORMS } from '../server/services/apply/index.js';
 import { PLATFORM_PAGE } from '../server/services/platformHealth.js';
 import { DELIVERY_PLATFORMS } from '../server/services/connection.js';
+import { DEFAULT_CDP_PORTS } from '../server/services/platformPorts.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -405,6 +406,25 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
     !SUPPORTED_PLATFORMS.some((p) => PENDING_PLATFORMS.includes(p)));
   check('控制台下拉覆盖全部已登记平台', DELIVERY_PLATFORMS.length === REGISTERED_PLATFORMS.length,
     `console/connection=${DELIVERY_PLATFORMS.length} registered=${REGISTERED_PLATFORMS.length}`);
+
+  // ── 内置默认端口必须覆盖全部已登记平台（2026-09-25 开箱 P0 的回归防线）──────────
+  // 历史事故：`data/browser/cdp.json` 是**运行时配置**且 `data/` 不随分发包走，
+  // 而 `connection.ts` / `browser.ts` 缺文件时返回 null → **接收方机器上投递完全不可用**
+  // （退化成 Playwright 自带 Chromium：未登录 + 未下载，报「Chromium 浏览器未下载」）。
+  // 现在端口表收敛到 platformPorts.ts 并带内置兜底，本段确保**新增平台时不会漏配默认端口**。
+  for (const p of REGISTERED_PLATFORMS) {
+    const def = DEFAULT_CDP_PORTS[p];
+    check(`内置默认端口存在：${p}`, typeof def === 'number' && def > 0,
+      typeof def === 'number' ? `:${def}`
+        : '未登记在 platformPorts.DEFAULT_CDP_PORTS —— 分发包缺 cdp.json 时该平台将不可投递');
+    if (typeof def === 'number' && def > 0) {
+      check(`start_platforms.bat 端口表含默认端口：${p}`, launcher.includes(`:${def}:`), `期望 :${def}:`);
+      if (hasCdp) {
+        const cdpPort = String(cdp[p] || '').split(':').pop() || '';
+        check(`内置端口与 cdp.json 一致：${p}`, cdpPort === String(def), `cdp.json=${cdpPort} default=${def}`);
+      }
+    }
+  }
 
   for (const p of REGISTERED_PLATFORMS) {
     const missing: string[] = [];

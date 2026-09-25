@@ -19,11 +19,14 @@ echo 指向：%PKG%start_all.bat
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $lnk=$ws.CreateShortcut('%DESKTOP%\投递Agent.lnk'); $lnk.TargetPath='%PKG%start_all.bat'; $lnk.WorkingDirectory='%PKG%'; $lnk.Description='简历投递 Agent 控制台'; $lnk.Save()" 2>nul
 
 if errorlevel 1 (
-  REM Fallback: .lnk COM disabled. Write an ASCII desktop .bat (uses %%USERPROFILE%% to avoid CJK paths) with pause
+  REM Fallback: .lnk COM disabled. Write a desktop .bat that points at THIS package.
+  REM ⚠️ 2026-09-25 修：此前这里硬编码了开发机的绝对路径
+  REM   （%USERPROFILE%\WorkBuddy\2026-09-02-09-33-33\job-apply-agent\），
+  REM   在别人的机器上会生成一个指向不存在目录的快捷方式。改为烘焙当前实际路径（%PKG%）。
   ( echo @echo off
     echo chcp 65001 ^>nul
-    echo set "PKG=%%USERPROFILE%%\WorkBuddy\2026-09-02-09-33-33\job-apply-agent\"
-    echo if not exist "%%PKG%%start_all.bat" ^( echo [ERR] start_all.bat not found ^& pause ^& exit /b 1 ^)
+    echo set "PKG=%PKG%"
+    echo if not exist "%%PKG%%start_all.bat" ^( echo [ERR] start_all.bat not found in %%PKG%% ^& pause ^& exit /b 1 ^)
     echo call "%%PKG%%start_all.bat"
     echo pause
   ) > "%DESKTOP%\投递Agent.bat"

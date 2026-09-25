@@ -7,6 +7,40 @@
 
 ---
 
+## 下载 / 安装（Windows 便携包）
+
+> 本节是给**使用者**的入口；只想读代码的可以直接跳到下面的「功能对标矩阵」。
+
+1. 打开 **[Releases](https://github.com/Dasikong-Cell/offer-where/releases)**，下载最新一版的 `job-apply-agent-portable.zip`（约 **455MB**）。
+   仓库没有 Release 时，可在 GitHub 的 **Actions → Release → Run workflow** 手动触发一次（版本号留空会自动生成 `v<日期>-<短提交号>`）。
+2. 解压到**纯英文路径**（如 `D:\offer-where`）。
+   实测：解压后约 **1.4GB / 18.1 万个文件**，耗时约 5 分钟 —— 文件数多是因为**包内自带 Node 运行时**，好处是**使用者无需安装 Node**。
+   > ⚠️ **别用资源管理器双击 zip 解压**：包内共 18.1 万个小文件，「全部解压缩」会非常慢（可能十几分钟以上）。
+   > 用系统自带的 `tar`（Win10 1803+）或 7-Zip 快得多：
+   > ```bat
+   > mkdir D:\offer-where
+   > tar -xf "%USERPROFILE%\Downloads\job-apply-agent-portable.zip" -C D:\offer-where
+   > ```
+3. 双击 **`start_all.bat`**：拉起本地后端（默认端口 `4400`）并自动打开控制台 `http://127.0.0.1:4400/`。
+   > 首次运行若弹出 SmartScreen「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」即可（脚本来自网络下载时的常规提示）。
+4. 看控制台首页的 **「开箱自检」** 卡片，按它逐项补齐即可：
+
+   | 自检项 | 你要做什么 |
+   |---|---|
+   | Node 运行时 | 包内自带，**无需操作** |
+   | Google Chrome | 没装就装一个（调试窗口依赖它） |
+   | 平台端口表 | 内置默认端口，**无需手工配置**（`data/browser/cdp.json` 只在要改端口时才需要） |
+   | 平台调试窗口 | 双击 `start_all.bat`（或 `start_platforms.bat`）把各平台窗口开起来，然后在窗口里登录 |
+   | 简历 | 左侧「**简历 → 简历中心**」→「上传简历」选 PDF / Word（≤8MB） |
+   | AI 能力（可选） | 想用 AI 语义匹配 / AI 文案就复制 `.env.example` 为 `.env` 填 LLM 配置；**不填则回退「规则匹配 + 模板文案」，功能完整可用**，仅质量略降 |
+
+- **前置要求**：Windows 10 1803+（打包/运行用到系统自带 `tar.exe`）与 Google Chrome。各平台登录方式见 `LOGIN_GUIDE.md`。
+- 包内 `version.json` 记录了该包对应的**提交号与构建时间**，可随时核对自己在用哪一版。
+
+> ⚠️ **首次使用默认只做「预览」**：真实投递会**不可撤销地**向 HR 发出消息。建议先预览、确认无误、把简历与各平台登录态准备好，再切到真实投递。
+
+---
+
 ## 功能对标矩阵
 
 | 职得鸭能力 | offer-where 实现 | 说明 |
@@ -120,12 +154,20 @@ offer-where/
 
 > **前置要求**：① Windows 10 1803+（需系统自带 `tar.exe`）；② 已安装 **Google Chrome**（未装时启动器会明确提示并给出下载链接）。
 >
-> **便携包**：`job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装 Node 环境（约 455MB / 18 万文件，解压约 3–4 分钟）。
+> **便携包**：`job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装 Node 环境
+> （约 455MB / 18 万文件，**解压约 5 分钟**，视磁盘而定）。
 
-1. 双击桌面 **「投递Agent」**（或项目内 `start_all.bat`）：自动启动 CDP Chrome + 后端(4400) + 打开控制台页。
+1. 双击 `start_all.bat`：自动启动 CDP Chrome + 后端(4400) + 打开控制台页。
+   - 想让桌面有个入口，先双击一次 `创建桌面快捷方式.bat`，之后即可双击桌面「投递Agent」。
    - `start_all.bat` 默认启动 **BOSS / 猎聘 / 51job / 智联 / 官网** 5 个平台窗口；其余平台（国聘、鱼泡、中华英才、应届生等）用 `start_platforms.bat` 按需启动。
-2. 在控制台勾选平台、设置数量/间隔，点「开始投递」。
-3. 首次使用需在打开的 Chrome 里登录各招聘平台账号（登录态持久化在 `C:/chrome-cdp-profile`）。
+2. **看控制台首页的「开箱自检」面板**：它会把「还差什么」列清楚（Chrome / 调试窗口 / 简历 / AI）。
+3. 在控制台勾选平台、设置数量/间隔，**先点「仅预览」**确认链路，再点「开始投递」。
+4. 首次使用需在打开的 Chrome 里登录各招聘平台账号（登录态持久化在 `C:/chrome-cdp-profile`）。
+   逐个平台的登录地址与常见风控（滑块 / 短信验证）见 [`LOGIN_GUIDE.md`](./LOGIN_GUIDE.md)。
+
+> **平台端口无需手工配置**：端口表内置在 `server/services/platformPorts.ts`（与 `start_all.bat` /
+> `start_platforms.bat` 打开的端口一致），开箱即用。`data/browser/cdp.json` 仅用于**覆盖**默认端口
+> （例如把某平台改到别的端口），缺失不影响使用。
 
 ---
 

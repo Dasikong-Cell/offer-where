@@ -20,15 +20,10 @@
  *   4) 命中已登录特征        → ok
  *   5) 都不命中              → unknown       （不猜；多半是页面没加载完或改版）
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import http from 'node:http';
-import { fileURLToPath } from 'node:url';
 import { execCdpAction } from './cdpDriver.js';
 import { DELIVERY_PLATFORMS } from './connection.js';
-
-const __dir = path.dirname(fileURLToPath(import.meta.url));
-const CDP_JSON = path.join(__dir, '..', '..', 'data', 'browser', 'cdp.json');
+import { resolveCdpEndpoint, defaultCdpEndpoint } from './platformPorts.js';
 
 export type HealthVerdict = 'ok' | 'not-logged-in' | 'blocked' | 'offline' | 'unknown';
 
@@ -163,14 +158,18 @@ export interface PlatformHealth {
   action: string;
 }
 
+/**
+ * 取平台端点。统一走 `platformPorts.ts`（`cdp.json` 覆盖值 > 内置默认端口）。
+ *
+ * 历史坑：本函数此前自带一份**只含 7 个平台**的兜底表，其余平台一律 `|| 9223` ——
+ * 即国聘/鱼泡/中华英才等 8 个新登记平台会被**错配到 BOSS 的端口**，
+ * 巡检结果因此张冠李戴。端口表已收敛为一份。
+ */
 export function readEndpoint(platform: string): string {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(CDP_JSON, 'utf-8'));
-    const ep = cfg?.[platform];
-    if (typeof ep === 'string' && ep.trim()) return ep.trim();
-  } catch { /* 用默认 */ }
-  const DEF: Record<string, number> = { boss: 9223, bosschat: 9223, liepin: 9224, job51: 9225, zhilian: 9226, official: 9227, offerbiu: 9227 };
-  return `http://127.0.0.1:${DEF[platform] || 9223}`;
+  const ep = resolveCdpEndpoint(platform);
+  if (ep) return ep;
+  // 未登记平台：退回 boss 端口，保持「可探测」而不是抛错
+  return defaultCdpEndpoint('boss') as string;
 }
 
 function cdpAlive(endpoint: string, timeoutMs = 2500): Promise<boolean> {
@@ -264,6 +263,52 @@ export async function probeOne(platform: string, deep = true): Promise<PlatformH
 export async function probePlatformHealth(platforms?: string[], deep = true): Promise<PlatformHealth[]> {
   const list = platforms?.length ? platforms : DELIVERY_PLATFORMS;
   return Promise.all(list.map((p) => probeOne(p, deep)));
+}
+
+// ── 全量 deep 巡检的 TTL 缓存（控制台专用） ────────────────────────────────────
+/**
+ * 为什么要缓存：控制台**每次打开/刷新**都会调 `/api/platforms/health`（deep 默认 1，
+ * 见 console.html 的 loadDashboard），而 deep=1 会逐个**导航 15 个平台的真实页面**
+ * 再取样判定登录态——为了结论准确，这一步不能省，实测约 12.7s。
+ * 于是每次刷新首页都要先空等十几秒（那段时间平台卡片还画不出来）。
+ *
+ * 缓存规则（刻意收窄，避免"缓存把真实状态藏起来"）：
+ *   · **只缓存「全量 + deep」**这一种调用（即控制台仪表盘那次），键固定；
+ *   · 带 `platforms=` 的**定向调用永不缓存** —— 那是用户主动复核（典型场景：
+ *     刚在窗口里登录完，点自动回复页的「检测」或某张卡片的 🩺 想立刻看到 ok），
+ *     必须拿到实时结果；同理 `deep=0`（只测连接，本来就快）也不缓存；
+ *   · `forceRefresh`（API 的 `?refresh=1`）跳过缓存并覆盖。
+ * 代价：登录态结论最长可能滞后 `FULL_SET_TTL_MS`；想立刻刷新就带 `?refresh=1`。
+ */
+const FULL_SET_TTL_MS = 45_000;
+let fullSetCache: { at: number; data: PlatformHealth[] } | null = null;
+
+/** 手动失效缓存（如登录完成后由服务端调用）。 */
+export function invalidateHealthCache(): void {
+  fullSetCache = null;
+}
+
+/**
+ * 控制台用的全量巡检（带 TTL 缓存）。返回值里带 `cached`/`ageMs`，
+ * 便于 API 与前端如实标注"这是 N 秒前的结果"，而不是假装刚跑过。
+ */
+export async function probePlatformHealthCached(
+  platformList: string[] | undefined,
+  deep: boolean,
+  forceRefresh = false,
+): Promise<{ list: PlatformHealth[]; cached: boolean; ageMs: number }> {
+  const targeted = !!platformList?.length;
+  const list = targeted ? (platformList as string[]) : DELIVERY_PLATFORMS;
+  const cacheable = !targeted && deep;
+
+  if (cacheable && !forceRefresh && fullSetCache) {
+    const age = Date.now() - fullSetCache.at;
+    if (age < FULL_SET_TTL_MS) return { list: fullSetCache.data, cached: true, ageMs: age };
+  }
+
+  const data = await Promise.all(list.map((p) => probeOne(p, deep)));
+  if (cacheable) fullSetCache = { at: Date.now(), data };
+  return { list: data, cached: false, ageMs: 0 };
 }
 
 /**

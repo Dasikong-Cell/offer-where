@@ -10,7 +10,9 @@ import { promisify } from "util";
 import * as db from "./db.js";
 import { fetchLatestCode, listRecentMails, testConnection } from "./services/mail.js";
 import { execAction, listSessions, closeAll } from "./services/browser.js";
-import { relaunchAll, checkAllHealth } from "./services/browserHealth.js";
+import { relaunchAll, checkAllHealth, isPortUp } from "./services/browserHealth.js";
+import { detectChromePath } from "./services/localEnv.js";
+import { DEFAULT_CDP_PORTS, readCdpOverrides } from "./services/platformPorts.js";
 import { probePlatformConnections, DELIVERY_PLATFORMS } from "./services/connection.js";
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
@@ -44,7 +46,7 @@ import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatc
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
 import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuCollect.js";
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
-import { probePlatformHealth, summarizeHealth } from "./services/platformHealth.js";
+import { probePlatformHealthCached, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
@@ -236,6 +238,78 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
 });
 
+// ── 首跑自检：把「还差什么才能投出第一份简历」变成可读清单 ──────────────────────
+// 背景（2026-09-25 开箱实测）：接收方解压后对着控制台无从下手 —— 浏览器窗口没开、
+// 简历没上传、平台没登录，界面不会告诉他「下一步做什么」；更糟的是缺少
+// data/browser/cdp.json 时投递会退化成 Playwright 自带 Chromium 并报
+// 「Chromium 浏览器未下载」，而 README 从未提过这个文件。本接口把这类前置条件显式化。
+// 注意：只做**快速**探测（端口 TCP 探活，不导航页面）—— 避免像 /api/platforms/health
+// 那样串行跑 15 个平台要 12s。
+app.get("/api/selfcheck", async (_req, res) => {
+  type Item = { id: string; label: string; status: 'ok' | 'todo' | 'warn'; detail: string };
+  const items: Item[] = [];
+
+  // 1) Node 运行时（自带 = 接收方无需安装）
+  const bundledNode = fs.existsSync(path.join(__dirname, '..', 'node', 'node.exe'));
+  items.push({
+    id: 'runtime', label: 'Node 运行时', status: 'ok',
+    detail: bundledNode ? '使用包内自带 node（无需另装）' : `使用系统 node ${process.version}`,
+  });
+
+  // 2) Chrome（CDP 调试窗口的前提）
+  const chrome = detectChromePath();
+  items.push({
+    id: 'chrome', label: 'Google Chrome', status: chrome ? 'ok' : 'todo',
+    detail: chrome || '未检测到 Chrome。请安装后重新启动：https://www.google.com/chrome/',
+  });
+
+  // 3) 平台端口表（内置默认即可工作，cdp.json 仅作覆盖）
+  const overrides = readCdpOverrides();
+  const overrideCount = Object.keys(overrides).length;
+  items.push({
+    id: 'ports', label: '平台端口表', status: 'ok',
+    detail: overrideCount
+      ? `data/browser/cdp.json 覆盖了 ${overrideCount} 项`
+      : `使用内置默认端口（${Object.keys(DEFAULT_CDP_PORTS).length} 项），无需手工配置`,
+  });
+
+  // 4) 调试窗口是否已打开（并行探活，全失败也只需 ~1.2s）
+  const ports = Array.from(new Set(Object.values(DEFAULT_CDP_PORTS))).sort((a, b) => a - b);
+  const aliveFlags = await Promise.all(ports.map((p) => isPortUp(p, 1200)));
+  const alive = ports.filter((_, i) => aliveFlags[i]);
+  items.push({
+    id: 'windows', label: '平台调试窗口', status: alive.length ? 'ok' : 'todo',
+    detail: alive.length
+      ? `已打开 ${alive.length}/${ports.length} 个（端口 ${alive.join(', ')}）`
+      : '尚未打开任何平台窗口。双击 start_all.bat（或 start_platforms.bat）后重试',
+  });
+
+  // 5) 简历（未上传则投递与「一岗一简历」都无法工作）
+  // ⚠️ 这里给的**路径必须与控制台实际菜单一致**：原文写「我的档案」，
+  //    而左侧导航根本没有这个入口（真实位置是「简历 → 简历中心 → 上传简历」）
+  //    —— 首跑用户照着找不到，等于没给指引。
+  const resumePath = path.join(RES_DATA, 'resume_source.pdf');
+  const hasResume = fs.existsSync(resumePath);
+  items.push({
+    id: 'resume', label: '简历', status: hasResume ? 'ok' : 'todo',
+    detail: hasResume
+      ? `已上传（${Math.round(fs.statSync(resumePath).size / 1024)} KB）`
+      : '尚未上传。左侧「简历 → 简历中心」→「上传简历」选 PDF / Word（≤8MB）——未上传时投递与「一岗一简历」都不可用',
+  });
+
+  // 6) AI（可选，缺失只降级不阻塞）
+  const aiOn = isAiEnabled();
+  items.push({
+    id: 'ai', label: 'AI 能力（可选）', status: aiOn ? 'ok' : 'warn',
+    detail: aiOn
+      ? '已启用：语义匹配 + AI 文案 + AI 自动复聊'
+      : '未配置 LLM_*：将使用「规则匹配 + 模板文案」，功能完整可用，仅质量略降',
+  });
+
+  const todo = items.filter((i) => i.status === 'todo').length;
+  res.json({ ok: todo === 0, todo, items, checkedAt: new Date().toISOString() });
+});
+
 // 投递漏斗 + 匹配度看板（对照职得鸭「数据洞察」补齐的可视化数据层）
 app.get("/api/stats/funnel", (_req, res) => {
   try {
@@ -344,8 +418,13 @@ app.get("/api/platforms/health", async (req, res) => {
   try {
     const deep = req.query.deep !== '0';
     const list = String(req.query.platforms || '').split(',').map((s) => s.trim()).filter(Boolean);
-    const health = await probePlatformHealth(list.length ? list : undefined, deep);
-    res.json({ deep, summary: summarizeHealth(health, deep), platforms: health });
+    // 全量 deep 巡检会真实导航 15 个平台页面（约 12.7s），而控制台每次刷新都会调它
+    // —— 故走 45s TTL 缓存；定向 platforms= 调用不缓存（见 platformHealth 注释）。
+    // ?refresh=1 跳过缓存，用于人工要求"现在重测"。
+    const { list: health, cached, ageMs } = await probePlatformHealthCached(
+      list.length ? list : undefined, deep, req.query.refresh === '1',
+    );
+    res.json({ deep, summary: summarizeHealth(health, deep), platforms: health, cached, ageMs });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || '巡检失败' });
   }
@@ -419,20 +498,35 @@ app.get("/api/check-login", async (req, res) => {
     }
   }
   
-  // 2. 使用 unstable_v2_authenticate 检查登录状态（更可靠）
+  // ⚠️ 必须加超时护栏。实测（2026-09-25 开箱）：**未配置凭据时 `unstable_v2_authenticate`
+  // 会永久挂起且不抛错** —— 本接口 60s 零响应、后端日志一片空白，前端按钮永久卡在
+  // 「检查中…」且 disabled。开发机已登录 CodeBuddy 所以从未暴露，但**分发给他人后接收方必然触发**。
+  // 可用 AUTH_CHECK_TIMEOUT_MS 调整（默认 8000ms）。
+  const AUTH_TIMEOUT_MS = Number(process.env.AUTH_CHECK_TIMEOUT_MS) || 8000;
+  let authTimer: NodeJS.Timeout | undefined;
   try {
     let needsLogin = false;
     
-    const result = await unstable_v2_authenticate({
-      environment: 'external',
-      onAuthUrl: async (authState) => {
-        // 如果执行到这个回调，说明未登录
-        needsLogin = true;
-        console.log('[Check Login] 需要登录，认证 URL:', authState.authUrl);
-        // 将认证 URL 返回给前端（如果需要）
-        response.error = '未登录，请先登录 CodeBuddy CLI';
-      }
-    });
+    const result = await Promise.race([
+      unstable_v2_authenticate({
+        environment: 'external',
+        onAuthUrl: async (authState) => {
+          // 如果执行到这个回调，说明未登录
+          needsLogin = true;
+          console.log('[Check Login] 需要登录，认证 URL:', authState.authUrl);
+          // 将认证 URL 返回给前端（如果需要）
+          response.error = '未登录，请先登录 CodeBuddy CLI';
+        }
+      }),
+      new Promise<never>((_, reject) => {
+        authTimer = setTimeout(
+          () => reject(new Error(
+            `登录检查超时（${AUTH_TIMEOUT_MS}ms）：多半是未配置 CODEBUDDY_API_KEY / CODEBUDDY_AUTH_TOKEN`
+          )),
+          AUTH_TIMEOUT_MS
+        );
+      }),
+    ]);
     
     // 如果没有触发 onAuthUrl 回调，说明已登录
     if (!needsLogin && result?.userinfo) {
@@ -464,6 +558,9 @@ app.get("/api/check-login", async (req, res) => {
       response.error = error?.message || String(error);
       response.method = 'none';
     }
+  } finally {
+    // 成功路径也要清掉定时器，避免每次请求都留下一个 8s 的悬挂 Timer
+    if (authTimer) clearTimeout(authTimer);
   }
   
   res.json(response);

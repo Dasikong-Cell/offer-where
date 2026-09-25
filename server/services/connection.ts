@@ -2,7 +2,7 @@
  * 各平台「浏览器连接」探测
  *
  * 投递能否真正执行，取决于对应平台的真实 Chrome 调试窗口是否已打开
- * （data/browser/cdp.json 中为每平台配置了独立调试端口，如 BOSS=9223）。
+ * （端口表见 `platformPorts.ts`；`data/browser/cdp.json` 可按需覆盖）。
  * 本模块逐一探测这些 CDP 端口是否可达（/json/version 能返回），
  * 用于控制台「自动识别有连接的投递」：只勾选/只投递已连接的平台，
  * 自动跳过未打开 Chrome 窗口的平台，避免空跑报错。
@@ -12,18 +12,13 @@
  * （养熟标签才认登录态），用新标签探登录会误报，且易触发反爬。
  */
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { resolveCdpEndpoint } from './platformPorts.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_ROOT = path.join(__dirname, '..', '..', 'data', 'browser');
-const CDP_CONFIG_PATH = path.join(DATA_ROOT, 'cdp.json');
-
-/** 控制台可投递平台（与 public/console.html 的 PLATFORMS、data/browser/cdp.json 保持一致）
+/**
+ * 控制台可投递平台（与 `public/console.html` 的 PLATFORMS、`platformPorts.ts` 的
+ * `DEFAULT_CDP_PORTS` 保持一致）
  *  offerbiu = 企业官网通道（offerbiu.com 采集 + 企业官网表单投递），与 official 共用 9227 窗口。
- *  ⚠️ 新增平台必须同步：types.ts / cdp.json / 本文件 / platformHealth.ts / console.html / start_platforms.bat
+ *  ⚠️ 新增平台必须同步：types.ts / platformPorts.ts / console.html / start_platforms.bat
  *     （合约测试「平台注册完整性」会校验一致性）。 */
 export const DELIVERY_PLATFORMS = [
   'boss', 'job51', 'liepin', 'zhilian', 'offerbiu', 'nowcoder',
@@ -31,15 +26,15 @@ export const DELIVERY_PLATFORMS = [
   'easyzhipin', 'job58', 'chinahr', 'dianzhang', 'yupao', 'maimai', 'ganji', 'iguopin', 'yingjiesheng',
 ];
 
+/**
+ * 取平台 CDP 端点。**统一走 `platformPorts.ts`**：
+ * `cdp.json` 覆盖值 > 内置默认端口（与启动脚本一致）。
+ *
+ * 历史坑：本文件此前自带一份「文件不存在就返回 null」的实现 —— 而 `data/` 不随分发包走，
+ * 于是新机器上所有平台都判为「未配置 CDP 端口」。端口表已收敛为一份，勿再本地复制逻辑。
+ */
 function getCdpEndpoint(key: string): string | null {
-  try {
-    if (!fs.existsSync(CDP_CONFIG_PATH)) return null;
-    const cfg = JSON.parse(fs.readFileSync(CDP_CONFIG_PATH, 'utf-8'));
-    const ep = cfg && typeof cfg === 'object' ? cfg[key] : null;
-    return typeof ep === 'string' && ep.trim() ? ep.trim() : null;
-  } catch {
-    return null;
-  }
+  return resolveCdpEndpoint(key);
 }
 
 function httpGetJson(url: string, timeoutMs = 2000): Promise<any> {

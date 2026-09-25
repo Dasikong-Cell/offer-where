@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { execCdpAction, closeAllCdp } from './cdpDriver.js';
+import { resolveCdpEndpoint } from './platformPorts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,20 +52,14 @@ function safePlatformName(platform: string): string {
   return (platform || 'default').replace(/[^a-zA-Z0-9_\-]/g, '_');
 }
 
-/** CDP 附加配置：data/browser/cdp.json，格式 { "boss": "http://127.0.0.1:9222", ... }
- *  配置了的平台不再启动 Playwright 自带 Chromium，而是接管用户真实 Chrome
- *  （绕过 BOSS/猎聘等对自动化浏览器指纹的强反爬）。 */
-const CDP_CONFIG_PATH = path.join(DATA_ROOT, 'cdp.json');
-function getCdpEndpoint(key: string): string | null {
-  try {
-    if (!fs.existsSync(CDP_CONFIG_PATH)) return null;
-    const cfg = JSON.parse(fs.readFileSync(CDP_CONFIG_PATH, 'utf-8'));
-    const ep = cfg && typeof cfg === 'object' ? cfg[key] : null;
-    return typeof ep === 'string' && ep.trim() ? ep.trim() : null;
-  } catch {
-    return null;
-  }
-}
+/** CDP 端点解析（端口表见 `platformPorts.ts`）：`data/browser/cdp.json` 覆盖值 >
+ *  内置默认端口。配置了的平台不再启动 Playwright 自带 Chromium，而是接管用户真实 Chrome
+ *  （绕过 BOSS/猎聘等对自动化浏览器指纹的强反爬）。
+ *
+ *  ⚠️ 历史 P0（2026-09-25 开箱实测）：本文件曾自带「文件不存在即返回 null」的实现，
+ *  而 `data/` 不随分发包走 → 新机器上投递全部退化成 Playwright Chromium（未登录 + 未下载），
+ *  等于核心功能不可用。端口表已统一到 `platformPorts.ts`，**勿再本地复制读取逻辑**。 */
+const getCdpEndpoint = resolveCdpEndpoint;
 
 export interface BrowserActionResult {
   ok: boolean;

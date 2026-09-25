@@ -27,12 +27,59 @@ $dirs  = @("node", "node_modules", "public", "scripts")
 # (254 dependency files silently lost -- caught by the audit assertion below).
 # Enumerating files explicitly is the only reliable way to scope it to the top level.
 $splitDirs = @("server", "shared")
-$files = @("package.json", "package-lock.json", "tsconfig.json", ".env.example",
-           "README.md", "DEVELOPMENT.md", "LOGIN_GUIDE.md", "LICENSE")
+# ── build stamp ───────────────────────────────────────────────────────────────
+# Every distributed zip must be traceable. History: a hand-made zip on the desktop
+# turned out to be a snapshot of a HALF-FINISHED working tree (some fixes in, some
+# out) matched by no commit at all -- impossible to tell what a recipient had.
+# version.json is written into the archive root and is gitignored.
+$commit = "unknown"
+$dirty = $false
+try {
+  if (Get-Command git -ErrorAction SilentlyContinue) {
+    $c = & git -C $root rev-parse --short HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $c) { $commit = (@($c)[0]).Trim() }
+    $st = & git -C $root status --porcelain 2>$null
+    if ($st) { $dirty = $true }
+  }
+} catch { }
+$stamp = @{
+  commit  = $commit
+  dirty   = $dirty
+  builtAt = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+} | ConvertTo-Json -Compress
+Set-Content -Path (Join-Path $root 'version.json') -Value $stamp -Encoding ascii
+Write-Host "[0/2] build stamp: $stamp"
 
-# every launcher/config script at repo root (.bat / .sh / .ps1)
+$files = @("package.json", "package-lock.json", "tsconfig.json", ".env.example",
+           "README.md", "DEVELOPMENT.md", "LOGIN_GUIDE.md", "LICENSE", "version.json")
+
+# Only END-USER launchers ship. Repack helpers, CLI one-shots, bash collectors and
+# CDP debug launchers stay in the repo: a recipient facing 20 root entries cannot
+# tell which file to double-click, and none of them is needed to run the app.
+# History (2026-09-25 out-of-box test, P2-2): the first version of this list only
+# dropped the *.bat helpers, so the *.sh one-shots and the repacker itself still
+# shipped -- the comment claimed otherwise, which is exactly how such lists rot.
+# KEEP (deliberately): setenv.bat / start_all.bat / start_server.bat /
+# start_platforms.bat (the real launchers), the CJK desktop-shortcut helper, and
+# ensure_chrome.sh (README's script table and the console's "window offline" hint
+# still point at it as a manual recovery path).
+# NOTE: names below are ASCII by requirement (see the encoding note at the top).
+# The legacy repacker is named with two CJK characters, so it is built from
+# codepoints at runtime instead of being written literally.
+$repackBat = ([char]0x6253) + ([char]0x5305) + '.bat'   # legacy robocopy-based packer
+$dropScripts = @(
+  # CDP / one-shot apply launchers
+  'apply_boss.bat', 'apply_job51.bat', 'apply_liepin.bat', 'rerun_liepin.bat',
+  'start.bat', 'start_cdp.bat', 'start_cdp_offerbiu.bat', $repackBat,
+  # bash one-shots and wait loops (need Git Bash on the author's box; useless on a
+  # clean Windows machine, where the console/API is the supported way in)
+  'collect_all.sh', 'offerbiu_auto.sh',
+  'wait_liepin.sh', 'wait_offerbiu.sh', 'wait_zhilian.sh',
+  # the packer itself -- recipients do not build packages
+  'pack.ps1'
+)
 $scripts = Get-ChildItem $root -File -Force |
-  Where-Object { @('.bat', '.sh', '.ps1') -contains $_.Extension } |
+  Where-Object { @('.bat', '.sh', '.ps1') -contains $_.Extension -and $dropScripts -notcontains $_.Name } |
   Select-Object -ExpandProperty Name
 
 $items = @()
@@ -82,16 +129,30 @@ $must = @(
   "node_modules/@napi-rs/canvas/package.json",
   "public/console.html",
   "server/index.ts",
+  "server/services/platformPorts.ts",
   "shared/agentPrompt.ts",
   "package.json",
+  "version.json",
   "setenv.bat",
   "start_all.bat",
-  "start_server.bat"
+  "start_server.bat",
+  "start_platforms.bat"
 )
 $missing = $must | Where-Object { $listing -notcontains $_ }
 if ($missing) {
   Write-Host "[error] archive is incomplete, missing:"
   $missing | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+# dev/self-use scripts must NOT ship (see $dropScripts for the rationale).
+# NOTE: `tar -tf` output is decoded with the console codepage, so CJK-named entries
+# may not compare equal in this process. This check therefore reliably covers the
+# ASCII names; the CJK legacy packer is verified by listing the archive by hand
+# (it is dropped by the Get-ChildItem filter above, which uses real .NET strings).
+$shippedDev = $listing | Where-Object { $dropScripts -contains $_ }
+if ($shippedDev) {
+  Write-Host "[error] archive contains developer-only scripts:"
+  $shippedDev | ForEach-Object { Write-Host "   - $_" }
   exit 1
 }
 # secrets / personal data must NOT be in there
