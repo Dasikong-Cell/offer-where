@@ -36,6 +36,7 @@ import { SUPPORTED_PLATFORMS, PENDING_PLATFORMS, REGISTERED_PLATFORMS } from '..
 import { PLATFORM_PAGE } from '../server/services/platformHealth.js';
 import { DELIVERY_PLATFORMS } from '../server/services/connection.js';
 import { DEFAULT_CDP_PORTS } from '../server/services/platformPorts.js';
+import { FALLBACK_PORT_PROFILES } from '../server/services/browserHealth.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -444,6 +445,27 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
   if (hasCdp) {
     const ports = REGISTERED_PLATFORMS.map((p) => cdp[p]).filter(Boolean);
     check('各平台 CDP 端口互不冲突', new Set(ports).size === ports.length, `${ports.length} 个端口 / ${new Set(ports).size} 个唯一值`);
+  }
+
+  // ── 兜底拉起表必须覆盖每一个已登记端口（2026-09-25 开箱 N7 的回归防线）──────────
+  // 分发包不含 data/ ⇒ 接收方首跑时 `browserLaunch.json` 不存在 ⇒ 走 FALLBACK_PORT_PROFILES。
+  // 该表里没有的端口，`ensureHealthy()` 只探活、不拉起，于是控制台「打开窗口」按钮**静默失效**
+  // （前端 .catch(()=>{}) 吞错，用户看到的是「点了没反应」）。
+  // 实测漏的就是两个**可投**平台：国聘 9235 / 应届生 9236（而不可投的脉脉 9233 反而在表里）。
+  {
+    const registeredPorts = Array.from(new Set(Object.values(DEFAULT_CDP_PORTS))).sort((a, b) => a - b);
+    const fallbackPorts = Object.keys(FALLBACK_PORT_PROFILES).map(Number);
+    const missingPorts = registeredPorts.filter((p) => !fallbackPorts.includes(p));
+    check('兜底拉起表覆盖全部已登记端口', missingPorts.length === 0,
+      missingPorts.length
+        ? `漏 ${missingPorts.join(', ')} —— 这些平台的「打开窗口」按钮在接收方机器上将静默失效`
+        : `${registeredPorts.length} 个端口全部可拉起`);
+    // 可投平台优先保证：哪怕将来为了压资源给「待接入」平台做减法，也不能减到它们头上
+    const missingSup = SUPPORTED_PLATFORMS
+      .map((p) => ({ p, port: DEFAULT_CDP_PORTS[p] }))
+      .filter((x) => !fallbackPorts.includes(x.port));
+    check('兜底拉起表覆盖全部「可投」平台端口', missingSup.length === 0,
+      missingSup.length ? `漏 ${missingSup.map((x) => `${x.p}:${x.port}`).join(', ')}` : `${SUPPORTED_PLATFORMS.length} 个可投平台全部可拉起`);
   }
 }
 

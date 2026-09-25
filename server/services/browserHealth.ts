@@ -45,21 +45,42 @@ interface LaunchSpec {
 
 let specs: Map<number, LaunchSpec> | null = null;
 
+/**
+ * 内置兜底「端口 → profile」映射，**仅在 data/browser/browserLaunch.json 缺失时使用**
+ * （分发包不含 data/，所以这正是「接收方首跑」走的路径）。
+ *
+ * ⚠️ 必须覆盖 `platformPorts.DEFAULT_CDP_PORTS` 里的**每一个**端口，一个都不能漏。
+ * 漏掉的后果是**静默的**：`ensureHealthy()` 对非托管端口只返回当前存活状态、不拉起
+ * （`if (!spec) return isPortUp(port)`），于是控制台卡片上的「打开窗口」点了没反应
+ * —— 请求发出去、返回 ok:false，而前端 `api(...).catch(()=>{})` 把错误吞掉，用户只看到「什么都没发生」。
+ *
+ * 2026-09-25 开箱实测抓到的实例：可投的**国聘(9235) 与 应届生(9236) 未登记**，
+ * 而**不可投的脉脉(9233) 却占了名额** —— 新机器上这两张卡片的按钮必然失效。
+ * 现由 `contract_tests.ts` 的「兜底拉起表覆盖率」断言按 `DEFAULT_CDP_PORTS` 机械校验，防再次漏登。
+ */
+export const FALLBACK_PORT_PROFILES: Record<string, string> = {
+  '9223': 'C:/chrome-cdp-profile',
+  '9224': 'C:/chrome-cdp-profile-liepin',
+  '9225': 'C:/chrome-cdp-profile-job51',
+  '9226': 'C:/chrome-cdp-profile-zhilian',
+  '9227': 'C:/chrome-cdp-profile-official',
+  '9228': 'C:/chrome-cdp-profile-easyzhipin',
+  '9229': 'C:/chrome-cdp-profile-job58',
+  '9230': 'C:/chrome-cdp-profile-chinahr',
+  '9231': 'C:/chrome-cdp-profile-dianzhang',
+  '9232': 'C:/chrome-cdp-profile-yupao',
+  '9233': 'C:/chrome-cdp-profile-maimai',
+  '9234': 'C:/chrome-cdp-profile-ganji',
+  '9235': 'C:/chrome-cdp-profile-iguopin',
+  '9236': 'C:/chrome-cdp-profile-yingjiesheng',
+  '9237': 'C:/chrome-cdp-profile-nowcoder',
+};
+
 /** 读取 browserLaunch.json（带缓存）。缺失时用内置兜底映射，保证服务不依赖该文件也能跑。 */
 function loadSpecs(): Map<number, LaunchSpec> {
   if (specs) return specs;
   const map = new Map<number, LaunchSpec>();
-  const fallbackProfiles: Record<string, string> = {
-    '9223': 'C:/chrome-cdp-profile',
-    '9224': 'C:/chrome-cdp-profile-liepin',
-    '9225': 'C:/chrome-cdp-profile-job51',
-    '9226': 'C:/chrome-cdp-profile-zhilian',
-    '9227': 'C:/chrome-cdp-profile-official',
-    '9230': 'C:/chrome-cdp-profile-chinahr',
-    '9232': 'C:/chrome-cdp-profile-yupao',
-    '9233': 'C:/chrome-cdp-profile-maimai',
-    '9237': 'C:/chrome-cdp-profile-nowcoder',
-  };
+  const fallbackProfiles = FALLBACK_PORT_PROFILES;
   const chromePath = detectChromePath();
   const flags = [
     '--no-first-run', '--no-default-browser-check',
