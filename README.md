@@ -118,11 +118,14 @@ offer-where/
 
 ## 快速开始（Windows 一键）
 
+> **前置要求**：① Windows 10 1803+（需系统自带 `tar.exe`）；② 已安装 **Google Chrome**（未装时启动器会明确提示并给出下载链接）。
+>
+> **便携包**：`job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装 Node 环境（约 455MB / 18 万文件，解压约 3–4 分钟）。
+
 1. 双击桌面 **「投递Agent」**（或项目内 `start_all.bat`）：自动启动 CDP Chrome + 后端(4400) + 打开控制台页。
+   - `start_all.bat` 默认启动 **BOSS / 猎聘 / 51job / 智联 / 官网** 5 个平台窗口；其余平台（国聘、鱼泡、中华英才、应届生等）用 `start_platforms.bat` 按需启动。
 2. 在控制台勾选平台、设置数量/间隔，点「开始投递」。
 3. 首次使用需在打开的 Chrome 里登录各招聘平台账号（登录态持久化在 `C:/chrome-cdp-profile`）。
-
-> 便携包 `job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装环境。
 
 ---
 
@@ -411,9 +414,24 @@ npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「
 | 公网 / 多租户 | ❌ 不支持 | 需账号体系、数据隔离、托管浏览器，属架构级改造；**请勿直接暴露公网** |
 
 安全机制（`server/services/requestGuard.ts`，有单测覆盖）：
-- 写请求（非 GET/HEAD/OPTIONS）带 `Origin` 时必须命中白名单，否则 **403**；
-- 不带 `Origin` 时校验 `Sec-Fetch-Site`，跨站一律 **403**；
-- 只读请求放行（无副作用）。
+- **读写一视同仁**：带 `Origin` 的请求必须命中白名单，否则 **403**；
+- 不带 `Origin` 时校验 `Sec-Fetch-Site`，`cross-site` 一律 **403**；
+- **不再对只读方法无条件放行**：存在「带真实副作用的 GET」（如 `GET /api/auto-reply/run?realSend=1`），
+  恶意网页可用 `<img src="http://127.0.0.1:4400/api/...">` 跨站触发（简单 GET 无预检，响应虽读不到，副作用却已发生）；
+- 直接导航（`Sec-Fetch-Site: none`，如双击启动器 / 地址栏打开控制台）与本机脚本 / curl 不受影响。
+- **安全响应头**：`X-Frame-Options: DENY` + CSP `frame-ancestors 'none'`（**防点击劫持**——控制台能触发真实投递，被 iframe 套娃诱导点击风险高）、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、最小 CSP。
+
+### 行为变更速览（2026-09-25）
+
+| 变更 | 说明 |
+|---|---|
+| 批量投递**默认排除已投岗位** | `criteria.excludeApplied` 默认 `true`（显式传 `false` 才把已投岗位纳入候选）。此前不传就不过滤，导致已投的高分岗位反复被选中→跳过，真实可投候选永远轮不到 |
+| 「已投」判定改为**平台 + 职位** | 此前无平台维度、且历史 `company` 为空时退化为「只比职位」→ 同名职位跨公司/跨平台被误判已投。现在公司仅当**双方都有值**时才比对 |
+| A/B 对照剔除 `legacy` | 历史未打标数据只计入总量、**不参与对照**（报告里给出 `legacyExcluded`） |
+| 上传 `.docx` 简历**也参与匹配/定制** | 此前上传路由只对 PDF 调解析，Word 简历即便能保存也不参与匹配 |
+| 新增 `GET /api/apply/record` | 过程**抽帧录制**（帧序列，非视频）：连拍当前页面存到 `data/evidence/rec-*/`，控制台「投递操作证据回溯」面板可一键录制与查看 |
+| 新增 `GET /api/stats/trend?days=7` | 近 N 天投递趋势，首页看板内联展示 |
+| `data/` 体积阈值 | `DATA_MAX_MB`（默认 3000）：启动清理时超过会往运行日志写一条 ERROR 提醒 |
 
 > 这套机制用于拦截「用户浏览恶意网页时，页面 JS 静默调用本机 API 触发投递/发信」（DNS-rebinding）。
 
