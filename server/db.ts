@@ -97,6 +97,10 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_applications_platform ON applications(platform);
   CREATE INDEX IF NOT EXISTS idx_applications_created ON applications(created_at DESC);
+  -- 「是否已投递过」判定（greetDecision.alreadyApplied）：按 平台+职位 查、公司参与比对。
+  -- 此前只有 platform / created_at 索引 → 每个岗位一次全表扫描；投递量上来后明显拖慢。
+  CREATE INDEX IF NOT EXISTS idx_applications_platform_position ON applications(platform, position);
+  CREATE INDEX IF NOT EXISTS idx_applications_company ON applications(company);
 
   CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,

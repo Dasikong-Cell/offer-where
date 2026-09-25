@@ -18,7 +18,15 @@ $sw = [Diagnostics.Stopwatch]::StartNew()
 # Do NOT go back to "--exclude=<name>": bsdtar matches exclude patterns against
 # directory NAMES too, so "--exclude=./dist" also killed node_modules/tsx/dist/
 # and produced a package that could not start.
-$dirs  = @("node", "node_modules", "public", "server", "shared", "scripts")
+$dirs  = @("node", "node_modules", "public", "scripts")
+# server/ and shared/ are archived file-by-file so their tsc build artifacts (*.js emitted
+# next to *.ts) can be dropped -- the app runs .ts via tsx, so those .js are redundant and
+# a stale copy could shadow its same-named .ts.
+# NOTE: do NOT reintroduce tar's --exclude here. bsdtar matches a pattern such as
+# `server/*.js` at ANY path level, so it also deleted node_modules/**/server/*.js
+# (254 dependency files silently lost -- caught by the audit assertion below).
+# Enumerating files explicitly is the only reliable way to scope it to the top level.
+$splitDirs = @("server", "shared")
 $files = @("package.json", "package-lock.json", "tsconfig.json", ".env.example",
            "README.md", "DEVELOPMENT.md", "LOGIN_GUIDE.md", "LICENSE")
 
@@ -28,12 +36,14 @@ $scripts = Get-ChildItem $root -File -Force |
   Select-Object -ExpandProperty Name
 
 $items = @()
-$items += $dirs   | Where-Object { Test-Path (Join-Path $root $_) }
-$items += $files  | Where-Object { Test-Path (Join-Path $root $_) }
+$items += $dirs      | Where-Object { Test-Path (Join-Path $root $_) }
+$items += $splitDirs | Where-Object { Test-Path (Join-Path $root $_) }
+$items += $files     | Where-Object { Test-Path (Join-Path $root $_) }
 $items += $scripts
 
 Write-Host "[1/2] packaging $($items.Count) top-level items ..."
 Write-Host ("      dirs: " + (($items | Where-Object { $dirs -contains $_ }) -join ', '))
+Write-Host ("      split(minus *.js): " + (($items | Where-Object { $splitDirs -contains $_ }) -join ', '))
 Write-Host ("      files: " + (($items | Where-Object { $files -contains $_ }) -join ', '))
 Write-Host ("      scripts: " + ($scripts -join ', '))
 
@@ -41,7 +51,25 @@ if (Test-Path $zip) {
   try { Remove-Item $zip -Force -ErrorAction Stop }
   catch { Write-Host "[warn] could not delete old zip; tar will overwrite it" }
 }
-& $tar -a -c -f $zip -C $root @items
+
+# Expand server/ and shared/ into their files (minus tsc artifacts); every member is then
+# passed to tar as an argument. Using args (rather than a -T list file) keeps the
+# Chinese-named root launchers intact -- an ASCII-encoded
+# list file would corrupt them.
+$members = New-Object System.Collections.Generic.List[string]
+foreach ($d in $dirs) { if (Test-Path (Join-Path $root $d)) { $members.Add($d) } }
+foreach ($d in $splitDirs) {
+  $base = Join-Path $root $d
+  if (Test-Path $base) {
+    Get-ChildItem $base -Recurse -File -Force |
+      Where-Object { $_.Extension -ne '.js' } |
+      ForEach-Object { $members.Add(($_.FullName.Substring($root.Length + 1) -replace '\\', '/')) }
+  }
+}
+foreach ($f in $files)   { if (Test-Path (Join-Path $root $f)) { $members.Add($f) } }
+foreach ($s in $scripts) { $members.Add($s) }
+
+& $tar -a -c -f $zip -C $root @members
 if ($LASTEXITCODE -ne 0) { Write-Host "[error] tar failed with code $LASTEXITCODE"; exit 1 }
 
 # ── VERIFY the archive before declaring success ───────────────────────────────
@@ -71,6 +99,24 @@ $forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $
 if ($forbidden) {
   Write-Host "[error] archive contains files that must never be shipped:"
   $forbidden | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+
+# tsc build artifacts (.js) under server/ or shared/ must never ship (tsx runs .ts directly)
+$leftover = $listing | Where-Object { $_ -match '^server/.*\.js$' -or $_ -match '^shared/.*\.js$' }
+if ($leftover) {
+  Write-Host "[error] archive still contains tsc build artifacts (.js under server/ or shared/):"
+  $leftover | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+# Reverse assertion: node_modules must not be damaged -- compare against the on-disk truth,
+# not a guessed threshold. History: `--exclude=server/*.js` silently dropped 254 dependency
+# files under node_modules/**/server/*.js before this audit caught it.
+$diskNmJs = (Get-ChildItem (Join-Path $root 'node_modules') -Recurse -File -Force |
+             Where-Object { $_.Extension -eq '.js' } | Measure-Object).Count
+$zipNmJs  = ($listing | Where-Object { $_ -match '^node_modules/.*\.js$' } | Measure-Object).Count
+if ($zipNmJs -lt $diskNmJs) {
+  Write-Host "[error] node_modules lost files: zip .js=$zipNmJs but disk .js=$diskNmJs"
   exit 1
 }
 

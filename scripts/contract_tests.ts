@@ -29,7 +29,7 @@ import { extractToken, safeEqual, isAuthEnabled } from '../server/services/authT
 import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
 import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
 import { computeAbReport } from '../server/services/apply/applyAbTest.js';
-import { decideGreet, isExcludeHit } from '../server/services/apply/greetDecision.js';
+import { decideGreet, isExcludeHit, alreadyApplied } from '../server/services/apply/greetDecision.js';
 import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
 import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js';
 import { SUPPORTED_PLATFORMS, PENDING_PLATFORMS, REGISTERED_PLATFORMS } from '../server/services/apply/index.js';
@@ -58,8 +58,18 @@ const RUN_TAG = 'ct-' + Date.now().toString(36);
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ A. 请求来源守卫（本机 API 安全边界） ══════');
 const allowed = buildAllowedOrigins(4400);
-check('GET 任意来源放行（只读无副作用）', checkRequestOrigin({ method: 'GET', origin: 'http://evil.com', allowed }).ok);
-check('OPTIONS 预检放行', checkRequestOrigin({ method: 'OPTIONS', origin: 'http://evil.com', allowed }).ok);
+check('OPTIONS 预检放行（中间件短路）', checkRequestOrigin({ method: 'OPTIONS', origin: 'http://evil.com', allowed }).ok);
+check('GET 本机脚本/直接导航放行（无 Origin、无跨站标记）', checkRequestOrigin({ method: 'GET', allowed }).ok);
+check('GET 直接导航放行（Sec-Fetch-Site: none）', checkRequestOrigin({ method: 'GET', secFetchSite: 'none', allowed }).ok);
+check('GET + 白名单 Origin 放行（Vite 开发前端）', checkRequestOrigin({ method: 'GET', origin: 'http://127.0.0.1:4400', allowed }).ok);
+{
+  const r = checkRequestOrigin({ method: 'GET', origin: 'http://evil.com', allowed });
+  check('GET + 非白名单 Origin 拒绝（防恶意页 fetch）', !r.ok && r.reason.includes('来源'), r.ok ? '被放行(危险!)' : r.reason);
+}
+{
+  const r = checkRequestOrigin({ method: 'GET', secFetchSite: 'cross-site', allowed });
+  check('GET + 跨站无 Origin 拒绝（防 <img> 触发带副作用的 GET）', !r.ok && r.reason.includes('跨站'), r.ok ? '被放行(危险!)' : r.reason);
+}
 check('写请求 + 白名单来源放行', checkRequestOrigin({ method: 'POST', origin: 'http://127.0.0.1:4400', allowed }).ok);
 {
   const r = checkRequestOrigin({ method: 'POST', origin: 'http://evil.com', allowed });
@@ -744,10 +754,33 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const dirty = checkResumeCompliance({ resumeText: '张三 13800138000 a@b.com 教育背景 软件工程 🚀 工作经历 | 列1 | 列2 | EXPERIENCE 技能 Java' });
   check('H4 emoji/表格/全大写被标记', dirty.issues.some((i) => i.rule === '格式卫生'), `issues=${dirty.issues.length}`);
 
-  // H5 A/B 报告（对标 LoopCV）：结构正确、total>=0、strategies 为数组
+  // H8 已投判定口径（2026-09-25 修复「跨公司/跨平台误判已投」）：
+// 旧实现无平台维度、且 company 为空时退化为「只比 position」→ 同名职位在任意公司/平台都被判已投。
+{
+  const pos = 'CT-ALREADY-' + RUN_TAG;
+  const ins = "INSERT INTO applications (id, platform, company, position, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)";
+  const now = new Date().toISOString();
+  exec(ins, ['ct-ap-blank-' + RUN_TAG, 'boss', '', pos, 'applied', now, now]);
+  exec(ins, ['ct-ap-co-' + RUN_TAG, 'boss', '测试公司A', pos, 'applied', now, now]);
+  try {
+    check('H8 同平台+同公司 → 判为已投', alreadyApplied('boss', '测试公司A', pos));
+    check('H8 company 为空的历史行不再误伤其它公司', !alreadyApplied('boss', '测试公司B', pos));
+    check('H8 平台不同 → 不判为已投（跨平台同名不算同一岗位）', !alreadyApplied('zhilian', '测试公司A', pos));
+    check('H8 岗位不同 → 不判为已投', !alreadyApplied('boss', '测试公司A', pos + '-不存在'));
+  } finally {
+    exec("DELETE FROM applications WHERE position = ?", [pos]);
+  }
+}
+
+// H5 A/B 报告（对标 LoopCV）：结构正确、total>=0、strategies 为数组
   const ab = computeAbReport();
   check('H5 A/B 报告结构正确', ab && typeof ab.total === 'number' && Array.isArray(ab.strategies), `total=${ab?.total}`);
   check('H5 A/B 报告 total>=0', (ab?.total ?? -1) >= 0);
+  // F5：legacy（历史未打标）不参与对照；三分必须完备（每行恰好落入一个桶）
+  check('H5 A/B 对照排除 legacy 且条数可读', typeof ab?.letterVsNoLetter?.legacyExcluded === 'number', `legacyExcluded=${ab?.letterVsNoLetter?.legacyExcluded}`);
+  check('H5 A/B 三分完备（letter + no_letter + legacy = total）',
+    (ab?.letterVsNoLetter?.has.applications ?? -1) + (ab?.letterVsNoLetter?.no.applications ?? -1) + (ab?.letterVsNoLetter?.legacyExcluded ?? -1) === ab?.total,
+    `has=${ab?.letterVsNoLetter?.has.applications} no=${ab?.letterVsNoLetter?.no.applications} legacy=${ab?.letterVsNoLetter?.legacyExcluded} total=${ab?.total}`);
 }
 
 // H6 模拟真人节奏（对标 CareerBoom.ai）：humanize 关闭时退化为固定间隔（调试可复现），

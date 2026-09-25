@@ -292,6 +292,7 @@
             <div class="note small" style="margin-top:6px">勾选「仅预览」会走完登录态校验、岗位页加载、下线检测与 JD 抓取，并探测投递按钮是否可用，<b>但不点击、不产生任何真实投递</b> —— 用于先验证链路再实投。</div>
             <div class="progress"><i id="batchBar"></i></div>
             <div class="out" id="batchOut"></div>
+            <div id="batchManual"></div>
           </div>
 
           <!-- reply -->
@@ -373,6 +374,18 @@
         <div class="card" style="margin-top:16px">
           <h2>投递操作证据回溯 <span class="tag">对标 CareerBoom</span></h2>
           <p class="note small">每次真实投递自动截取平台页存证，可审计「当时点了什么」，降低封号风险。</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+            <span class="muted">过程抽帧录制：</span>
+            <select id="recPlatform" style="width:180px"></select>
+            <select id="recSeconds" style="width:110px">
+              <option value="6">6 秒</option>
+              <option value="10" selected>10 秒</option>
+              <option value="20">20 秒</option>
+            </select>
+            <button class="btn sm" id="recRun">开始抽帧录制</button>
+            <span class="muted small">抽帧序列（可当幻灯片回看操作过程），非视频；需目标平台窗口已打开。</span>
+          </div>
+          <div id="recResult" style="margin-top:10px"></div>
           <div id="eviResult" style="margin-top:12px"></div>
         </div>
       </section>
@@ -600,24 +613,33 @@
 "use strict";
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+// tier 标注平台**能力完整度**（此前只标"已登录/离线"，用户以为 15 个都能一样地投）：
+//   full    = 全套引擎：批量投递 / 采集 / 复聊 / 求职信（对齐后端 ENGINE_PLATFORMS）
+//   apply   = 可投递，但能力较基础（部分动作不适用）
+//   pending = 已登记、**投递实现待接入**：窗口能开、巡检可用，点投递会明确返回「待接入」
 const PLATFORMS = [
-  {id:'boss', name:'BOSS直聘', color:'#16c2a3'},
-  {id:'liepin', name:'猎聘', color:'#0a64ee'},
-  {id:'job51', name:'前程无忧(51job)', color:'#ff5e00'},
-  {id:'zhilian', name:'智联招聘', color:'#ff4d4f'},
-  {id:'offerbiu', name:'offerbiu', color:'#7c5cff'},
-  {id:'nowcoder', name:'牛客网', color:'#00b3ff'},
-  // 2026-09-21 新增登记：窗口/巡检已就绪；采集与投递实现待各自实机校准（见 README「支持平台」）
-  {id:'easyzhipin', name:'易直聘', color:'#00b96b'},
-  {id:'job58', name:'58同城招聘', color:'#ff6a00'},
-  {id:'chinahr', name:'中华英才网', color:'#e0234e'},
-  {id:'dianzhang', name:'店长直聘', color:'#00c2a8'},
-  {id:'yupao', name:'鱼泡直聘', color:'#1e88e5'},
-  {id:'maimai', name:'脉脉高聘', color:'#00b8d4'},
-  {id:'ganji', name:'赶集招聘', color:'#f5a623'},
-  {id:'iguopin', name:'国聘', color:'#d32f2f'},
-  {id:'yingjiesheng', name:'应届生求职网', color:'#5e35b1'},
+  {id:'boss', name:'BOSS直聘', color:'#16c2a3', tier:'full'},
+  {id:'liepin', name:'猎聘', color:'#0a64ee', tier:'full'},
+  {id:'job51', name:'前程无忧(51job)', color:'#ff5e00', tier:'full'},
+  {id:'zhilian', name:'智联招聘', color:'#ff4d4f', tier:'full'},
+  {id:'offerbiu', name:'offerbiu', color:'#7c5cff', tier:'apply'},
+  {id:'nowcoder', name:'牛客网', color:'#00b3ff', tier:'apply'},
+  {id:'easyzhipin', name:'易直聘', color:'#00b96b', tier:'pending'},
+  {id:'job58', name:'58同城招聘', color:'#ff6a00', tier:'pending'},
+  {id:'chinahr', name:'中华英才网', color:'#e0234e', tier:'apply'},
+  {id:'dianzhang', name:'店长直聘', color:'#00c2a8', tier:'pending'},
+  {id:'yupao', name:'鱼泡直聘', color:'#1e88e5', tier:'apply'},
+  {id:'maimai', name:'脉脉高聘', color:'#00b8d4', tier:'pending'},
+  {id:'ganji', name:'赶集招聘', color:'#f5a623', tier:'pending'},
+  {id:'iguopin', name:'国聘', color:'#d32f2f', tier:'apply'},
+  {id:'yingjiesheng', name:'应届生求职网', color:'#5e35b1', tier:'apply'},
 ];
+const TIER_LABEL = { full:'全套', apply:'可投递', pending:'待接入' };
+const TIER_TIP = {
+  full:'全套能力：批量投递 / 采集 / 复聊 / 求职信',
+  apply:'可投递，但能力较基础（采集、复聊等动作可能不适用）',
+  pending:'已登记、投递实现待接入：窗口与巡检可用，点投递会明确返回「待接入」而非静默失败',
+};
 const pfName = id => (PLATFORMS.find(p=>p.id===id)||{}).name || id;
 
 const AUTH_TOKEN = (typeof window!=='undefined' && window.__AUTH_TOKEN__) || '';
@@ -633,7 +655,9 @@ async function apiText(path, opts={}){
   return res.text();
 }
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html!=null)e.innerHTML=html; return e; }
-function esc(s){ return String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// esc：HTML 转义。⚠️ 2026-09-25 补上引号 —— 此前只转 &<> ，属性上下文（src="…"/title='…'）
+// 仍可被引号突破形成注入面；转义 " 与 ' 后，文本/属性两种上下文都安全。
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 /* ---------- sidebar nav ---------- */
 const VIEW_META = {
@@ -720,7 +744,9 @@ async function renderAb(){
     if(r.letterVsNoLetter){
       const lv=r.letterVsNoLetter;
       const win = lv.winner==='inconclusive' ? '结论不显著' : ('胜出：'+(lv.winner==='letter'?'带求职信':'不带求职信'));
-      html+='<div class="note" style="margin-top:10px"><b>核心 A/B（带求职信 vs 不带）：</b>带求职信 '+lv.has.applications+' 份/回复率 '+lv.has.replyRate+'%，不带 '+lv.no.applications+' 份/回复率 '+lv.no.replyRate+'%。<b style="color:#ff7a45">'+win+'</b> —— '+esc(lv.note)+'</div>';
+      html+='<div class="note" style="margin-top:10px"><b>核心 A/B（带求职信 vs 不带）：</b>带求职信 '+lv.has.applications+' 份/回复率 '+lv.has.replyRate+'%，不带 '+lv.no.applications+' 份/回复率 '+lv.no.replyRate+'%。<b style="color:#ff7a45">'+win+'</b>'
+        +(lv.legacyExcluded?' <span class="muted">（历史未打标 '+lv.legacyExcluded+' 条已排除出对照）</span>':'')
+        +' —— '+esc(lv.note)+'</div>';
     } else {
       html+='<div class="note" style="margin-top:10px">需同时有「带求职信」与「不带求职信」两组样本才能对比（在批量投递里切换「投递后发求职信」开关即可分流）。</div>';
     }
@@ -759,6 +785,30 @@ async function loadEvidence(){
   }catch(e){ out.innerHTML='<div class="note warn">加载失败：'+esc(e.message)+'</div>'; }
 }
 
+/* 过程抽帧录制（对标 CareerBoom.ai 的「操作录屏」；本实现是抽帧序列，非视频） */
+async function runRecord(){
+  const out=$('#recResult'), btn=$('#recRun');
+  const platform=$('#recPlatform').value;
+  if(!platform){ out.innerHTML='<div class="note warn">请先选择平台。</div>'; return; }
+  btn.disabled=true; out.innerHTML='<div class="note">录制中…（请勿切换该平台窗口的页面）</div>';
+  try{
+    const sec=$('#recSeconds').value;
+    const r=await api('/api/apply/record?platform='+encodeURIComponent(platform)+'&seconds='+encodeURIComponent(sec));
+    if(!r || !r.ok){ out.innerHTML='<div class="note warn">录制失败：'+esc((r&&r.error)||'未取到帧（目标平台窗口是否已打开？）')+'</div>'; return; }
+    let h='<div class="note small" style="margin-bottom:8px">已录制 '+r.frames.length+' 帧（间隔约 '+(r.intervalMs||0)+'ms，跨度约 '+r.seconds+'s）→ <code>'+esc(r.dir||'')+'</code>　'
+      + '<a href="'+esc(r.dir||'')+'" target="_blank">打开目录</a></div><div style="display:flex;flex-wrap:wrap;gap:8px">';
+    for(const f of r.frames) h+='<a href="'+esc(f)+'" target="_blank"><img src="'+esc(f)+'" style="width:132px;height:84px;object-fit:cover;border:1px solid var(--line);border-radius:6px" onerror="this.style.display=\'none\'"></a>';
+    h+='</div>';
+    out.innerHTML=h;
+  }catch(e){ out.innerHTML='<div class="note warn">录制失败：'+esc(e.message)+'</div>'; }
+  finally{ btn.disabled=false; }
+}
+(function initRecorder(){
+  const sel=$('#recPlatform');
+  if(sel && !sel.options.length) sel.innerHTML=PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
+  const b=$('#recRun'); if(b) b.addEventListener('click', runRecord);
+})();
+
 /* ---------- service health ---------- */
 async function checkSvc(){
   try{
@@ -795,6 +845,27 @@ function renderFunnel(box, legend, ms, total){
   }).join('');
   legend.innerHTML = segs.map(s=>'<span><i class="'+s[0]+'"></i>'+s[2]+' '+s[1]+'</span>').join('');
 }
+/* O3：近 7 天投递趋势（内联条形，避免引入图表库） */
+async function loadTrend(){
+  try{
+    const t = await api('/api/stats/trend?days=7');
+    if(!t || !t.items || !t.items.length) return;
+    let host = document.getElementById('trendLine');
+    if(!host){
+      host = document.createElement('div'); host.id='trendLine';
+      const anchor = document.getElementById('matchBasisNote');
+      if(anchor && anchor.parentElement) anchor.parentElement.appendChild(host);
+      else return;
+    }
+    const bars = t.items.map(i=>{
+      const n = Math.max(i.count>0?1:0, Math.round((i.count/(t.max||1))*12));
+      return i.date.slice(5) + '  ' + '█'.repeat(n) + '  ' + i.count;
+    }).join('\n');
+    host.innerHTML = '<div class="note small" style="margin-top:8px"><b>近 '+t.days+' 天投递：</b>共 '+t.total+' 份'
+      + '<div class="muted" style="white-space:pre;font-family:ui-monospace,Consolas,monospace;line-height:1.5;margin-top:4px">'+esc(bars)+'</div></div>';
+  }catch(e){ /* 趋势是只读附加信息，失败不影响看板 */ }
+}
+
 async function loadDashboard(){
   let f=null;
   try{ f = await api('/api/stats/funnel'); }catch(e){}
@@ -811,6 +882,7 @@ async function loadDashboard(){
   }
   loadAi();
   loadHealth();
+  loadTrend();
   // platform cards
   const grid = $('#pfGrid'); grid.innerHTML='';
   let health = {};
@@ -826,7 +898,8 @@ async function loadDashboard(){
     else if(st.connected){ label='已连接'; cls='b-info'; }
     const c = el('div','card pf');
     c.innerHTML = '<div class="top"><div class="ava" style="background:'+p.color+'">'+esc(p.name[0])+'</div>'
-      + '<div class="nm">'+esc(p.name)+'</div><span class="st '+cls+'">'+label+'</span></div>'
+      + '<div class="nm">'+esc(p.name)+'<br><span class="st b-mut" style="margin-top:2px;display:inline-block" title="'+esc(TIER_TIP[p.tier]||'')+'">'+esc(TIER_LABEL[p.tier]||'')+'</span></div>'
+      + '<span class="st '+cls+'">'+label+'</span></div>'
       + '<div class="row"><button class="btn sm" data-check="'+p.id+'">检查登录</button>'
       + '<button class="btn sm" data-open="'+p.id+'">打开窗口</button></div>';
     grid.appendChild(c);
@@ -971,6 +1044,25 @@ $('#batchRun').addEventListener('click', async ()=>{
     const head = (r && r.message) ? ('【结果】'+r.message+'\n\n') : '';
     $('#batchOut').textContent = head + JSON.stringify(r, null, 2);
     $('#batchBar').style.width='100%';
+    // F3「需人工」引导：把需要人工介入的条目单独列出来并给一键入口 ——
+    // 否则用户只看到一堆 need_manual，不知道下一步该做什么（登录 / 过滑块 / 完善在线简历）。
+    const rs = Array.isArray(r && r.results) ? r.results : [];
+    const manual = rs.filter(x=>x && (x.status==='need_manual' || x.status==='need_captcha'));
+    const host = $('#batchManual'); if(host) host.innerHTML='';
+    if(host && manual.length){
+      let h = '<div class="note warn" style="margin-top:8px"><b>需人工介入 '+manual.length+' 条</b>'
+        + '（账号/验证码/页面结构类，自动投递无法代劳）：<ul style="margin:6px 0 6px 18px">';
+      for(const x of manual.slice(0,8)) h += '<li>'+esc((x.company||'')+' · '+(x.position||''))+' — '+esc(x.message||x.status)+'</li>';
+      h += '</ul><button class="btn sm" id="batchOpenDbg">打开该平台调试窗口</button> '
+        + '<span class="muted">在窗口里处理完（登录 / 过滑块 / 完善在线简历）再重跑本批即可。</span></div>';
+      host.innerHTML = h;
+      const b = $('#batchOpenDbg');
+      if(b) b.addEventListener('click', ()=>{
+        const pid = manual[0].platform || body.platform || $('#batchPlatform').value;
+        if(!pid) return;
+        api('/api/browser/exec', {method:'POST', body:JSON.stringify({platform:pid, action:'focus'})}).catch(()=>{});
+      });
+    }
     loadQuota();
   }catch(e){ $('#batchOut').textContent='错误：'+e.message; }
   btn.disabled=false; btn.textContent='开始投递';

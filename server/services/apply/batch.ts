@@ -100,7 +100,7 @@ export interface BatchCriteria {
   minSalary?: number;       // 月薪下限（k）；岗位薪资上限低于它则排除
   maxSalary?: number;       // 月薪上限（k）；岗位薪资下限高于它则排除
   minScore?: number;        // 匹配分下限（0-100）；缺失时现场计算
-  excludeApplied?: boolean; // 跳过已投递岗位
+  excludeApplied?: boolean; // 跳过已投递岗位（**默认 true**；显式传 false 才把已投岗位纳入候选）
   /** 打招呼前先做决策（默认 true）。命中硬规则/AI 判否 → 跳过并写入 skip_reason */
   greetDecision?: boolean;
   /** 投递成功后追加发送求职信（默认 false，因为会显著变慢并可能打扰 HR） */
@@ -329,7 +329,11 @@ export async function runBatchApply(
   // 永远排除「已下线/不可投」岗位：批量连投的岗位池会被投递消耗，已确认关闭的岗位
   // 若仍留在候选会反复被选中重试（浪费 CDP 调用、刷 need_manual）。
   jobs = jobs.filter(j => j.status !== 'unavailable');
-  if (input.criteria?.excludeApplied) jobs = jobs.filter(j => j.status !== 'applied');
+  // ⚠️ 2026-09-25：**默认开启**（显式传 `false` 才关闭）。
+  //    此前为「不传就不过滤」，导致直连 API / 脚本漏传时，已投(status='applied')的高分岗位
+  //    仍留在候选池里按分数排最前，每轮被选中→判「已投递过」→跳过，**真实可投候选永远轮不到**
+  //    （实测连续 5 轮零投递，全是重复选中同一批已投岗位）。
+  if (input.criteria?.excludeApplied !== false) jobs = jobs.filter(j => j.status !== 'applied');
 
   // 2.5) 岗位池自动补充：候选不足时按档案目标职位重新采集 BOSS 岗位，避免「共 0 个岗位」
   // 仅 BOSS 支持服务端采集；其余平台需先人工登录，此处不触发。
@@ -339,7 +343,7 @@ export async function runBatchApply(
       const added = await collectBossToDb(MIN_POOL * 4);
       if (added > 0) {
         jobs = db.listJobs({ source: input.source }).filter(j => j.status !== 'unavailable');
-        if (input.criteria?.excludeApplied) jobs = jobs.filter(j => j.status !== 'applied');
+        if (input.criteria?.excludeApplied !== false) jobs = jobs.filter(j => j.status !== 'applied');
         console.log(`[Batch] 自动补充后候选池 ${jobs.length} 个`);
       }
     } catch (e: any) {

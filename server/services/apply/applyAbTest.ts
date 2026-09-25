@@ -37,13 +37,20 @@ export interface AbReport {
   ok: boolean;
   total: number;
   strategies: StrategyStat[];
-  /** 核心 A/B 对比：带求职信 vs 不带（两组都有样本才给出结论） */
+  /**
+   * 核心 A/B 对比：带求职信 vs 不带。
+   * ⚠️ 2026-09-25：`legacy`（历史未打标）**不再混入对照组** —— 那批数据策略未知，
+   * 混进「不带求职信」会把两组差异稀释到看不出来（实测对照组 840 条里一条显式 no_letter 都没有）。
+   * 被排除的条数见 `legacyExcluded`。
+   */
   letterVsNoLetter: {
     has: { applications: number; replyRate: number; interviewRate: number };
     no: { applications: number; replyRate: number; interviewRate: number };
     winner: 'letter' | 'no_letter' | 'inconclusive';
     note: string;
-  } | null;
+    /** 因未打标而被排除出对照的历史投递条数 */
+    legacyExcluded: number;
+  };
   note: string;
 }
 
@@ -81,8 +88,11 @@ export function computeAbReport(): AbReport {
   for (const a of apps) {
     const raw = String(a.strategy || 'legacy');
     const [letterPart, rvPart] = raw.split('|');
-    // 历史未打标数据(legacy)归入「不带求职信」对照组；letter 维度只关心 letter/no_letter
-    const letter: string = letterPart === 'letter' ? 'letter' : 'no_letter';
+    // 三分：letter / no_letter / legacy（历史未打标）。
+    // ⚠️ 2026-09-25：legacy 不再并入对照组 —— 那 800 多条策略未知，混进「不带求职信」
+    //    会把真实差异稀释到看不出来（实测对照组 840 条里没有一条是显式的 no_letter）。
+    const letter: string = letterPart === 'letter' ? 'letter'
+      : (letterPart === 'no_letter' ? 'no_letter' : 'legacy');
     const resumeVersion = rvPart || 'unknown';
     const key = raw;
     if (!groups.has(key)) {
@@ -114,26 +124,30 @@ export function computeAbReport(): AbReport {
       interviewRate: applications ? Math.round((interviewed / applications) * 100) : 0,
     };
   };
-  let letterVsNoLetter: AbReport['letterVsNoLetter'] = null;
-  if (has.length && no.length) {
-    const h = agg(has), n = agg(no);
-    let winner: 'letter' | 'no_letter' | 'inconclusive' = 'inconclusive';
+  // 对照组只保留**显式**打标的两臂；legacy 仅计入总量，不参与对照
+  const h = agg(has), n = agg(no);
+  const legacyExcluded = strategies.filter((s) => s.letter === 'legacy').reduce((s, x) => s + x.applications, 0);
+  let winner: 'letter' | 'no_letter' | 'inconclusive' = 'inconclusive';
+  let abNote: string;
+  if (!h.applications || !n.applications) {
+    abNote = `对照组样本不足：${!h.applications ? '「带求职信」' : '「不带求职信」'}一组尚无投递`
+      + (legacyExcluded ? `（另有 ${legacyExcluded} 条历史投递未打标，已排除出对照以保证结论干净）` : '')
+      + '。继续投递即可积累。';
+  } else if (h.applications >= 5 && n.applications >= 5 && Math.abs(h.replyRate - n.replyRate) >= 10) {
     // 两组都至少 5 样本、且回复率差 ≥ 10 个百分点才给结论
-    if (h.applications >= 5 && n.applications >= 5 && Math.abs(h.replyRate - n.replyRate) >= 10) {
-      winner = h.replyRate > n.replyRate ? 'letter' : 'no_letter';
-    }
-    letterVsNoLetter = {
-      has: h, no: n, winner,
-      note: winner === 'inconclusive'
-        ? '样本不足或差异不显著（两组各需 ≥5 且回复率差 ≥10pp 才下结论），建议继续积累数据。'
-        : `「${winner === 'letter' ? '带求职信' : '不带求职信'}」回复率更高（${winner === 'letter' ? h.replyRate : n.replyRate}% vs ${winner === 'letter' ? n.replyRate : h.replyRate}%）`,
-    };
+    winner = h.replyRate > n.replyRate ? 'letter' : 'no_letter';
+    abNote = `「${winner === 'letter' ? '带求职信' : '不带求职信'}」回复率更高（${winner === 'letter' ? h.replyRate : n.replyRate}% vs ${winner === 'letter' ? n.replyRate : h.replyRate}%）`;
+  } else {
+    abNote = '样本不足或差异不显著（两组各需 ≥5 且回复率差 ≥10pp 才下结论），建议继续积累数据。'
+      + (legacyExcluded ? `（历史未打标 ${legacyExcluded} 条未计入对照）` : '');
   }
+  const letterVsNoLetter: AbReport['letterVsNoLetter'] = { has: h, no: n, winner, note: abNote, legacyExcluded };
 
   const total = apps.length;
-  const note = total < 10
+  const note = (total < 10
     ? `当前样本量较小（${total} 次投递），结论仅供参考；建议持续投递以积累统计显著性。`
-    : `已基于 ${total} 次投递做策略归因（回复 ${repliedTotal}、面试 ${interviewedTotal}）。`;
+    : `已基于 ${total} 次投递做策略归因（回复 ${repliedTotal}、面试 ${interviewedTotal}）。`)
+    + (legacyExcluded ? ` 其中 ${legacyExcluded} 条为历史未打标数据：仅计入总量，**不参与 A/B 对照**。` : '');
 
   return { ok: true, total, strategies, letterVsNoLetter, note };
 }

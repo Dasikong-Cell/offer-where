@@ -28,3 +28,31 @@ jobs:
       # 只读回归（缺本地简历时自动跳过 A 段）+ 自动回复/来源守卫合约测试
       - name: 回归自检 + 合约测试
         run: npm test
+
+  # 产品是 Windows-only（.bat 启动器 + 本机 Chrome/CDP + pack.ps1 依赖 PowerShell 与 tar.exe）。
+  # 上面那个 ubuntu job 覆盖不到真实交付路径，所以这里补一个 Windows job：
+  # 打包 -> 解压到全新目录 -> 用「包内自带 node」启动 -> 健康探测（断言都在 scripts/pack_smoke.ps1 里）。
+  package-smoke:
+    name: Windows 打包 + 解压即用冒烟
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 仓库里 node/ 被 gitignore（只在打包时需要），CI 里用 runner 自带的 node 顶上
+      - name: 准备自带 Node 运行时
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ./node | Out-Null
+          Copy-Item (Get-Command node).Source ./node/node.exe
+
+      - name: 打包 + 解压即用冒烟
+        shell: pwsh
+        run: ./scripts/pack_smoke.ps1

@@ -127,13 +127,30 @@ export function resolveExpectedCities(profile?: Record<string, any> | null): str
   return raw.split(/[，,、;；\s|/]+/).map((s) => s.trim()).filter(Boolean);
 }
 
-/** 该岗位是否已有成功投递记录（按公司+岗位，兼容 company 为空的情况） */
-function alreadyApplied(company?: string | null, position?: string | null): boolean {
-  if (!position) return false;
+/**
+ * 该岗位是否已有成功投递记录。
+ *
+ * ⚠️ 2026-09-25 修复「跨公司 / 跨平台误判已投」。旧实现
+ *   `WHERE position = ? AND (? IS NULL OR ? = '' OR company = ?)` 有两个致命点：
+ *   ① **没有平台维度**；② `company` 为空时**退化为「只比 position」**。
+ *   而历史 `applications.company` 大量为空 → 「Java开发工程师」这类同名职位在
+ *   **任意公司、任意平台**都被判成「已投递过」。实测 boss 上 5 个高分岗位被反复跳过、投不出去。
+ *
+ * 现在：必须 `position` + `platform` 同时命中；`company` 仅当**双方都有值**时才参与比对
+ *   （历史空 company 的行不再拦人）——宁可少判一次「已投」，也不漏投真实机会。
+ */
+export function alreadyApplied(platform?: string | null, company?: string | null, position?: string | null): boolean {
+  const pos = String(position || '').trim();
+  if (!pos) return false;
+  const plat = String(platform || '').trim();
+  const comp = String(company || '').trim();
   try {
     const rows = query<{ c: number }>(
-      `SELECT COUNT(*) c FROM applications WHERE position = ? AND (? IS NULL OR ? = '' OR company = ?)`,
-      [position, company || null, company || '', company || null],
+      `SELECT COUNT(*) c FROM applications
+        WHERE position = ?
+          AND (? = '' OR platform = ?)
+          AND (? = '' OR (company <> '' AND company = ?))`,
+      [pos, plat, plat, comp, comp],
     );
     return (rows[0]?.c || 0) > 0;
   } catch {
@@ -158,8 +175,8 @@ export async function decideGreet(ctx: GreetContext): Promise<GreetDecision> {
       return { greet: false, reason: '已写过求职信，不重复发送', source: 'rule' };
     }
 
-    // ── 3. 已投递过
-    if (alreadyApplied(ctx.company, ctx.position)) {
+    // ── 3. 已投递过（按 平台+职位，公司双方都有值时才比对 —— 见 alreadyApplied 注释）
+    if (alreadyApplied(ctx.platform, ctx.company, ctx.position)) {
       return { greet: false, reason: '已投递过该岗位', source: 'rule' };
     }
 

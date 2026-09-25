@@ -24,6 +24,15 @@ export interface CleanupReport {
   freedBytes: number;
   freedHuman: string;
   dryRun: boolean;
+  /** data/ 当前总体积（含 browser 登录态、jd_images 等不清理的部分） */
+  totalBytes: number;
+  totalHuman: string;
+  /** 体积阈值（字节），来自 DATA_MAX_MB，默认 3000MB */
+  maxBytes: number;
+  /** 是否已超阈值 —— 调用方据此告警（分发给他人后磁盘可能被静默吃满） */
+  overThreshold: boolean;
+  /** 统计是否因上限保护而提前结束（体积为下界） */
+  approx: boolean;
 }
 
 function human(bytes: number): string {
@@ -31,6 +40,32 @@ function human(bytes: number): string {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
   return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+/**
+ * 递归统计目录体积。带上限保护（文件数/深度），避免在超大目录上卡住：
+ * data/browser 存放各平台登录态 profile，实测约 18 万个小文件，全量遍历要数秒。
+ */
+function dirSize(dir: string, opts: { maxFiles?: number; maxDepth?: number } = {}): { bytes: number; files: number; truncated: boolean } {
+  const maxFiles = opts.maxFiles ?? 250000;
+  const maxDepth = opts.maxDepth ?? 8;
+  let bytes = 0, files = 0, truncated = false;
+  const walk = (d: string, depth: number) => {
+    if (truncated) return;
+    if (depth > maxDepth) { truncated = true; return; }
+    let entries: string[];
+    try { entries = fs.readdirSync(d); } catch { return; }
+    for (const n of entries) {
+      if (files >= maxFiles) { truncated = true; return; }
+      const p = path.join(d, n);
+      let st: fs.Stats;
+      try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) walk(p, depth + 1);
+      else if (st.isFile()) { files++; bytes += st.size; }
+    }
+  };
+  walk(dir, 0);
+  return { bytes, files, truncated };
 }
 
 /** 删除目录下超过 days 天的普通文件（不递归子目录） */
@@ -84,9 +119,21 @@ export async function cleanupData(opts: CleanupOptions = {}): Promise<CleanupRep
   } catch { /* 忽略 */ }
 
   const freedBytes = screenshots.freedBytes + dbBackups.freedBytes + runLogs.freedBytes;
-  const report: CleanupReport = { screenshots, dbBackups, runLogs, freedBytes, freedHuman: human(freedBytes), dryRun };
+  // O2：data/ 总量统计 + 阈值告警（阈值可经 DATA_MAX_MB 调整，默认 3000MB）
+  const maxBytes = Math.max(256, Number(process.env.DATA_MAX_MB) || 3000) * 1024 * 1024;
+  const size = dirSize(DATA_DIR);
+  const overThreshold = size.bytes > maxBytes;
+  const report: CleanupReport = {
+    screenshots, dbBackups, runLogs, freedBytes, freedHuman: human(freedBytes), dryRun,
+    totalBytes: size.bytes,
+    totalHuman: human(size.bytes) + (size.truncated ? '（下界，统计已截断）' : ''),
+    maxBytes,
+    overThreshold,
+    approx: size.truncated,
+  };
   if (freedBytes > 0) {
     console.log(`[cleanup] ${dryRun ? '(dry-run) ' : ''}释放 ${report.freedHuman}｜截图 ${screenshots.deleted} 个 / DB备份 ${dbBackups.deleted} 个 / 日志 ${runLogs.deleted} 个`);
   }
+  console.log(`[cleanup] data/ 当前 ${report.totalHuman}（阈值 ${human(maxBytes)}）`);
   return report;
 }

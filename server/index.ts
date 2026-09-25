@@ -31,7 +31,7 @@ import { locateJobById } from "./services/apply/jobLocate.js";
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from "./services/apply/index.js";
 import { computeAbReport, backfillLegacyStrategy } from "./services/apply/applyAbTest.js";
 import { checkResumeCompliance } from "./services/apply/resumeCompliance.js";
-import { toApplyProfile } from "./services/apply/common.js";
+import { toApplyProfile, recordFrames } from "./services/apply/common.js";
 import {
   runBatchApply, resolveDailyLimit, todayAppliedCount,
   readPlatformRiskBlock, clearPlatformRiskBlock,
@@ -116,6 +116,23 @@ function logRun(level: 'INFO' | 'ERROR', msg: string): void {
 // 目的：防止任意网页调用本机 API 触发真实投递/发信（DNS-rebinding / 恶意页面静默调用）。
 // 局域网多人共用：把对方访问地址加入 EXTRA_ORIGINS（如 http://192.168.1.20:4400），并把 HOST 设为 0.0.0.0。
 app.use(express.json({ limit: '15mb' }));
+
+// ── 安全响应头（2026-09-25 加固）──
+// 关键：控制台会触发**真实副作用**（投递/发信），必须防「被任意站点 iframe 套娃 + 诱导点击」（点击劫持）。
+// 来源校验拦不住**同源 iframe 内**的点击 —— 只有 frame-ancestors / X-Frame-Options 能拦。
+// 控制台为单文件内联 JS（无外链、无 eval），故 script-src 保留 'unsafe-inline'，其余收紧。
+app.use((_req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' blob: data:; " +
+      "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+  );
+  next();
+});
 
 const ALLOWED_ORIGINS = buildAllowedOrigins(
   PORT,
@@ -1280,6 +1297,43 @@ app.get("/api/apply/evidence", (_req, res) => {
   }
 });
 
+/** 近 N 天投递趋势（O3）：按日聚合 applications（键与 created_at 同为 UTC 日，避免跨时区错位） */
+app.get("/api/stats/trend", (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(30, Number(req.query.days) || 7));
+    const rows = db.listApplications(5000) as any[];
+    const keys: string[] = [];
+    for (let i = days - 1; i >= 0; i--) keys.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+    const buckets = new Map<string, number>(keys.map((k) => [k, 0]));
+    let counted = 0;
+    for (const a of rows) {
+      const k = String(a.created_at || '').slice(0, 10);
+      if (buckets.has(k)) { buckets.set(k, (buckets.get(k) || 0) + 1); counted++; }
+    }
+    const items = [...buckets.entries()].map(([date, count]) => ({ date, count }));
+    res.json({ ok: true, days, total: counted, max: Math.max(1, ...items.map((i) => i.count)), items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '趋势读取失败' });
+  }
+});
+
+/** 过程抽帧录制（对标 CareerBoom.ai 录屏；本实现是**抽帧序列**而非视频，见 recordFrames 注释） */
+app.get("/api/apply/record", async (req, res) => {
+  try {
+    const platform = String(req.query.platform || '').trim();
+    if (!isSupported(platform)) {
+      return res.status(400).json({ error: `不支持的平台：${platform || '(空)'}（可录制：${SUPPORTED_PLATFORMS.join(' / ')}）` });
+    }
+    const r = await recordFrames(platform, {
+      seconds: Number(req.query.seconds) || 8,
+      intervalMs: Number(req.query.intervalMs) || 1200,
+    });
+    res.json(r);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '录制失败' });
+  }
+});
+
 /** 简历合规检测（对标 LoopCV「简历合规检测 / ATS 体检」）：纯本地、可离线、结果可复现 */
 app.post("/api/resume/compliance", (req, res) => {
   try {
@@ -1368,23 +1422,25 @@ app.post("/api/resume/upload", async (req, res) => {
     meta[ver] = { fileName: fileName || path.basename(target), size: buf.length, uploadedAt: new Date().toISOString() };
     writeResMeta(meta);
     let parsed = undefined, warning = undefined;
-    if (isPdf) {
-      try {
-        const struct = await parseResumeFile(target);
-        if (Array.isArray(struct.skills) && struct.skills.length) {
-          const cur: any = db.getProfile();
-          const prev: any = (cur.skills as any) || '';
-          const merged = Array.from(new Set([
-            ...prev.split(/[,，、]/).map((x: string) => String(x).trim()).filter(Boolean),
-            ...struct.skills,
-          ])).filter(Boolean).join('，');
-          db.saveProfile(Object.assign({}, cur, { skills: merged }));
-        }
-        parsed = { name: struct.name, phone: struct.phone, email: struct.email, skills: (struct.skills || []).length, projects: (struct.projects || []).length, rawTextLength: (struct.rawText || '').length };
-      } catch (e: any) { warning = '简历已保存，但自动解析失败：' + (e && e.message ? e.message : e); }
-    } else {
-      warning = 'Word 简历已保存，但当前解析管线仅支持 PDF；如需参与匹配 / 定制，请上传 PDF 版本。';
-    }
+    // ⚠️ 2026-09-25 修复：此前只对 PDF 解析，.docx 即便能保存也**不参与匹配/定制**。
+    //    而解析管线（resume.ts 的 extractResumeText）本就支持 PDF/DOCX/TXT（DOCX 走 mammoth）——
+    //    限制纯粹来自这里，去掉即可让 Word 简历同样进入匹配与定制。
+    try {
+      const struct = await parseResumeFile(target);
+      if (Array.isArray(struct.skills) && struct.skills.length) {
+        const cur: any = db.getProfile();
+        const prev: any = (cur.skills as any) || '';
+        const merged = Array.from(new Set([
+          ...prev.split(/[,，、]/).map((x: string) => String(x).trim()).filter(Boolean),
+          ...struct.skills,
+        ])).filter(Boolean).join('，');
+        db.saveProfile(Object.assign({}, cur, { skills: merged }));
+      }
+      parsed = { name: struct.name, phone: struct.phone, email: struct.email, skills: (struct.skills || []).length, projects: (struct.projects || []).length, rawTextLength: (struct.rawText || '').length };
+      if (struct.rawText.trim().length < 30) {
+        warning = '简历已保存，但抽取到的文本极少（可能是扫描件/图片版）——匹配与定制效果会受限，建议上传文字版 PDF 或 DOCX。';
+      }
+    } catch (e: any) { warning = '简历已保存，但自动解析失败：' + (e && e.message ? e.message : e); }
     res.json({ ok: true, version: ver, path: target, meta: meta[ver], parsed, warning });
   } catch (error: any) {
     res.status(500).json({ error: (error && error.message) ? error.message : '简历上传失败' });
@@ -2449,7 +2505,14 @@ const server = app.listen(PORT, HOST, () => {
     console.error('[watch] bootstrap failed:', e);
   }
   // 非阻塞：释放过期磁盘占用（截图超期、DB 备份仅留最近若干份）
-  cleanupData({}).catch((e) => logRun('ERROR', `cleanupData 启动清理异常: ${e}`));
+  // O2：顺带检查 data/ 总体积是否超阈值（分发给他人后，磁盘可能被静默吃满）
+  cleanupData({})
+    .then((rep: any) => {
+      if (rep && rep.overThreshold) {
+        logRun('ERROR', `data/ 已达 ${rep.totalHuman}，超过阈值 ${Math.round((rep.maxBytes || 0) / 1024 / 1024)}MB —— 建议清理（npm run data:cleanup；或用 DATA_MAX_MB 调整阈值）`);
+      }
+    })
+    .catch((e) => logRun('ERROR', `cleanupData 启动清理异常: ${e}`));
 });
 
 // 启动期错误（典型：端口被占用）——必须显式处理，否则落到 uncaughtException，

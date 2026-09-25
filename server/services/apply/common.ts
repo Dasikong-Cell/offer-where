@@ -117,6 +117,45 @@ export async function tryScreenshot(platform: string, appId?: string): Promise<s
 }
 
 /**
+ * 过程抽帧录制（对标 CareerBoom.ai「每次投递生成操作录屏」）。
+ *
+ * ⚠️ 这是**抽帧序列**（连拍若干张，可当幻灯片回看操作过程），**不是视频**：
+ *    真·录像需要 CDP 长连接 + `Page.startScreencast`，要改驱动模型（原「录屏回溯」名不副实即指此）。
+ *    本实现刻意做成**独立、按需调用**，不进投递主流程 —— 不为此牺牲投递稳定性。
+ *    本机若装了 ffmpeg，可自行把 frame-*.png 合成为 mp4。
+ *
+ * 复用既有 `tryScreenshot`（同一条已充分验证的截图路径），因此不引入任何新的 CDP 代码。
+ */
+export async function recordFrames(
+  platform: string,
+  opts: { seconds?: number; intervalMs?: number } = {},
+): Promise<{ ok: boolean; recId?: string; dir?: string; frames: string[]; seconds?: number; intervalMs?: number; error?: string }> {
+  const seconds = Math.max(2, Math.min(60, Number(opts.seconds) || 8));
+  const intervalMs = Math.max(400, Math.min(5000, Number(opts.intervalMs) || 1200));
+  const total = Math.max(2, Math.min(60, Math.floor((seconds * 1000) / intervalMs) + 1));
+  const recId = `rec-${platform}-${Date.now()}`;
+  const destDir = path.join(DATA_DIR, 'evidence', recId);
+  const frames: string[] = [];
+  try {
+    for (let i = 0; i < total; i++) {
+      const shot = await tryScreenshot(platform);
+      if (shot) {
+        const src = path.join(DATA_DIR, 'screenshots', path.basename(shot));
+        const name = `frame-${String(i).padStart(3, '0')}.png`;
+        if (fs.existsSync(src)) {
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          try { fs.renameSync(src, path.join(destDir, name)); frames.push(`/data/evidence/${recId}/${name}`); } catch { /* 单帧失败只跳过该帧 */ }
+        }
+      }
+      if (i < total - 1) await sleep(intervalMs);
+    }
+    return { ok: frames.length > 0, recId, dir: `/data/evidence/${recId}`, frames, seconds, intervalMs };
+  } catch (e: any) {
+    return { ok: false, recId, frames, error: e?.message || String(e) };
+  }
+}
+
+/**
  * 轮询邮箱验证码
  * 在 sinceMinutes 时间窗内反复拉取，直到命中目标站点发来的验证码邮件。
  */
