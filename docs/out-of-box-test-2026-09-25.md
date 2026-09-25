@@ -300,9 +300,10 @@ copy "job-apply-agent\data\browser\cdp.json" "D:\_pkgtest_oob\data\browser\cdp.j
 |---|---|
 | 桌面 `job-apply-agent-portable.OLD-0155.zip` | 01:55 那个中途快照，已改名留证（454MB），确认无用后可删 |
 | 桌面 `job-apply-agent-portable.zip` | **最终包**（454.7MB / 181316 条目），含 `version.json` build stamp `4d55796 dirty`，已通过打包冒烟（§8.5）。⚠️ 因本轮改动尚未提交，`dirty:true` 会显示到下次打 tag 为止 |
-| `D:\_pkgtest_oob` | 首次测试的旧包解压目录（约 460MB + 测试用 `data/`），**可删** |
-| `_smoke_run.log` / `_smoke_final.log` | 两轮冒烟的原始输出（仓库根，`*.log` 已被 gitignore、且不在打包白名单内，不会外发） |
-| `_console_syntax.mjs` / `_console_render_check.mjs` | 本机专用校验脚本（workspace 根，**刻意不进仓库**，避免混入交付包） |
+| `D:\_pkgtest_oob` | 首次测试的旧包解压目录（约 460MB + 测试用 `data/`） | **已删除**（§9.3） |
+| 冒烟日志 | 前几轮的 `_smoke_run/final/v3/v4.log` 已清理；**保留最终一轮 `_smoke_v5.log`** 作为原始证据（仓库根，`*.log` 已 gitignore、且不在打包白名单内，不会外发） |
+| `_console_render_check.mjs` | 控制台真实渲染检查脚本（workspace 根，**刻意不进仓库**，避免混入交付包；§8.5.1 有用法） |
+| ~~`_console_syntax.mjs`~~ | **已删除** —— 它是当初为绕开 `console:check` 假失败而写的本机替代品；该缺陷已在 §9.1 N4 修掉，不再需要两份实现 |
 | `browser_watchdog.ts` | 不被任何启动脚本引用，是手工脚本 → **不在一键链路，不构成开箱阻塞** |
 
 ---
@@ -452,15 +453,21 @@ SMOKE OK  health={"status":"ok","timestamp":"2026-09-25T12:55:29.161Z","ai":fals
 
 ### 9.4 提交与「包可追溯」闭合
 
-本地提交 **`20e72ce`**（19 文件，+1186/−173；`.workbuddy/` 未入库）→ 提交后重打包，
-包内 `version.json` 由 `{"dirty":true}` 变为：
+本地两个提交（**均未推送** —— 属对外发布动作，留给你决定）：
+
+| 提交 | 内容 |
+|---|---|
+| `20e72ce` | 第一轮整改（19 文件，+1186/−173；`.workbuddy/` 未入库） |
+| `cf70924` | N6 首跑窗口指引 + 本报告 §9（4 文件，+96/−3） |
+
+打**最终包**时工作树是干净的，包内 `version.json` 为：
 
 ```json
-{"dirty":false,"commit":"20e72ce","builtAt":"2026-09-25T21:22:22+08:00"}
+{"dirty":false,"commit":"cf70924","builtAt":"2026-09-25T21:36:52+08:00"}
 ```
 
-⇒ **P0-3「包不可追溯」彻底闭合**：这个 zip 精确对应提交 `20e72ce`，且不含任何未提交改动。
-（推送未做 —— 属对外发布动作，留给你决定。）
+⇒ **P0-3「包不可追溯」彻底闭合**：这个 zip 精确对应提交 `cf70924`，且**不含任何未提交的交付内容**。
+（已核对：包生成后，白名单内所有文件的最后修改时间都早于 zip —— 包不是过期快照。）
 
 ### 9.5 最终验证
 
@@ -472,13 +479,14 @@ SMOKE OK  health={"status":"ok","timestamp":"2026-09-25T12:55:29.161Z","ai":fals
 | `contract` | ✅ **248 / 248** |
 | `.github/workflows/release.yml` YAML 解析 | ✅ 触发器 `push` + `workflow_dispatch`、`permissions.contents=write`、10 步 |
 | 启动器链路静态核查 | ✅ `start_all/start_server/setenv/start_platforms` 引用的 `setenv.bat`、`start_server.bat`、`node/node.exe`、`node_modules/tsx/dist/cli.mjs`、`server/index.ts` **全部在打包白名单内**（无「解压后缺文件」） |
-| 打包冒烟（提交后、干净树） | ✅ 见 9.6 |
+| `release.yml` 的 8 个 `run:` 脚本块 | ✅ 除了 YAML 解析，还把每块抽出后交给 **PowerShell 解析器**逐一解析（先替换 `${{ }}` 表达式）——**8/8 通过**。这个工作流**从未被 GitHub 执行过**，本地这样验一遍才有底 |
+| 打包冒烟（最终、干净树） | ✅ `elapsed 298.9s`、`zip 454.7 MB / 181316 entries`、`SMOKE OK consoleBytes=105015`、`platforms/health: 15 items` |
 
 ### 9.6 「下载即用」四关的最终状态
 
 | 关 | 状态 | 说明 |
 |---|---|---|
-| ① 能不能下载 | 🟡 **代码与流程已就绪，但还没有任何 Release 存在** | 两条路：推 `v*` tag，或在 GitHub 的 **Actions → Release → Run workflow** 点一次（版本号可留空）。**这是唯一还需要你动手的一关** |
+| ① 能不能下载 | 🟡 **代码与流程已就绪，但还没有任何 Release 存在** | 两条路任选其一：<br>**A. 完全在网页上**：把这两个提交推到 GitHub 后，去 **Actions → Release → Run workflow**，版本号留空（自动生成 `v<日期>-<短提交号>`）→ runner 会跑门禁/测试/打包/冒烟并建好 Release。<br>**B. 本地推 tag**：`git push github main && git tag v1.0.0 && git push github v1.0.0`（pre-push 钩子会跑 verify + test，本机现已可用）。<br>**这是唯一还需要你动手的一关** |
 | ② 解压能不能起 | ✅ | 白名单打包 + fail-closed 断言 + 自带 Node + 原生 SQLite 加载 + `data/` 从零重建 + 启动器路径静态核查 |
 | ③ 起来能不能干活 | ✅ | P0 端口表兜底修复 + 冒烟断言在**无 `cdp.json`** 的全新目录里验证 `boss.endpoint=http://127.0.0.1:9223` |
 | ④ 顺不顺 | ✅ | 自检面板（含真实菜单路径与补齐指引）+ README「下载/安装」段 + 启动器提示 + 默认只预览的安全默认值 |

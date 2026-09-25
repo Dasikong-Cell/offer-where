@@ -102,7 +102,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:RELEASE_TAG
-          gh release create $tag "$env:ZIP_PATH" `
-            --title $tag `
-            --notes "Windows 便携包：解压后双击 start_all.bat 即用（自带 Node，无需安装运行时；需已装 Google Chrome）。包内 version.json 记录了对应提交号与构建时间。"
+          # Release 说明就是使用者下载时看到的第一段字，务必包含「怎么解压、怎么启、下一步看哪」。
+          $notes = "Windows 便携包（约 455MB）`n`n"
+          $notes += "1) 解压到纯英文路径（如 D:\offer-where）。建议用系统自带 tar 或 7-Zip；别用资源管理器双击解压（包内 18.1 万个小文件，会非常慢）：`n"
+          $notes += "    mkdir D:\offer-where`n"
+          $notes += "    tar -xf job-apply-agent-portable.zip -C D:\offer-where`n`n"
+          $notes += "2) 双击 start_all.bat（包内自带 Node 运行时，无需另装；需已安装 Google Chrome）`n"
+          $notes += "3) 打开控制台 http://127.0.0.1:4400/ ，按首页「开箱自检」卡片逐项补齐（上传简历、登录各平台窗口）`n`n"
+          $notes += "首次使用默认只做预览 —— 真实投递会不可撤销地向 HR 发出消息。`n"
+          $notes += "包内 version.json 记录了该包对应的提交号与构建时间，可随时核对版本。"
+          gh release create $tag "$env:ZIP_PATH" --title $tag --notes $notes
           Write-Host "release $tag created -> https://github.com/${{ github.repository }}/releases/tag/$tag"
