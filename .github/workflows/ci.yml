@@ -1,5 +1,14 @@
 name: CI
 
+# Action 版本策略：checkout / setup-node 均用 v5（v5 起运行在 Node 24）。
+# 用 v4 会触发 GitHub 的 "Node.js 20 is deprecated" 告警（被强制跑在 Node 24 上）。
+# v5 breaking 影响评估（本仓库）：无 ——
+#   * checkout v5：仅运行时升级，无需额外 input
+#   * setup-node v5：运行时升级 + 需 runner >= v2.327.1（GitHub 托管 runner 早已满足）；
+#     另有一条「package.json 有 packageManager 字段则自动启用缓存」，
+#     本仓库 package.json **无** packageManager，故仍按下面显式声明的 cache: npm 走。
+# 注：当前上游最新是 v7（ESM 迁移等内部改动）。如需再升级，逐大版本各跑一轮 CI 观察即可。
+
 on:
   push:
     branches: [main]
@@ -11,9 +20,9 @@ jobs:
     name: 类型检查 + 门禁 + 测试
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -36,9 +45,9 @@ jobs:
     name: Windows 打包 + 解压即用冒烟
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
