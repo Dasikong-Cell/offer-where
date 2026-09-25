@@ -15,7 +15,11 @@ $tar = Join-Path $env:SystemRoot "System32\tar.exe"
 
 Write-Host "[1/4] packing ..."
 & (Join-Path $root "pack.ps1")
-$zip = Join-Path ([Environment]::GetFolderPath('Desktop')) "job-apply-agent-portable.zip"
+# Must mirror pack.ps1's destination resolution exactly (PACK_ZIP_DIR -> Desktop -> repo root).
+$destDir = $env:PACK_ZIP_DIR
+if (-not $destDir) { $destDir = [Environment]::GetFolderPath('Desktop') }
+if (-not ($destDir -and (Test-Path $destDir))) { $destDir = $root }
+$zip = Join-Path $destDir "job-apply-agent-portable.zip"
 if (-not (Test-Path $zip)) { throw "zip not found after pack: $zip" }
 Write-Host ("      zip = " + $zip + " (" + [math]::Round((Get-Item $zip).Length / 1MB, 1) + " MB)")
 

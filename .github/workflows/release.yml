@@ -78,19 +78,24 @@ jobs:
           Copy-Item (Get-Command node).Source ./node/node.exe
 
       # pack.ps1 自带 fail-closed 断言（必含入口/自带 node/控制台；禁含 .env、data、
-      # src、.git、tsc 编译产物），并写入 version.json（提交号 + 构建时间 + 是否脏树）
+      # src、.git、tsc 编译产物），并写入 version.json（提交号 + 构建时间 + 是否脏树）。
+      # PACK_ZIP_DIR：显式指定产物目录，不赌 runner 的 Desktop 是否存在/被重定向。
       - name: 打包
         shell: pwsh
+        env:
+          PACK_ZIP_DIR: ${{ github.workspace }}
         run: |
           ./pack.ps1
           if ($LASTEXITCODE -ne 0) { throw "pack.ps1 failed with $LASTEXITCODE" }
-          $zip = Join-Path ([Environment]::GetFolderPath('Desktop')) 'job-apply-agent-portable.zip'
+          $zip = Join-Path $env:PACK_ZIP_DIR 'job-apply-agent-portable.zip'
           if (-not (Test-Path $zip)) { throw "pack.ps1 did not produce a zip" }
           Write-Host ("      " + $zip + "  " + [math]::Round((Get-Item $zip).Length / 1MB, 1) + " MB")
           "ZIP_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: 解压即用冒烟（打包产物本身也验一遍）
         shell: pwsh
+        env:
+          PACK_ZIP_DIR: ${{ github.workspace }}
         run: |
           # pack_smoke 会重新打包一次，这里用它的断言逻辑验的是同一份 pack.ps1 产物；
           # 若嫌慢可移除本步（ci.yml 每次推 main 都会跑它）。

@@ -1,9 +1,30 @@
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 if (-not $root) { Write-Host "[error] cannot resolve script directory"; exit 1 }
-$zip = Join-Path ([Environment]::GetFolderPath('Desktop')) "job-apply-agent-portable.zip"
+
+# ── CI diagnosability ─────────────────────────────────────────────────────────
+# GitHub Actions logs are NOT readable without a token, but check-run ANNOTATIONS
+# are. Emitting the `::error::` workflow command turns every failure branch into
+# an annotation, so a red release run can be diagnosed via the public API alone
+# (2026-09-26: v1.0.0's "打包" step failed on the runner while the identical
+# pack.ps1 was green in ci.yml's Windows job, and the log was unreachable).
+# Messages must stay ASCII (this file is ASCII-only; see the encoding note below).
+trap { Write-Host ("::error::pack.ps1 unexpected failure: " + $_.Exception.Message.Replace("`r"," ").Replace("`n"," ")); break }
+
+# Zip destination: PACK_ZIP_DIR (set by CI) wins; otherwise the user's Desktop.
+# Fallback chain exists because GetFolderPath('Desktop') is the one environment
+# assumption this script used to make blindly -- an empty/redirected Desktop
+# would make tar fail with an unexplainable exit 1.
+$destDir = $env:PACK_ZIP_DIR
+if (-not $destDir) { $destDir = [Environment]::GetFolderPath('Desktop') }
+if (-not ($destDir -and (Test-Path $destDir))) {
+  $destDir = $root
+  Write-Host "::error::zip destination directory unavailable, falling back to repo root"
+  Write-Host "[warn] zip destination directory unavailable, falling back to repo root"
+}
+$zip = Join-Path $destDir "job-apply-agent-portable.zip"
 $tar = Join-Path $env:SystemRoot "System32\tar.exe"
-if (-not (Test-Path $tar)) { Write-Host "[error] tar.exe not found (needs Windows 10 1803+)"; exit 1 }
+if (-not (Test-Path $tar)) { Write-Host "::error::tar.exe not found (needs Windows 10 1803+)"; Write-Host "[error] tar.exe not found (needs Windows 10 1803+)"; exit 1 }
 
 # NOTE: keep this script ASCII-only.
 #  1) PowerShell 5.1 reads a BOM-less .ps1 as ANSI/GBK -> UTF-8 Chinese breaks parsing.
@@ -117,7 +138,7 @@ foreach ($f in $files)   { if (Test-Path (Join-Path $root $f)) { $members.Add($f
 foreach ($s in $scripts) { $members.Add($s) }
 
 & $tar -a -c -f $zip -C $root @members
-if ($LASTEXITCODE -ne 0) { Write-Host "[error] tar failed with code $LASTEXITCODE"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Host "::error::tar failed with exit code $LASTEXITCODE (zip=$zip)"; Write-Host "[error] tar failed with code $LASTEXITCODE"; exit 1 }
 
 # ── VERIFY the archive before declaring success ───────────────────────────────
 Write-Host "[2/2] verifying archive ..."
@@ -140,6 +161,7 @@ $must = @(
 )
 $missing = $must | Where-Object { $listing -notcontains $_ }
 if ($missing) {
+  Write-Host ("::error::archive incomplete, missing: " + (($missing | Select-Object -First 10) -join ', '))
   Write-Host "[error] archive is incomplete, missing:"
   $missing | ForEach-Object { Write-Host "   - $_" }
   exit 1
@@ -151,6 +173,7 @@ if ($missing) {
 # (it is dropped by the Get-ChildItem filter above, which uses real .NET strings).
 $shippedDev = $listing | Where-Object { $dropScripts -contains $_ }
 if ($shippedDev) {
+  Write-Host ("::error::archive contains developer-only scripts: " + (($shippedDev | Select-Object -First 10) -join ', '))
   Write-Host "[error] archive contains developer-only scripts:"
   $shippedDev | ForEach-Object { Write-Host "   - $_" }
   exit 1
@@ -158,6 +181,7 @@ if ($shippedDev) {
 # secrets / personal data must NOT be in there
 $forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like "src/*" -or $_ -like ".git/*" }
 if ($forbidden) {
+  Write-Host ("::error::archive contains files that must never be shipped: " + (($forbidden | Select-Object -First 10) -join ', '))
   Write-Host "[error] archive contains files that must never be shipped:"
   $forbidden | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
   exit 1
@@ -166,6 +190,7 @@ if ($forbidden) {
 # tsc build artifacts (.js) under server/ or shared/ must never ship (tsx runs .ts directly)
 $leftover = $listing | Where-Object { $_ -match '^server/.*\.js$' -or $_ -match '^shared/.*\.js$' }
 if ($leftover) {
+  Write-Host ("::error::archive still contains tsc build artifacts: " + (($leftover | Select-Object -First 10) -join ', '))
   Write-Host "[error] archive still contains tsc build artifacts (.js under server/ or shared/):"
   $leftover | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
   exit 1
@@ -177,6 +202,7 @@ $diskNmJs = (Get-ChildItem (Join-Path $root 'node_modules') -Recurse -File -Forc
              Where-Object { $_.Extension -eq '.js' } | Measure-Object).Count
 $zipNmJs  = ($listing | Where-Object { $_ -match '^node_modules/.*\.js$' } | Measure-Object).Count
 if ($zipNmJs -lt $diskNmJs) {
+  Write-Host ("::error::node_modules lost files: zip .js=$zipNmJs but disk .js=$diskNmJs")
   Write-Host "[error] node_modules lost files: zip .js=$zipNmJs but disk .js=$diskNmJs"
   exit 1
 }
