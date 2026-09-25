@@ -18,14 +18,14 @@
 | D3 | ✅ 已修 | `db.ts` 新增 `(platform, position)` 与 `company` 索引 | 建表断言随启动执行 |
 | F4 | ✅ 已修 | 上传路由不再只解析 PDF：PDF/DOCX 都进解析 → 参与匹配/定制（mammoth 已是依赖）；并提示扫描件抽取过少 | 代码路径已改；`parseResumeFile` 本就支持 docx |
 | F5 | ✅ 已修 | `applyAbTest.ts` 三分 letter/no_letter/legacy，**legacy 不参与对照**；报告加 `legacyExcluded` | 合约测试：`has=5 no=0 legacy=840 total=845`（对照组不再被 840 条污染）+ 三分完备断言 |
-| O1 | ✅ 已修 | 新增 `scripts/pack_smoke.ps1`（打包→解压→包内 node 启动→健康探测）+ CI `package-smoke`（windows-latest） | **本地实跑通过**：`SMOKE OK health={"status":"ok","ai":false} consoleBytes=95654` |
+| O1 | ✅ 已修（**CI 端已实证**） | 新增 `scripts/pack_smoke.ps1`（打包→解压→包内 node 启动→健康探测）+ CI `package-smoke`（windows-latest） | 本地：`SMOKE OK health={"status":"ok","ai":false} consoleBytes=95654`；**GitHub CI #30 实跑通过（windows-latest，5m6s）** |
 | F2 | ✅ 已做 | 控制台平台卡加「完整度」标注：全套 / 可投递 / 待接入（带 tooltip） | 渲染验证 |
 | F3 | ✅ 已做 | 批量结果单列「需人工介入 N 条」+ 一键「打开该平台调试窗口」 | 代码路径已接 |
 | O2 | ✅ 已做 | `dataCleanup` 统计 `data/` 总体积 + `DATA_MAX_MB`（默认 3000MB）阈值；超阈值启动时落 `run_log` ERROR | 接口字段 + 日志；`.env.example` 已补说明 |
 | O3 | ✅ 已做 | `GET /api/stats/trend?days=7` + 仪表盘内联条形 | 实机返回真实数据（total 213，逐日 59/7/4/33/35/70/5） |
 | F1 | ✅ 已做（**真·录屏**） | `cdpDriver.ts` 接 `Page.startScreencast` 帧流 + 逐帧 ack；`screencast.ts` 归档帧序列并生成 `play.html` 连续播放页（装了 ffmpeg 另出 mp4）；`POST /api/apply/record-video/{start,stop}`；批量投递加 `record` 开关，回看入口写入 `applications.video_path`；控制台「● 开始录像 / ■ 停止并归档」 | **实机**：start → 页面重绘 → stop = **9 帧 / 13s**；`play.html` HTTP 200 且探针显示已自动播到「第 8 / 9 帧」；帧 HTTP 200 image/jpeg |
 | F1 附 | ℹ️ 保留 | `recordFrames`（按间隔抽帧）作为轻量备选保留 | 实机 3 帧、静态可访问 |
-| O1 补 | ✅ 已修 | **CI 恒红的真因**：`contract_tests.ts` 无条件读 `data/browser/cdp.json`，而 `data/` 被 gitignore → CI 全新检出抛未捕获 ENOENT、整个测试进程中断。改为缺文件时只跳过「cdp 端口表」断言，其余 5 处同步点照常校验 | **干净 worktree 复现并修复**：selftest 51/51（跳过 6 项无简历）· 合约 202/202 · **exit 0** |
+| O1 补 | ✅ 已修（**CI 已转绿**） | **CI 恒红的真因**：`contract_tests.ts` 无条件读 `data/browser/cdp.json`，而 `data/` 被 gitignore → CI 全新检出抛未捕获 ENOENT、整个测试进程中断。改为缺文件时只跳过「cdp 端口表」断言，其余 5 处同步点照常校验 | 干净 worktree 复现并修复：selftest 51/51（跳过 6 项无简历）· 合约 202/202 · **exit 0**；**CI #30（`2998a4f`）整轮 Success，两个 job 全绿** |
 | F6 / A1–A4 | ⏳ 未做 | 双前端收敛 / 单机架构天花板 | 属架构级取舍，非本次范围 |
 
 > F1 说明：已从「按间隔截图」升级为 **`Page.startScreencast` 帧流**（浏览器合成器在页面重绘时推帧，点击/跳转/弹窗都被连续捕获）。本机无 ffmpeg，故回看形态是**帧序列 + `play.html` 连续播放**（浏览器里点开即看，等效视频）；装了 ffmpeg 会自动额外合成 mp4。录像只读页面、不进投递判定路径，失败不影响投递结果。
@@ -120,10 +120,12 @@ SELECT COUNT(*) FROM applications WHERE position = ? AND (? IS NULL OR ? = '' OR
 
 ## 四、工程与运维
 
-### O1【审读·更正前一轮结论】CI 在 ubuntu 上跑，**测不到真实交付路径**
-`.github/workflows/ci.yml:12` `runs-on: ubuntu-latest`，只跑 `npm ci` + `verify` + `test`（单元/合约）。
-> 但产品是 **Windows-only**：`.bat` 启动器、本机 Chrome/CDP、Windows 路径解析、`pack.ps1`（PowerShell + `tar.exe`）——**CI 一样都覆盖不到**；且无浏览器 E2E。
-> **建议**：加一个 `windows-latest` job：跑 `pack.ps1` → 解压 → 带包内 node 启动 → `curl /api/ping` 冒烟。**工作量：中**。
+### O1【审读·更正前一轮结论】~~CI 在 ubuntu 上跑，测不到真实交付路径~~ → **已修正并 CI 实证**
+原状：`.github/workflows/ci.yml:12` `runs-on: ubuntu-latest`，只跑 `npm ci` + `verify` + `test`（单元/合约）。
+> 而产品是 **Windows-only**：`.bat` 启动器、本机 Chrome/CDP、Windows 路径解析、`pack.ps1`（PowerShell + `tar.exe`）——ubuntu job 一样都覆盖不到；也无浏览器 E2E。
+> ✅ **已整改**：新增 `package-smoke` job（`windows-latest`）→ `npm ci` → 用 runner 自带 node 22 顶替被 gitignore 的 `node/`（`ci.yml:49-54`）→ 跑 `scripts/pack_smoke.ps1`：打包 → 解压到全新目录 → 断言无 `.env`/`data`/`src`/编译产物 → 用**包内 node** 启动 → `/api/ping` + `/api/health` + `/api/apply/quota`（证明原生 SQLite 已加载）+ 控制台 200 + `data/chat.db` 自动重建 → 清理。
+> 📌 **CI #30（`2998a4f`）整轮 Success（5m10s）**：`类型检查 + 门禁 + 测试` 1m20s ✅、`Windows 打包 + 解压即用冒烟` 5m6s ✅ —— **真实交付路径首次在干净 Windows runner 上跑通**。
+> 残留（非阻塞）：仍无浏览器 E2E（无法在 runner 上跑本机 Chrome/CDP）。
 > ⚠️ 更正：上一轮评估报告写「无 CI 流水线」是**错的**，此项目**有** CI；已在报告更正。
 
 ### O2【实证】`data/` 无硬性上限
