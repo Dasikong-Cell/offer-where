@@ -24,6 +24,29 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_ROOT = path.join(__dirname, '..', '..', 'data', 'browser');
 const SHOT_DIR = path.join(__dirname, '..', '..', 'data', 'screenshots');
+const EVID_DIR = path.join(__dirname, '..', '..', 'data', 'evidence');
+
+/**
+ * 真·录屏状态（CDP `Page.startScreencast`）：platform → 当前录制。
+ *
+ * 与「按固定间隔截图」的**本质区别**：screencast 由浏览器合成器在**页面重绘时**推帧
+ * （`Page.screencastFrame` 事件），点击、跳转、原生弹窗都会被连续捕获，帧率也高得多
+ * ——这才是「操作录屏」应有的机制。每帧必须回 `Page.screencastFrameAck`，否则 Chrome 停发。
+ *
+ * 本机无 ffmpeg 时：保留帧序列并生成 `play.html`（浏览器里连续播放，等效于看视频）；
+ * 有 ffmpeg 时额外合成 mp4。只开启 `Page` 域，不碰 Runtime/Debugger（见文件头反检测说明）。
+ */
+interface ScreencastState {
+  dir: string;
+  rel: string;
+  frames: number;
+  names: string[];
+  cap: number;
+  quality: number;
+  startedAt: number;
+  timer?: NodeJS.Timeout;
+}
+const screencasts = new Map<string, ScreencastState>();
 
 export interface BrowserActionResult {
   ok: boolean;
@@ -314,6 +337,25 @@ function attachSession(ws: WebSocket, platform: string): PageSession {
       const dlg = (msg.params || {}) as { type?: string; message?: string; url?: string };
       console.log(`[CDP ${platform}] 自动处理原生对话框: type=${dlg.type || '?'} message="${(dlg.message || '').slice(0, 200)}" url=${dlg.url || ''}`);
       try { await send(s, 'Page.handleJavaScriptDialog', { accept: true }); } catch { /* 忽略 */ }
+    } else if (msg.method === 'Page.screencastFrame') {
+      // 真·录屏：合成器推来的每一帧。写盘失败绝不能影响投递（try 包住），但 ack 必须发，
+      // 否则 Chrome 认为消费方卡住、直接停发后续帧。
+      const rec = screencasts.get(platform);
+      if (rec) {
+        const p = (msg.params || {}) as { data?: string; sessionId?: number };
+        try {
+          if (p.data && rec.frames < rec.cap) {
+            fs.mkdirSync(rec.dir, { recursive: true });
+            const name = `f${String(rec.frames).padStart(4, '0')}.jpg`;
+            fs.writeFileSync(path.join(rec.dir, name), Buffer.from(p.data, 'base64'));
+            rec.names.push(name);
+            rec.frames++;
+          }
+        } catch { /* 单帧失败忽略 */ }
+        if (p.sessionId != null) {
+          try { await send(s, 'Page.screencastFrameAck', { sessionId: p.sessionId }); } catch { /* 忽略 */ }
+        }
+      }
     }
   });
   ws.on('error', (err: Error) => {
@@ -864,6 +906,42 @@ export async function execCdpAction(
         fs.writeFileSync(filePath, Buffer.from(r.data, 'base64'));
         const base64 = args.includeBase64 ? r.data : undefined;
         return { ...(await okResult(s)), screenshot: `/data/screenshots/${fileName}`, data: base64 };
+      }
+      case 'screencast-start': {
+        // 真·录屏开始：dir 为相对 data/ 的路径（默认 evidence/rec-<platform>-<ts>）
+        const rel = String(args.dir || `evidence/rec-${platform}-${Date.now()}`)
+          .replace(/^[/\\]+/, '').replace(/\\/g, '/').replace(/\.\./g, '');
+        const dir = path.join(__dirname, '..', '..', 'data', ...rel.split('/'));
+        const cap = Math.max(30, Math.min(4000, Number(args.maxFrames) || 1200));
+        const quality = Math.max(20, Math.min(90, Number(args.quality) || 55));
+        const maxSeconds = Math.max(5, Math.min(1800, Number(args.maxSeconds) || 300));
+        const old = screencasts.get(platform);
+        if (old?.timer) { try { clearTimeout(old.timer); } catch { /* 忽略 */ } }
+        const rec: ScreencastState = { dir, rel: '/data/' + rel, frames: 0, names: [], cap, quality, startedAt: Date.now() };
+        screencasts.set(platform, rec);
+        try {
+          await send(s, 'Page.enable');
+          await send(s, 'Page.startScreencast', {
+            format: 'jpeg', quality, maxWidth: 1280, maxHeight: 900, everyNthFrame: 1,
+          });
+        } catch (e: any) {
+          screencasts.delete(platform);
+          return { ok: false, error: `启动录屏失败：${e?.message || e}` };
+        }
+        // 兜底自动停：忘记 stop 时不会无限写盘
+        rec.timer = setTimeout(() => { try { send(s, 'Page.stopScreencast').catch(() => { /* 忽略 */ }); } catch { /* 忽略 */ } }, maxSeconds * 1000);
+        return { ok: true, data: { dir: rec.rel, maxFrames: cap, quality, maxSeconds } };
+      }
+      case 'screencast-stop': {
+        const rec = screencasts.get(platform);
+        if (!rec) return { ok: false, error: '该平台没有正在进行的录屏' };
+        if (rec.timer) { try { clearTimeout(rec.timer); } catch { /* 忽略 */ } }
+        try { await send(s, 'Page.stopScreencast'); } catch { /* 忽略 */ }
+        screencasts.delete(platform);
+        return {
+          ok: true,
+          data: { dir: rec.rel, frames: rec.frames, seconds: Math.round((Date.now() - rec.startedAt) / 1000), names: rec.names },
+        };
       }
       case 'eval': {
         const r = await send(s, 'Runtime.evaluate', {

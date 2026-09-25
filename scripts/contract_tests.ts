@@ -385,7 +385,15 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
 // 这条测试把它变成机械校验 —— 以后加平台，改完跑一次 npm test 就知道漏没漏。
 {
   const ROOT = fileURLToPath(new URL('..', import.meta.url));
-  const cdp = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/browser/cdp.json'), 'utf8')) as Record<string, string>;
+  // ⚠️ data/ 是被 gitignore 的**运行时目录**：CI 全新检出必然没有 data/browser/cdp.json。
+  // 此前这里直接 readFileSync —— 缺文件即抛未捕获 ENOENT，**整个合约测试进程被打断、CI 恒红**
+  // （已在干净 worktree 里实测复现）。现在缺文件只跳过「cdp 端口表」相关断言；
+  // 其余 5 处同步点都在仓库内的**被跟踪文件**里，照常校验。
+  const cdpPath = path.join(ROOT, 'data/browser/cdp.json');
+  let cdp: Record<string, string> = {};
+  let hasCdp = false;
+  try { cdp = JSON.parse(fs.readFileSync(cdpPath, 'utf8')) as Record<string, string>; hasCdp = true; } catch { hasCdp = false; }
+  if (!hasCdp) console.log('  ⏭️  无 data/browser/cdp.json（仅本地运行才有）：跳过 cdp 端口表校验，其余同步点照常校验');
   const consoleHtml = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
   const launcher = fs.readFileSync(path.join(ROOT, 'start_platforms.bat'), 'utf8');
 
@@ -400,19 +408,23 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
 
   for (const p of REGISTERED_PLATFORMS) {
     const missing: string[] = [];
-    if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(String(cdp[p] || ''))) missing.push('cdp.json');
+    if (hasCdp && !/^http:\/\/127\.0\.0\.1:\d+$/.test(String(cdp[p] || ''))) missing.push('cdp.json');
     if (!PLATFORM_PAGE[p]?.home) missing.push('platformHealth.PLATFORM_PAGE');
     if (!consoleHtml.includes(`{id:'${p}'`)) missing.push('console.html PLATFORMS');
     // 启动脚本按**端口**校验：允许多个平台共用同一窗口（如 offerbiu 与 official 共用 9227）
-    const port = String(cdp[p] || '').split(':').pop() || '';
-    if (!port || !launcher.includes(`:${port}:`)) missing.push('start_platforms.bat 端口表');
+    if (hasCdp) {
+      const port = String(cdp[p] || '').split(':').pop() || '';
+      if (!port || !launcher.includes(`:${port}:`)) missing.push('start_platforms.bat 端口表');
+    }
     if (!DELIVERY_PLATFORMS.includes(p)) missing.push('connection.DELIVERY_PLATFORMS');
     check(`平台注册多处同步：${p}`, missing.length === 0, missing.length ? `缺 ${missing.join(' / ')}` : '齐全');
   }
 
   // 端口唯一性：两个平台共用一个调试端口会导致「登录态串号」
-  const ports = REGISTERED_PLATFORMS.map((p) => cdp[p]).filter(Boolean);
-  check('各平台 CDP 端口互不冲突', new Set(ports).size === ports.length, `${ports.length} 个端口 / ${new Set(ports).size} 个唯一值`);
+  if (hasCdp) {
+    const ports = REGISTERED_PLATFORMS.map((p) => cdp[p]).filter(Boolean);
+    check('各平台 CDP 端口互不冲突', new Set(ports).size === ports.length, `${ports.length} 个端口 / ${new Set(ports).size} 个唯一值`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════

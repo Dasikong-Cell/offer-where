@@ -286,6 +286,7 @@
               <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
               <label class="toggle"><input type="checkbox" id="batchRemote" /> 仅远程岗位</label>
               <label class="toggle"><input type="checkbox" id="batchHumanize" checked /> 模拟真人节奏</label>
+              <label class="toggle"><input type="checkbox" id="batchRecord" /> 记录操作录像</label>
               <label class="toggle"><input type="checkbox" id="batchPreview" /> 仅预览（不真正投递）</label>
               <button class="btn primary" id="batchRun">开始投递</button>
             </div>
@@ -375,17 +376,25 @@
           <h2>投递操作证据回溯 <span class="tag">对标 CareerBoom</span></h2>
           <p class="note small">每次真实投递自动截取平台页存证，可审计「当时点了什么」，降低封号风险。</p>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
-            <span class="muted">过程抽帧录制：</span>
+            <span class="muted">平台：</span>
             <select id="recPlatform" style="width:180px"></select>
-            <select id="recSeconds" style="width:110px">
+            <span class="muted">抽帧：</span>
+            <select id="recSeconds" style="width:100px">
               <option value="6">6 秒</option>
               <option value="10" selected>10 秒</option>
               <option value="20">20 秒</option>
             </select>
             <button class="btn sm" id="recRun">开始抽帧录制</button>
-            <span class="muted small">抽帧序列（可当幻灯片回看操作过程），非视频；需目标平台窗口已打开。</span>
+            <span class="muted">|</span>
+            <button class="btn sm" id="vidStart">● 开始录像</button>
+            <button class="btn sm" id="vidStop">■ 停止并归档</button>
           </div>
+          <p class="note small" style="margin-top:6px">
+            「抽帧」= 按间隔连拍取样；<b>「录像」= 真·CDP screencast 帧流</b>（点击 / 跳转 / 弹窗都连续捕获，推荐）。
+            两者都需目标平台窗口已打开；批量投递勾选「记录操作录像」会自动录并写入该投递记录。
+          </p>
           <div id="recResult" style="margin-top:10px"></div>
+          <div id="vidResult" style="margin-top:10px"></div>
           <div id="eviResult" style="margin-top:12px"></div>
         </div>
       </section>
@@ -778,7 +787,9 @@ async function loadEvidence(){
         +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(a.position||''))+'<br>'
         +'<span class="muted">'+esc(a.platform)+' · '+(a.created_at||'').slice(0,10)+'</span><br>'
         +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#eef4ff;color:#2a5bd7;font-size:11px">'+esc(letterTag)+'</span> '
-        +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#f3f3f3;color:#555;font-size:11px">'+esc('简历:'+rvTag)+'</span></div></div>';
+        +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#f3f3f3;color:#555;font-size:11px">'+esc('简历:'+rvTag)+'</span>'
+        +(a.video_path ? '<div style="margin-top:4px"><a href="'+esc(a.video_path)+'" target="_blank">▶ 操作录像</a></div>' : '')
+        +'</div></div>';
     }
     html+='</div>';
     out.innerHTML=html;
@@ -803,10 +814,35 @@ async function runRecord(){
   }catch(e){ out.innerHTML='<div class="note warn">录制失败：'+esc(e.message)+'</div>'; }
   finally{ btn.disabled=false; }
 }
+/* 真·录屏（CDP Page.startScreencast 帧流）：手动开始 / 停止并归档 */
+async function runVidStart(){
+  const out=$('#vidResult'), platform=$('#recPlatform').value;
+  if(!platform){ out.innerHTML='<div class="note warn">请先选择平台。</div>'; return; }
+  out.innerHTML='<div class="note">已开始录像…（点击 / 跳转 / 弹窗都会被连续录制；处理完点「停止并归档」）</div>';
+  try{
+    const r=await api('/api/apply/record-video/start', {method:'POST', body:JSON.stringify({platform})});
+    if(!r || !r.ok) out.innerHTML='<div class="note warn">启动录像失败：'+esc((r&&r.error)||'未知')+'</div>';
+  }catch(e){ out.innerHTML='<div class="note warn">启动录像失败：'+esc(e.message)+'</div>'; }
+}
+async function runVidStop(){
+  const out=$('#vidResult'), platform=$('#recPlatform').value;
+  if(!platform){ out.innerHTML='<div class="note warn">请先选择平台。</div>'; return; }
+  out.innerHTML='<div class="note">归档中…</div>';
+  try{
+    const r=await api('/api/apply/record-video/stop', {method:'POST', body:JSON.stringify({platform})});
+    if(!r || !r.ok){ out.innerHTML='<div class="note warn">归档失败：'+esc((r&&r.error)||'未知')+'</div>'; return; }
+    const link=r.video||r.player||r.dir;
+    out.innerHTML='<div class="note small">已归档 <b>'+r.frames+'</b> 帧 / '+r.seconds+'s '
+      +(r.video?'（已合成 mp4）':'（本机无 ffmpeg，已生成连续播放页）')
+      +' → <a href="'+esc(link)+'" target="_blank">打开回看</a></div>';
+  }catch(e){ out.innerHTML='<div class="note warn">归档失败：'+esc(e.message)+'</div>'; }
+}
 (function initRecorder(){
   const sel=$('#recPlatform');
   if(sel && !sel.options.length) sel.innerHTML=PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
   const b=$('#recRun'); if(b) b.addEventListener('click', runRecord);
+  const vs=$('#vidStart'); if(vs) vs.addEventListener('click', runVidStart);
+  const vt=$('#vidStop'); if(vt) vt.addEventListener('click', runVidStop);
 })();
 
 /* ---------- service health ---------- */
@@ -1029,6 +1065,8 @@ $('#batchRun').addEventListener('click', async ()=>{
       preview: $('#batchPreview').checked,
       // 模拟真人节奏（对标 CareerBoom.ai）：默认开；取消勾选则固定 intervalMs（调试用）
       humanize: $('#batchHumanize').checked,
+      // 真·CDP screencast：每次投递前后自动录/停，回看入口写入该投递记录（video_path）
+      record: $('#batchRecord').checked,
       criteria: {
         excludeApplied: $('#batchExclude').checked,
         keywords: $('#batchKeywords').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),

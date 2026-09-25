@@ -22,6 +22,7 @@ import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
 import { collectBossToDb } from './engine.js';
 import { toApplyProfile, tryScreenshot } from './common.js';
+import { startRecording, stopRecording } from './screencast.js';
 import { execAction } from '../browser.js';
 import { matchResumeToJobAi } from './matchAi.js';
 import { parseResumeFile } from '../resume.js';
@@ -136,6 +137,12 @@ export interface BatchInput {
   intervalMs?: number;              // 两次投递间隔（默认 20000）
   /** 模拟真人操作节奏（对标 CareerBoom.ai）：开启时做拟人抖动 + 偶发长间隔 + 点击前微停顿；默认 true。关闭则固定 intervalMs（测试/调试用） */
   humanize?: boolean;
+  /**
+   * 操作录屏（真·CDP screencast，对标 CareerBoom.ai）：每次投递前后自动开/停录制，
+   * 帧序列归档到 `data/evidence/vid-*`，回看入口写入 `applications.video_path`。
+   * 默认关闭（会多写盘）；只读页面、不改变投递行为，失败不影响投递结果。
+   */
+  record?: boolean;
   /** 拟人间隔随机区间 [min,max]（ms）；提供时覆盖 intervalMs 的 ±25% 抖动，直接在范围内均匀取间隔 */
   minIntervalMs?: number;
   maxIntervalMs?: number;
@@ -586,6 +593,17 @@ export async function runBatchApply(
     if (humanize && input.preview !== true) {
       await humanPreClickPause(humanize);
     }
+    // 操作录屏（可选，对标 CareerBoom.ai）：真·CDP screencast，投递前后自动开/停。
+    // 只读页面、只发 Page 域命令，不改变投递行为；失败只影响「有没有录像」。
+    let recPath: string | undefined;
+    if (input.record === true) {
+      const started = await startRecording(platform, {
+        dir: `evidence/vid-${platform}-${Date.now()}`,
+        maxFrames: 1500,
+        maxSeconds: 240,
+      });
+      if (!started.ok) console.warn(`[batch] 录屏启动失败（不影响投递）：${started.error}`);
+    }
     let res: ApplyResult;
     try {
       res = await runApply({
@@ -621,6 +639,19 @@ export async function runBatchApply(
       onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'error', message: e?.message || String(e) });
       await reclaimTabs(platform, i, picked.length, job.id, onEvent);
       continue;
+    } finally {
+      // 录屏收尾：异常分支（continue）也会先走这里，保证不漏 stop
+      if (input.record === true) {
+        try {
+          const rec = await stopRecording(platform);
+          if (rec.ok && rec.frames) {
+            recPath = rec.video || rec.player || rec.dir;
+            console.log(`[batch] 录屏完成：${rec.frames} 帧 / ${rec.seconds}s → ${recPath}`);
+          } else if (rec.error) {
+            console.warn(`[batch] 停止录屏异常（不影响投递）：${rec.error}`);
+          }
+        } catch (e: any) { console.warn('[batch] 停录异常（不影响投递）：', e?.message); }
+      }
     }
 
     // 完成一个岗位后收拾标签页：同域只留一个，避免「一个点击事件占一个窗口」越堆越多。
@@ -724,6 +755,7 @@ export async function runBatchApply(
         db.updateApplication(appId, {
           strategy,
           evidence_path: evidencePath || null,
+          video_path: recPath || null,
         });
         if (evidencePath) extras.push(`已留存操作证据截图`);
       } catch { /* 打标/截图失败不阻断主流程 */ }

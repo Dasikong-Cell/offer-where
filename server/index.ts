@@ -32,6 +32,7 @@ import { runApply, isSupported, SUPPORTED_PLATFORMS } from "./services/apply/ind
 import { computeAbReport, backfillLegacyStrategy } from "./services/apply/applyAbTest.js";
 import { checkResumeCompliance } from "./services/apply/resumeCompliance.js";
 import { toApplyProfile, recordFrames } from "./services/apply/common.js";
+import { startRecording, stopRecording } from "./services/apply/screencast.js";
 import {
   runBatchApply, resolveDailyLimit, todayAppliedCount,
   readPlatformRiskBlock, clearPlatformRiskBlock,
@@ -1280,13 +1281,14 @@ app.post("/api/apply/ab-backfill", (_req, res) => {
 /** 投递操作证据回溯清单：返回带 evidence_path 的投递（公司/职位/平台/证据路径/时间/策略），供前端「录屏回溯」面板展示 */
 app.get("/api/apply/evidence", (_req, res) => {
   try {
-    const rows = db.listApplications(1000).filter((a: any) => a.evidence_path);
+    const rows = db.listApplications(1000).filter((a: any) => a.evidence_path || a.video_path);
     const items = rows.map((a: any) => ({
       id: a.id,
       platform: a.platform,
       company: a.company,
       position: a.position,
       evidence_path: a.evidence_path,
+      video_path: a.video_path || null,
       strategy: a.strategy || null,
       status: a.status,
       created_at: a.created_at,
@@ -1314,6 +1316,37 @@ app.get("/api/stats/trend", (req, res) => {
     res.json({ ok: true, days, total: counted, max: Math.max(1, ...items.map((i) => i.count)), items });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || '趋势读取失败' });
+  }
+});
+
+/** 手动开始操作录屏（真·CDP screencast）。批量投递请用 batch 的 `record` 开关自动录/停 */
+app.post("/api/apply/record-video/start", async (req, res) => {
+  try {
+    const platform = String(req.body?.platform || '').trim();
+    if (!isSupported(platform)) {
+      return res.status(400).json({ error: `不支持的平台：${platform || '(空)'}（可录制：${SUPPORTED_PLATFORMS.join(' / ')}）` });
+    }
+    const r = await startRecording(platform, {
+      dir: `evidence/vid-${platform}-${Date.now()}`,
+      maxFrames: Number(req.body?.maxFrames) || 1500,
+      maxSeconds: Number(req.body?.maxSeconds) || 240,
+      quality: Number(req.body?.quality) || 55,
+    });
+    res.json(r);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '启动录屏失败' });
+  }
+});
+
+/** 停止操作录屏并归档（生成 play.html；本机有 ffmpeg 时另出 mp4） */
+app.post("/api/apply/record-video/stop", async (req, res) => {
+  try {
+    const platform = String(req.body?.platform || '').trim();
+    if (!platform) return res.status(400).json({ error: '缺少 platform' });
+    const r = await stopRecording(platform);
+    res.json(r);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '停止录屏失败' });
   }
 });
 

@@ -23,11 +23,14 @@
 | F3 | ✅ 已做 | 批量结果单列「需人工介入 N 条」+ 一键「打开该平台调试窗口」 | 代码路径已接 |
 | O2 | ✅ 已做 | `dataCleanup` 统计 `data/` 总体积 + `DATA_MAX_MB`（默认 3000MB）阈值；超阈值启动时落 `run_log` ERROR | 接口字段 + 日志；`.env.example` 已补说明 |
 | O3 | ✅ 已做 | `GET /api/stats/trend?days=7` + 仪表盘内联条形 | 实机返回真实数据（total 213，逐日 59/7/4/33/35/70/5） |
-| F1 | ⚠️ 部分 | 新增 `recordFrames` + `GET /api/apply/record` + 控制台「过程抽帧录制」：连拍帧序列归档到 `data/evidence/rec-*/` | 实机 ok=true、3 帧、静态可访问（HTTP 200 image/png） |
-| F1 剩余 | ⏳ 未做 | **真·视频录像**（CDP 长连接 + `Page.startScreencast` + 可选 ffmpeg 合成）需改驱动连接模型 | 已在其注释与本文档标注，避免对外把「抽帧」说成「录屏」 |
+| F1 | ✅ 已做（**真·录屏**） | `cdpDriver.ts` 接 `Page.startScreencast` 帧流 + 逐帧 ack；`screencast.ts` 归档帧序列并生成 `play.html` 连续播放页（装了 ffmpeg 另出 mp4）；`POST /api/apply/record-video/{start,stop}`；批量投递加 `record` 开关，回看入口写入 `applications.video_path`；控制台「● 开始录像 / ■ 停止并归档」 | **实机**：start → 页面重绘 → stop = **9 帧 / 13s**；`play.html` HTTP 200 且探针显示已自动播到「第 8 / 9 帧」；帧 HTTP 200 image/jpeg |
+| F1 附 | ℹ️ 保留 | `recordFrames`（按间隔抽帧）作为轻量备选保留 | 实机 3 帧、静态可访问 |
+| O1 补 | ✅ 已修 | **CI 恒红的真因**：`contract_tests.ts` 无条件读 `data/browser/cdp.json`，而 `data/` 被 gitignore → CI 全新检出抛未捕获 ENOENT、整个测试进程中断。改为缺文件时只跳过「cdp 端口表」断言，其余 5 处同步点照常校验 | **干净 worktree 复现并修复**：selftest 51/51（跳过 6 项无简历）· 合约 202/202 · **exit 0** |
 | F6 / A1–A4 | ⏳ 未做 | 双前端收敛 / 单机架构天花板 | 属架构级取舍，非本次范围 |
 
-> F1 说明：本次交付的是**抽帧序列**（可当幻灯片回看操作过程），刻意做成独立按需接口、**不进投递主流程**，避免为「录屏」牺牲投递稳定性；真视频需重构 CDP 连接模型，建议单独排期。
+> F1 说明：已从「按间隔截图」升级为 **`Page.startScreencast` 帧流**（浏览器合成器在页面重绘时推帧，点击/跳转/弹窗都被连续捕获）。本机无 ffmpeg，故回看形态是**帧序列 + `play.html` 连续播放**（浏览器里点开即看，等效视频）；装了 ffmpeg 会自动额外合成 mp4。录像只读页面、不进投递判定路径，失败不影响投递结果。
+>
+> O1 补 说明：这条是**既有潜伏缺陷**（非本次改动引入）——CI 从「E 段平台注册校验」加入起就一直红，只是日志里表现为一句 `ENOENT`，容易被当成环境问题忽略。修法刻意保守：**缺文件只跳过依赖本机 data/ 的那部分断言**，仓库内 5 处同步点（types / connection / platformHealth / console / start_platforms）照常校验。
 
 ---
 

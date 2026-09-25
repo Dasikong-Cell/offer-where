@@ -429,7 +429,8 @@ npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「
 | 「已投」判定改为**平台 + 职位** | 此前无平台维度、且历史 `company` 为空时退化为「只比职位」→ 同名职位跨公司/跨平台被误判已投。现在公司仅当**双方都有值**时才比对 |
 | A/B 对照剔除 `legacy` | 历史未打标数据只计入总量、**不参与对照**（报告里给出 `legacyExcluded`） |
 | 上传 `.docx` 简历**也参与匹配/定制** | 此前上传路由只对 PDF 调解析，Word 简历即便能保存也不参与匹配 |
-| 新增 `GET /api/apply/record` | 过程**抽帧录制**（帧序列，非视频）：连拍当前页面存到 `data/evidence/rec-*/`，控制台「投递操作证据回溯」面板可一键录制与查看 |
+| **真·操作录屏** | CDP `Page.startScreencast` 帧流（点击 / 跳转 / 弹窗都被连续捕获）→ 帧序列 + `play.html` 连续播放页；本机装了 ffmpeg 会自动另出 mp4。手动：`POST /api/apply/record-video/{start,stop}`，或控制台「投递操作证据回溯」面板「● 开始录像 / ■ 停止并归档」；**批量投递勾选「记录操作录像」**会每次投递自动录，回看入口写入 `applications.video_path` |
+| 轻量备选 `GET /api/apply/record` | 按间隔**抽帧**（快速取样，非录屏），存到 `data/evidence/rec-*/` |
 | 新增 `GET /api/stats/trend?days=7` | 近 N 天投递趋势，首页看板内联展示 |
 | `data/` 体积阈值 | `DATA_MAX_MB`（默认 3000）：启动清理时超过会往运行日志写一条 ERROR 提醒 |
 

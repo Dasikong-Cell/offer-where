@@ -224,6 +224,10 @@ try {
     db.exec("ALTER TABLE applications ADD COLUMN evidence_path TEXT");
     console.log("[DB] Added evidence_path column to applications");
   }
+  if (!ac.some((c) => c.name === 'video_path')) {
+    db.exec("ALTER TABLE applications ADD COLUMN video_path TEXT");
+    console.log("[DB] Added video_path column to applications");
+  }
 } catch (e) {
   // 忽略错误（列可能已存在）
 }
@@ -623,6 +627,8 @@ export interface ApplicationRow {
   strategy?: string | null;
   /** 投递瞬间平台页截图路径（操作录屏回溯用），如 `/data/screenshots/<id>.png` */
   evidence_path?: string | null;
+  /** 操作录屏回看入口（真·CDP screencast）：mp4 / play.html / 帧目录，如 `/data/evidence/vid-boss-...` */
+  video_path?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -643,7 +649,7 @@ export function createApplication(app: Omit<ApplicationRow, 'created_at' | 'upda
 }
 
 export function updateApplication(id: string, updates: Partial<Pick<ApplicationRow,
-  'platform' | 'company' | 'position' | 'salary' | 'city' | 'job_url' | 'status' | 'login_method' | 'message' | 'strategy' | 'evidence_path'
+  'platform' | 'company' | 'position' | 'salary' | 'city' | 'job_url' | 'status' | 'login_method' | 'message' | 'strategy' | 'evidence_path' | 'video_path'
 >>): boolean {
   const fields: string[] = [];
   const values: any[] = [];
