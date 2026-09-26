@@ -28,7 +28,8 @@ set "ENTRY=OfferWhere"
 echo 正在桌面创建唯一入口 "%ENTRY%" ...
 echo 指向：%PKG%start_all.bat
 
-REM 图标：包内自带 public\app.ico（渐变底纸飞机，也用作控制台 favicon）。
+REM 图标：包内自带 public\app.ico（靛蓝渐变底 + 白对话气泡；
+REM   同一份文件还用作控制台 favicon 与控制台侧边栏品牌标记，改图标只需改这一处）。
 REM 不存在时留空 —— 没有图标顶多难看，不该因此建不出快捷方式。
 set "ICON=%PKG%public\app.ico"
 if not exist "%ICON%" set "ICON="

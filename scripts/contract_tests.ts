@@ -937,6 +937,24 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('图标生成器使用带断言的 ICO 封装',
     fs.existsSync(path.join(ROOT, 'scripts', 'ico_pack.py')) && iconGen.includes('write_ico'),
     'scripts/ico_pack.py 会在写完后回读 ICONDIR 校验帧数，避免再次静默只剩一帧');
+
+  // ── 品牌标记必须只有一个真相源（2026-09-26 用户反馈「图标换了」）─────────────
+  // 症状：用户看着控制台侧边栏的橙底鸭子问「图标换了」。查下来侧边栏从没变过
+  // （.brand .logo 停在 09-19 的 bf974a3），变的是 public/app.ico —— 今天换过一次。
+  // 根因不是「图标变了」，是**产品里本来就有两套品牌标记**：favicon、桌面快捷方式、
+  // Windows 应用图标都指向 app.ico，而侧边栏把图形写死成 🦆 emoji + 橙色渐变底。
+  // 写死的标记不会跟随 app.ico 更新 ⇒ 换一次图标就露一次馅。
+  // 这里把「侧边栏必须引用 app.ico」变成机械断言，而不是靠人记得。
+  const brandBlock = (con.match(/<div class="brand">[\s\S]{0,400}?<\/div>/) || [''])[0];
+  check('控制台侧边栏品牌标记引用 app.ico（不是写死的图形）',
+    brandBlock.includes('class="logo"') && /class="logo"\s*>\s*<img[^>]+src="\/app\.ico"/.test(brandBlock),
+    '侧边栏若写死 emoji / 自绘图形，换 app.ico 时不会跟随 ⇒ 一个产品两套图标');
+  // U+1F986 写成码点，免得本文件自己也变成一个 emoji 字面量。
+  // 只扫 brandBlock（品牌标记本身），不扫整份文件：CSS 注释里写一句「原为那只 emoji」
+  // 是合理且有用的，扫全文会让断言对注释过敏（第一版就是这么写的，会自己把自己判失败）。
+  check('控制台侧边栏不再写死 emoji 品牌标记',
+    !brandBlock.includes(String.fromCodePoint(0x1f986)),
+    '写死的 emoji 品牌标记不会跟随 app.ico 更新 —— 本次「两套图标」就是这么来的');
 }
 
 // ── 打包脚本必须纯 ASCII（2026-09-26）──────────────────────────────────────
