@@ -1,8 +1,14 @@
 /* 批量投递 50 个智联软件岗：先补 resume_path，再以 stream 模式调用 /api/apply/batch */
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getProfile, saveProfile } from '../server/db.ts';
 import fs from 'fs';
 
-const ROOT = 'C:/Users/吉学静/WorkBuddy/2026-09-02-09-33-33/job-apply-agent';
+// 仓库根 = 本文件（scripts/）所在目录的上一级。
+// 2026-09-26 修：此前硬编码成开发机的绝对路径（%USERPROFILE%\WorkBuddy\...\job-apply-agent），
+// 该路径在别人机器上不存在 ⇒ resume_path 会被写成一个死链。改为由自身位置推导后，
+// 仓库放在任何盘符/目录下都能正确命中包内的 data/resume_source.pdf。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RESUME = ROOT + '/data/resume_source.pdf';
 
 async function main() {

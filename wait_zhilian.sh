@@ -4,7 +4,8 @@
 #   2) 补采 job51（collect_51job，补足 50）
 #   3) 四平台并发各投递 50 份
 # 用户只需在置顶的 9226 窗口登录 zhilian，无需再回复。轮询 18 分钟超时。
-cd "C:/Users/吉学静/WorkBuddy/2026-09-02-09-33-33/job-apply-agent"
+# 2026-09-26 修：原为硬编码的开发机绝对路径，换机器/换目录即失效 → 改用脚本自身所在目录
+cd "$(cd "$(dirname "$0")" && pwd)"
 BASE="http://127.0.0.1:4400/api/browser/exec"
 for i in $(seq 1 72); do
   sleep 15

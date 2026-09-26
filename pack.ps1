@@ -281,6 +281,54 @@ if ($nonAsciiMembers) {
   exit 1
 }
 
+# -- PORTABILITY GUARD, author identity (2026-09-26) ---------------------------
+# Bug class: a path that only works on the machine that wrote it. Four of them were
+# found in the ship set on 2026-09-26 -- ensure_chrome.sh and scripts/start_cdp_chrome.sh
+# hardcoded the author's Chrome path, and three ts one-shots (apply_boss / batch_apply /
+# batch_multi) hardcoded ROOT to the author's repo path. All four work perfectly on the
+# author's box, so none of them is caught by tsc / selftest / contract tests / smoke --
+# they only break at runtime, on a recipient's machine.
+# Matching the generic shape `X:/Users/...` was tried first and REJECTED: it also flags
+# a legitimate comment that documents the old bug using a placeholder
+# (server/services/localEnv.ts writes `C:/Users/<author>/AppData/...`). Guessing at
+# shapes produces false alarms that get the guard disabled. So assert the concrete
+# thing instead: the packing user's own account name and the absolute path of this
+# checkout must not appear in any shipped text file. Whoever runs pack.ps1 IS the
+# author, so $env:USERNAME / $root is exactly the identity to look for, and the check
+# stays correct when someone else packs the project.
+# A 3-char floor keeps very short account names from matching ordinary prose; it also
+# means a 1-2 char account name is not caught by the name check (acceptable: rare, and
+# the two $root forms below still catch any packaged absolute path).
+# Runs BEFORE tar: ~2s over ~350 files, versus a 5min pack plus a bug report.
+$textExt = @('.ts', '.js', '.mjs', '.cjs', '.json', '.md', '.html', '.htm', '.css',
+             '.sh', '.bat', '.cmd', '.ps1', '.txt', '.yml', '.yaml', '.example')
+$identities = @($env:USERNAME, $root, ($root -replace '\\', '/')) |
+  Where-Object { $_ -and $_.Length -ge 3 }
+$scanSet = @($members | Where-Object {
+  -not $_.StartsWith('node_modules/') -and -not $_.StartsWith('node/') -and
+  $textExt -contains ([System.IO.Path]::GetExtension($_).ToLower())
+})
+$identityLeaks = New-Object System.Collections.Generic.List[string]
+foreach ($rel in $scanSet) {
+  $full = Join-Path $root $rel
+  if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+  $txt = ''
+  try { $txt = [System.IO.File]::ReadAllText($full) } catch { continue }
+  foreach ($id in $identities) {
+    if ($txt.IndexOf($id, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      $identityLeaks.Add($rel + '  <- contains "' + $id + '"')
+      break
+    }
+  }
+}
+if ($identityLeaks.Count -gt 0) {
+  Write-Host ("::error::shipped files leak the author's machine identity: " + (($identityLeaks | Select-Object -First 10) -join ' | '))
+  Write-Host "[error] these work only on the machine that packed them:"
+  $identityLeaks | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+Write-Host ("      portability: " + $scanSet.Count + " shipped text files scanned, 0 author-identity leaks")
+
 # All validations passed -- now (and only now) it is safe to replace the previous zip.
 if (Test-Path $zip) {
   try { Remove-Item $zip -Force -ErrorAction Stop }

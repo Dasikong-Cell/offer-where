@@ -656,7 +656,9 @@ export function JobMatchPage() {
 
       {/* 缺失配置：简历路径弹窗 */}
       <Dialog header="填写简历文件绝对路径" visible={showResumeDlg} onClose={() => setShowResumeDlg(false)} onConfirm={saveResume}>
-        <Input value={resumeInput} onChange={(v) => setResumeInput(v as string)} placeholder="如 C:\Users\吉学静\Desktop\resume.pdf" />
+        {/* 2026-09-26：示例路径原为开发机的**真实用户目录**，属于个人信息泄露，改为通用示例。
+            用正斜杠而非反斜杠：JSX 属性字符串对 `\` 的转义处理不直观，正斜杠无歧义且 Windows 也接受。 */}
+        <Input value={resumeInput} onChange={(v) => setResumeInput(v as string)} placeholder="如 D:/resume.pdf" />
         <p style={{ fontSize: 12, color: 'var(--td-text-color-placeholder)', marginTop: 8 }}>需本机真实存在的简历文件（PDF/Word），用于自动上传投递。</p>
       </Dialog>
 

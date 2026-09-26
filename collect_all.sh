@@ -5,7 +5,8 @@
 #   job51   -> collect_51job.ts（两级；collect_multi 的 EXTRACT_51 当前失效，抓 0）
 #   liepin  -> collect_multi.ts liepin（EXTRACT_LIEPIN 有效）
 #   zhilian -> collect_zhilian.ts（两级）
-cd "C:/Users/吉学静/WorkBuddy/2026-09-02-09-33-33/job-apply-agent"
+# 2026-09-26 修：原为硬编码的开发机绝对路径，换机器/换目录即失效 → 改用脚本自身所在目录
+cd "$(cd "$(dirname "$0")" && pwd)"
 NODE="./node/node.exe"
 TSX="./node_modules/tsx/dist/cli.mjs"
 

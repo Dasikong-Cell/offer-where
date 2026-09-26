@@ -3,7 +3,8 @@
 # 用法: bash offerbiu_auto.sh [扫描页数] [最多投递数]
 #   例: bash offerbiu_auto.sh 20 12
 # 前置：后端 4400 在线；9227(official) 调试 Chrome 已启动；邮箱授权码已配（/api/mail/config 的 hasAuthCode=true）
-cd "C:/Users/吉学静/WorkBuddy/2026-09-02-09-33-33/job-apply-agent"
+# 2026-09-26 修：原为硬编码的开发机绝对路径，换机器/换目录即失效 → 改用脚本自身所在目录
+cd "$(cd "$(dirname "$0")" && pwd)"
 PAGES="${1:-20}"
 MAX="${2:-12}"
 
