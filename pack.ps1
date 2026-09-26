@@ -196,6 +196,46 @@ if ($trackedNames.Count -eq 0) {
   Write-Host ("      scripts/ tracking check: all " + $scriptFiles.Count + " shipped files are tracked by git")
 }
 
+# fail-closed: npm leaves duplicate copies behind when an install is interrupted. It renames the
+# package it is about to replace to ".<name>-<8 random chars>" and deletes it afterwards; a crash
+# in between leaves the full copy on disk. On 2026-09-27 the author's node_modules carried 69 of
+# them: 48,456 files / 340 MiB of duplicated packages. They were packaged silently, inflating the
+# zip from 352.7 MB to 454.7 MB and making the local package differ from the CI one by 48,525
+# entries -- visible in no log line at all, only in a hand-diff of the two archives.
+# The pattern is npm-specific, and it has to be tight: the author's node_modules also contains
+# genuine dotted files such as node_modules/jszip/.jekyll-metadata, and a first version of this
+# check flagged exactly that -- a false alarm, which is how guards end up being switched off.
+# Two independent conditions, both of which must hold:
+#   1. npm only ever renames a package INTO ITS OWN PARENT, i.e. node_modules/, node_modules/.bin/
+#      or a scope directory node_modules/@scope/. Never inside a package, never deeper.
+#   2. the trailing token npm appends is 8 random base64-ish chars and in practice always mixes
+#      case and digits ("Gra2BtSh", "ufHTURG0"). ".jekyll-metadata" fails this: all lowercase.
+# Depth 1 covers the plain packages, the scoped ones and the files inside node_modules/.bin.
+$nmRoot = Join-Path $root 'node_modules'
+$npmTemp = @()
+if (Test-Path -LiteralPath $nmRoot) {
+  $npmTemp = @(Get-ChildItem -LiteralPath $nmRoot -Force -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+    Where-Object {
+      $rel = ($_.FullName.Substring($root.Length + 1) -replace '\\', '/')
+      $seg = $rel.Split('/')
+      if ($seg.Length -lt 2) { return $false }
+      $parentRel = ($seg[0..($seg.Length - 2)] -join '/')
+      $parentIsNpmSlot = ($parentRel -eq 'node_modules') -or ($parentRel -eq 'node_modules/.bin') -or ($parentRel -match '^node_modules/@[^/]+$')
+      $m = [regex]::Match($_.Name, '^\..*-([A-Za-z0-9]{8})$')
+      $parentIsNpmSlot -and $m.Success -and ($m.Groups[1].Value -cmatch '[A-Z]') -and ($m.Groups[1].Value -match '[0-9]')
+    } |
+    ForEach-Object { ($_.FullName.Substring($root.Length + 1) -replace '\\', '/') } |
+    Sort-Object)
+}
+if ($npmTemp) {
+  Write-Host ("::error::node_modules holds npm temp leftovers from an interrupted install: " + (($npmTemp | Select-Object -First 10) -join ', '))
+  Write-Host "[error] these duplicate packages would be shipped; remove them (or run a clean install):"
+  $npmTemp | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+} else {
+  Write-Host "      node_modules: 0 npm temp leftovers"
+}
+
 $items = @()
 $items += $dirs      | Where-Object { Test-Path (Join-Path $root $_) }
 $items += $splitDirs | Where-Object { Test-Path (Join-Path $root $_) }
