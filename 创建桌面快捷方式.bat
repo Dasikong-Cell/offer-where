@@ -16,7 +16,12 @@ if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
 echo 正在桌面创建唯一入口「投递Agent」...
 echo 指向：%PKG%start_all.bat
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $lnk=$ws.CreateShortcut('%DESKTOP%\投递Agent.lnk'); $lnk.TargetPath='%PKG%start_all.bat'; $lnk.WorkingDirectory='%PKG%'; $lnk.Description='简历投递 Agent 控制台'; $lnk.Save()" 2>nul
+REM 图标：包内自带 public\app.ico（渐变底纸飞机，也用作控制台 favicon）。
+REM 不存在时留空 —— 没有图标顶多难看，不该因此建不出快捷方式。
+set "ICON=%PKG%public\app.ico"
+if not exist "%ICON%" set "ICON="
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $lnk=$ws.CreateShortcut('%DESKTOP%\投递Agent.lnk'); $lnk.TargetPath='%PKG%start_all.bat'; $lnk.WorkingDirectory='%PKG%'; $lnk.Description='简历投递 Agent 控制台'; if('%ICON%' -ne ''){ $lnk.IconLocation='%ICON%,0' }; $lnk.Save()" 2>nul
 
 if errorlevel 1 (
   REM Fallback: .lnk COM disabled. Write a desktop .bat that points at THIS package.

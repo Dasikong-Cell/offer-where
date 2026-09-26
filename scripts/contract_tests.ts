@@ -891,6 +891,12 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     '向导应把 selfcheck 的 todo 项渲染成带动作按钮的步骤');
   check('向导动作走真实接口（ensure-all）', con.includes('/api/browser/ensure-all'),
     '「拉起窗口」必须调用已存在的后端自愈接口，不许是装饰性按钮');
+  // 应用图标（2026-09-26 用户要求换图标）：桌面快捷方式与浏览器标签页共用 public/app.ico
+  const icoOk = fs.existsSync(path.join(ROOT, 'public', 'app.ico'))
+    && con.includes('rel="icon" href="/app.ico"')
+    && fs.readFileSync(path.join(ROOT, '创建桌面快捷方式.bat'), 'utf8').includes('IconLocation');
+  check('应用图标已生成且被快捷方式/控制台引用', icoOk,
+    '缺 favicon 浏览器标签显默认地球；快捷方式不设 IconLocation 显通用 bat 图标');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
