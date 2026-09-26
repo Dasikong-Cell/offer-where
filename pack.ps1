@@ -171,9 +171,16 @@ if ($missing) {
 # may not compare equal in this process. This check therefore reliably covers the
 # ASCII names; the CJK legacy packer is verified by listing the archive by hand
 # (it is dropped by the Get-ChildItem filter above, which uses real .NET strings).
-$shippedDev = $listing | Where-Object { $dropScripts -contains $_ }
+# Compare on BASENAME: the rule is "these names never ship, at any path level".
+# An exact-path compare only ever protected the root copy -- which is exactly how
+# v1.0.1 slipped a root `start.bat` into the archive on the runner (the root copy
+# was in fact filtered, so it must have arrived via a packaged directory).
+$shippedDev = $listing | Where-Object { $dropScripts -contains ($_ -replace '^.*/', '') }
 if ($shippedDev) {
-  Write-Host ("::error::archive contains developer-only scripts: " + (($shippedDev | Select-Object -First 10) -join ', '))
+  $names  = ($shippedDev | Select-Object -First 10) -join ', '
+  $atRoot = ($dropScripts | Where-Object { Test-Path (Join-Path $root $_) }) -join ', '
+  Write-Host ("::error::developer-only scripts shipped: " + $names + " | present at repo root: [" + $atRoot + "]")
+  Write-Host ("      diagnostic: zip=" + $zip + " ; scriptsSelected=" + ($scripts -join ','))
   Write-Host "[error] archive contains developer-only scripts:"
   $shippedDev | ForEach-Object { Write-Host "   - $_" }
   exit 1

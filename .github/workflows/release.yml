@@ -83,7 +83,7 @@ jobs:
       - name: 打包
         shell: pwsh
         env:
-          PACK_ZIP_DIR: ${{ github.workspace }}
+          PACK_ZIP_DIR: ${{ runner.temp }}
         run: |
           ./pack.ps1
           if ($LASTEXITCODE -ne 0) { throw "pack.ps1 failed with $LASTEXITCODE" }
@@ -95,7 +95,7 @@ jobs:
       - name: 解压即用冒烟（打包产物本身也验一遍）
         shell: pwsh
         env:
-          PACK_ZIP_DIR: ${{ github.workspace }}
+          PACK_ZIP_DIR: ${{ runner.temp }}
         run: |
           # pack_smoke 会重新打包一次，这里用它的断言逻辑验的是同一份 pack.ps1 产物；
           # 若嫌慢可移除本步（ci.yml 每次推 main 都会跑它）。
