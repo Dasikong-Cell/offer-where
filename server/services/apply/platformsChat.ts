@@ -2,7 +2,7 @@
  * 其余平台的聊天驱动实例（基于 genericChatDriver.ts 配置化工厂）。
  *
  * ⚠️ 重要：本文件内 7 个 Web IM 平台驱动均为「启发式基线」（calibrated:false）。
- * 各平台 IM 的真实 DOM class 必须真机校准 —— 跑 `tsx scripts/probe_chat.ts <platform>`
+ * 各平台 IM 的真实 DOM class 必须真机校准 —— 跑本地探针 `probe_chat.ts <platform>`（在 scripts/ 下，gitignored 不入库）
  * dump 出列表项 / 消息气泡的真实 class 与文本，再把实测选择器回填到对应 config 并置
  * calibrated:true，方可用于生产自动回复。校准前引擎不会误发（消息侧判定未知则跳过、不回），
  * 但也不会真正回复，直到选择器对齐。

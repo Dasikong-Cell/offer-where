@@ -9,7 +9,7 @@
  * 直接复用 resumeCard.ts 的跨平台通用实现。
  *
  * ⚠️ 选择器校准：本工厂的默认启发式覆盖市面上大多数 React/Vue 聊天 UI 的常见结构，
- * 但每个平台 IM 的真实 class 仍需真机校准（见 scripts/probe_chat.ts）。config.calibrated=false
+ * 但每个平台 IM 的真实 class 仍需真机校准（见本地探针 probe_chat.ts，gitignored 不入库）。config.calibrated=false
  * 的平台为「启发式基线」，生产使用前应先跑探针、把实测选择器回填到 config 再置 calibrated=true。
  *
  * 设计要点：

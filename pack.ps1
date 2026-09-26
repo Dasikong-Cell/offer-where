@@ -260,6 +260,12 @@ foreach ($f in $refFiles) {
 # only enforce for paths that exist in the repo: a typo pointing at nothing is a doc bug,
 # not something the drop list caused -- but it must not be silently ignored either, so it
 # is reported as an error too (that is how the ensure_chrome.sh hint was caught).
+# 2026-09-27: this guard ALSO catches references to files that are gitignored on purpose
+# (scripts/*probe*.ts and friends exist only on the author's disk, so the author's pack is
+# green while the runner's fails -- the same local-green/CI-red shape as the stale-drop
+# check above). The message says "fix the path", but the right fix is usually to drop the
+# `scripts/` prefix from a source comment so it reads as prose rather than as a shippable
+# path. References from docs/ are fine: docs/ is not in the ship set, so it is not scanned.
 $missingOnDisk = @($refs | Where-Object { -not (Test-Path (Join-Path $root $_)) })
 if ($missingOnDisk) {
   Write-Host ("::error::shipped files reference scripts that do not exist: " + (($missingOnDisk | Select-Object -First 10) -join ', '))

@@ -59,7 +59,7 @@ function resolveHrPosition(company: string | null, platform: string): string | n
 
 /** 支持自动回复的平台 → 对应聊天驱动（新增平台在此登记即生效，引擎零改动）。
  *  boss/liepin 为已真机校准的专属实现；其余 7 个 Web IM 平台经 genericChatDriver 配置化工厂
- *  生成（启发式基线，calibrated:false，待 scripts/probe_chat.ts 真机校准后再投产）。
+ *  生成（启发式基线，calibrated:false，待本地探针 probe_chat.ts 真机校准后再投产）。
  *  offerbiu 为邮件通道，由 offerbiu-email-direct-apply 处理，不在此登记。 */
 export const DRIVERS: Partial<Record<ApplyPlatform, ChatDriver>> = {
   boss: bossChatDriver,
