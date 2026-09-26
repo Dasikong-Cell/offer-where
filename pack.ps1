@@ -146,7 +146,24 @@ $scriptFiles = @(Get-ChildItem (Join-Path $root 'scripts') -Recurse -File -Force
 # $scriptFiles would always report every entry as stale, since that list is the result
 # of removing them (2026-09-26: wrote it the wrong way round first; the guard failed
 # loudly rather than silently passing, which is the point of fail-closed).
-$staleDrops = @($scriptDrop | Where-Object { $allScriptNames -notcontains $_ })
+# CORRECTION (2026-09-27, first CI run of 934430e, the "script slimming" commit): this check originally
+# required EVERY drop entry to exist on disk ($allScriptNames). That made the package
+# UNBUILDABLE on a clean checkout. Five entries -- _probe_cdp_diag.ts, _probe_resume_sent.ts,
+# _tmp_plan_probe.ts, probe_findim.ts, probe_imdeep.ts -- match the .gitignore rules for
+# local probe/temp scripts, so they exist on the author's disk but NEVER in the repo.
+# The author's pack went green, the runner's died with "scriptDrop is stale" and took the
+# whole Release pipeline down with it. Local-green / CI-red is the worst possible shape for
+# a guard: it hides in the one environment that never runs.
+# An entry is genuinely stale only if the repo USED TO track that file and it is gone from
+# disk now (renamed or deleted -- which is exactly what would silently start shipping it
+# again). Untracked drop targets are allowed to be absent.
+$trackedNames = @()
+try {
+  $trackedNames = @(& git -C $root ls-files scripts 2>$null | ForEach-Object { ($_ -split '/')[-1] })
+} catch { }
+$staleDrops = @($scriptDrop | Where-Object {
+  $allScriptNames -notcontains $_ -and $trackedNames -contains $_
+})
 if ($staleDrops) {
   Write-Host ("::error::scriptDrop entries no longer exist in scripts/: " + ($staleDrops -join ', '))
   Write-Host "[error] scriptDrop is stale (file renamed or removed?):"
