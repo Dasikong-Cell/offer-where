@@ -76,8 +76,11 @@ Set-Location $repo
 | B | pwsh 7.6.6 | 0 | 454.7 MB | 181290 | 285.1 s |
 | C（`pack_smoke` 内部） | pwsh 7.6.6 | 0 | 454.7 MB | 181290 | 258.5 s |
 | D（含本文新增护栏） | pwsh 7.6.6 | 0 | 454.7 MB | 181290 | 281.3 s |
+| E（对提交 `cd12b15`，护栏已入库） | pwsh 7.6.6 | 0 | 454.7 MB | 181290 | 321.7 s |
 
-**A/B/C/D 均 0 条 `::error::`，条目数与大小逐次相同 ⇒ 换 shell 不影响打包结论。**
+**A–E 均 0 条 `::error::`，条目数与大小逐次相同 ⇒ 换 shell 不影响打包结论。**
+E 的 `version.json` 记的是 `commit=cd12b15 / dirty=false`，即**产物可追溯到一个具体提交**
+（不是工作树快照）。
 
 `pack_smoke.ps1`（②）**首次在本机跑通**，四段全过（总耗时 877.4 s）：
 
@@ -182,8 +185,16 @@ A 走的是真实代码路径；B 用**同一个 `tar.exe`** 造合成归档来�
 
 | 路径 | 说明 |
 |---|---|
-| `_tools/pwsh7/`（工作区，非仓库） | pwsh 7.6.6 便携版，可整个删除；不进包、不改 PATH |
+| `_tools/pwsh7/`（工作区，非仓库） | 7.6.6 便携版，可整个删除；不进包、不改 PATH |
 | `_tools/run_pack.ps1` / `run_smoke.ps1` | 复现 runner 两个步骤的包装脚本（设 `PACK_ZIP_DIR` + 落日志） |
 | `_tools/enc_probe.ps1` | 编码探针（结论见 §4；本身是空洞的，留作方法记录） |
 | `_tools/guard_negative.ps1` | §5 的三组对照 |
-| `_tools/packout_*/` | 三次打包产物，验证后已删（不留「不对应任何提交的快照包」） |
+| `_tools/packout_*/` | 四次打包产物，验证后已删 —— 不留「不对应任何提交的快照包」 |
+
+⚠️ 最后一次「已删」有个坑要交代：本环境的删除**走回收站**，且 `Remove-Item -Recurse -Force`
+会抛 `[safe-delete][SAFE_DELETE_FAIL_CLOSED] ... trash-failed`（内部把中文路径转成乱码
+`C:\Users\鍚夊闈橽...`）**却其实已经删了**——之后 `Test-Path` 全部 false。所以：**判断删没删要
+用 `Test-Path` 复核，别信那条报错**；而且空间**没有真正释放**，是进了回收站。
+收尾时用户机回收站已积压 **389219 个条目 / 5.3GB**（最新一次打包前 C: 剩 33GB，验证期间
+降到 22.5GB）。要立即释放且不进回收站，用 `[System.IO.Directory]::Delete($p, $true)`
+（`pack_smoke.ps1` 自己用的正是这条路）。**建议用户清空回收站。**
