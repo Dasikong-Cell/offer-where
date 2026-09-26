@@ -131,7 +131,7 @@ $scriptDrop = @(
   'diag_chat_list.ts', 'diag_chat_resume_pick.ts', 'diag_chat_sendflow.ts',
   'diag_chat_upload_resume.ts',
   'diag_job51_jd.ts', 'diag_job51_jd_modal.ts', 'diag_job51_modal.ts', 'diag_login.ts',
-  'peek_page.ts', 'probe2.ts', 'probe_boss_apply.ts', 'probe_findim.ts',
+  'peek_page.ts', 'probe2.ts', 'probe_boss_apply.ts', 'probe_chat.ts', 'probe_findim.ts',
   'probe_imdeep.ts', 'probe_multi.ts',
   # --- dev-only tooling ---
   'pack_smoke.ps1',        # repack+smoke driver; pack.ps1 itself is never shipped
@@ -169,6 +169,31 @@ if ($staleDrops) {
   Write-Host "[error] scriptDrop is stale (file renamed or removed?):"
   $staleDrops | ForEach-Object { Write-Host "   - $_" }
   exit 1
+}
+
+# fail-closed the THIRD way: every script that WILL be shipped must be TRACKED BY GIT.
+# Why this exists (2026-09-27): probe_chat.ts lives on the author's disk but is gitignored,
+# and it was missing from $scriptDrop -- so the author's zip shipped 67 scripts while the
+# runner's shipped 66. The difference is invisible in every log line; it only shows up if you
+# diff the two pack outputs by hand. That means the artifact handed to a stranger was NOT the
+# artifact CI builds, for a reason nobody would ever notice.
+# Same equivalence as the stale-drop check above: "a file exists in CI" == "git ls-files
+# knows about it". So a shipped-but-untracked script is precisely a file CI cannot have.
+# Guarded on $trackedNames being non-empty: outside a git work tree (or without git) this
+# check cannot know anything, so it stands down and says so rather than false-failing.
+$untrackedShipped = @($scriptFiles |
+  Where-Object { $trackedNames -notcontains $_.Name } |
+  ForEach-Object { $_.Name } | Sort-Object)
+if ($trackedNames.Count -eq 0) {
+  Write-Host "      scripts/ tracking check: SKIPPED (no git work tree, or git unavailable)"
+} elseif ($untrackedShipped.Count -gt 0) {
+  Write-Host ("::error::scripts shipped but not tracked by git (CI will not have them): " + ($untrackedShipped -join ', '))
+  Write-Host "[error] a local-only script would be packaged here but is absent on the runner:"
+  $untrackedShipped | ForEach-Object { Write-Host "   - $_" }
+  Write-Host "        fix: add the name to `$scriptDrop, or commit the file."
+  exit 1
+} else {
+  Write-Host ("      scripts/ tracking check: all " + $scriptFiles.Count + " shipped files are tracked by git")
 }
 
 $items = @()
