@@ -278,18 +278,24 @@ async function reclaimTabs(
  *   1) 常规：±25% 均匀抖动（破等间距）
  *   2) 偶发「走神 / 喝口水」长间隔：约 8% 概率拉长到 1.8–2.6×（更像人会中途停顿）
  * 仅在 humanize 开启时生效；关闭则退化为固定 intervalMs（测试 / 调试用，节奏可复现）。
+ *
+ * range 的语义是「显式区间优先」：调用方给区间就是在表达硬约束（例如某平台的安全节奏），
+ * 此时 8% 长间隔**不得**越过它 —— 2026-09-26 修：此前长间隔分支无条件覆盖 range，
+ * 传 [3000,5000] 时仍有 8% 概率产出 1.8–2.6×base（base=20000 即 36–52s），
+ * 等于把调用方的约束悄悄作废（当时只有合约测试在用 range，所以线上未暴露，但契约已被破坏）。
  */
 export function humanizedGap(base: number, humanize: boolean, range?: [number, number]): number {
   if (!humanize || base <= 0) return base;
+  const explicit = !!(range && range[0] > 0 && range[1] >= range[0]);
   let g: number;
-  if (range && range[0] > 0 && range[1] >= range[0]) {
-    g = randomInt(range[0], range[1]);
+  if (explicit) {
+    g = randomInt(range![0], range![1]);
   } else {
     g = Math.round(base * (0.75 + randomInt(0, 50) / 100)); // ±25%
-  }
-  // 8% 概率触发「长间隔」——真人不会永远匀速，偶尔会停顿更久（直接基于 base，1.8–2.6×，不叠加上面抖动）
-  if (randomInt(0, 99) < 8) {
-    g = Math.round(base * (1.8 + randomInt(0, 80) / 100)); // 1.8–2.6× base
+    // 8% 概率触发「长间隔」——真人不会永远匀速，偶尔会停顿更久（直接基于 base，1.8–2.6×，不叠加上面抖动）
+    if (randomInt(0, 99) < 8) {
+      g = Math.round(base * (1.8 + randomInt(0, 80) / 100)); // 1.8–2.6× base
+    }
   }
   return Math.max(0, g);
 }

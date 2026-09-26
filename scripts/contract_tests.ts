@@ -854,8 +854,17 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('H6 humanize=true → 间隔 <= 2.6×base（含偶发长间隔兜底）', maxG <= Math.ceil(base * 2.6), `max=${maxG}`);
   check('H6 humanize=true → 确实在抖动（多次采样不全相等）', seen.size > 1, `distinct=${seen.size}`);
   // 显式区间优先：传 [min,max] 时落在区间内
-  const rg = humanizedGap(base, true, [3000, 5000]);
-  check('H6 显式区间优先（落 [min,max]）', rg >= 3000 && rg <= 5000, `g=${rg}`);
+  // 显式区间优先：传 [min,max] 时落在区间内。
+  // ⚠️ 2026-09-26 修：原来只采样 1 次 → 实现里那条「8% 概率长间隔」有 8% 概率越过区间，
+  // 于是这条用例以 8% 的几率随机变红（同一份代码时而全绿时而红，最容易被当成"噪声"放过去）。
+  // 随机性必须靠采样量压掉：200 次采样下旧实现的失败概率 = 1 - 0.92^200 ≈ 100%。
+  let outOfRange = 0; let sampleG = 0;
+  for (let k = 0; k < 200; k++) {
+    sampleG = humanizedGap(base, true, [3000, 5000]);
+    if (sampleG < 3000 || sampleG > 5000) outOfRange++;
+  }
+  check('H6 显式区间优先（落 [min,max]）', outOfRange === 0,
+    `200 次采样中越界 ${outOfRange} 次，末次 g=${sampleG}`);
 }
 
 // ── H7 段：自动回复「架构不支持」平台标记（51job/鱼泡/中华英才 无可用 Web IM）──
@@ -892,11 +901,38 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('向导动作走真实接口（ensure-all）', con.includes('/api/browser/ensure-all'),
     '「拉起窗口」必须调用已存在的后端自愈接口，不许是装饰性按钮');
   // 应用图标（2026-09-26 用户要求换图标）：桌面快捷方式与浏览器标签页共用 public/app.ico
-  const icoOk = fs.existsSync(path.join(ROOT, 'public', 'app.ico'))
+  const icoPath = path.join(ROOT, 'public', 'app.ico');
+  const icoOk = fs.existsSync(icoPath)
     && con.includes('rel="icon" href="/app.ico"')
     && fs.readFileSync(path.join(ROOT, '创建桌面快捷方式.bat'), 'utf8').includes('IconLocation');
   check('应用图标已生成且被快捷方式/控制台引用', icoOk,
     '缺 favicon 浏览器标签显默认地球；快捷方式不设 IconLocation 显通用 bat 图标');
+
+  // ⚠️ ICO 必须真的含多档尺寸（2026-09-26 实测踩坑）：
+  // 曾经用 PIL 的 save(format='ICO', sizes=[...], append_images=[...])，它的 _save 里
+  // `if size[0] > width: continue` 取的是「基准图」尺寸 —— 按小到大传就把大档位全静默跳过，
+  // 产出只有 16x16 一帧的 ICO（文件正常、能显示，但 32/48/256px 全是 16px 放大 ⇒ 永远糊）。
+  // 四道门（tsc/selftest/合约/冒烟）当时全绿，因为没人解回来看过帧数。
+  // 所以这里直接解析 ICONDIR，把「帧数」变成机械断言。
+  const icoSizes: number[] = [];
+  if (fs.existsSync(icoPath)) {
+    const buf = fs.readFileSync(icoPath);
+    const count = buf.readUInt16LE(4);              // 3-4 字节是 idCount
+    for (let i = 0; i < count; i++) {
+      const w = buf.readUInt8(6 + i * 16);          // 0 表示 256
+      icoSizes.push(w === 0 ? 256 : w);
+    }
+  }
+  check('图标是多尺寸 ICO（含 256 档）',
+    icoSizes.length >= 4 && Math.max(...icoSizes) === 256,
+    `实际帧=${JSON.stringify(icoSizes)}；单帧 ICO 会让 Windows 在大尺寸下放大 16px 而发虚`);
+
+  // 图标生成器必须走自己的 ICO 封装（内部有「写完回读断言帧数」），
+  // 而不是回到 PIL 的 ICO 保存路径 —— 那个静默跳档的坑正是这么来的。
+  const iconGen = fs.readFileSync(path.join(ROOT, 'scripts', 'make_icon.py'), 'utf8');
+  check('图标生成器使用带断言的 ICO 封装',
+    fs.existsSync(path.join(ROOT, 'scripts', 'ico_pack.py')) && iconGen.includes('write_ico'),
+    'scripts/ico_pack.py 会在写完后回读 ICONDIR 校验帧数，避免再次静默只剩一帧');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
