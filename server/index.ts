@@ -1871,8 +1871,10 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
 // ============= 城市选择与定位 =============
 
 /**
- * 城市列表（供控制台「目标城市」下拉）。
- * ?q=关键 模糊过滤；?platform=boss 会带上该城市在该平台是否可用（无码的平台返回 supported=false）。
+ * 城市列表（供控制台「目标城市」搜索选择器）。
+ * 不带 q 时返回**全国全部城市**（373 个 / 34 个省级行政区），控制台一次拉全、本地即时过滤。
+ * ?q=关键 服务端过滤（口径同 listCities：城市名/省份/全拼/首字母/BOSS 码）；
+ * ?platform=boss 会带上该城市在该平台是否可用（无码的平台返回 supported=false）。
  */
 app.get("/api/cities", (req, res) => {
   try {
@@ -1883,6 +1885,7 @@ app.get("/api/cities", (req, res) => {
       province: c.province,
       boss: c.boss,
       pinyin: c.pinyin || null,
+      abbr: c.abbr || null,
       supported: platform ? isCitySupported(platform, c.name) : true,
     }));
     res.json({ total: cityCount(), matched: cities.length, default: DEFAULT_CITY, cities });

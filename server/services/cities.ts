@@ -18,8 +18,10 @@ import { CN_CITIES, type CityRow } from './cityData.js';
 export interface CityInfo {
   name: string;
   province: string;
-  /** 拼音（58同城/赶集用 {pinyin}.58.com 子域） */
+  /** 拼音（城市搜索用；58同城/赶集也用 {pinyin}.58.com 子域） */
   pinyin?: string;
+  /** 拼音首字母（城市搜索用，如 bj / sh / sz） */
+  abbr?: string;
   /** BOSS 城市码（市级） */
   boss: number;
 }
@@ -28,8 +30,13 @@ export interface CityInfo {
 export const DEFAULT_CITY = '昆明';
 
 const ALL: CityInfo[] = CN_CITIES.map((r: CityRow) => ({
-  name: r[0], province: r[1], boss: r[2], pinyin: r[3],
+  name: r[0], province: r[1], boss: r[2], pinyin: r[3], abbr: r[4],
 }));
+
+/** 全部城市（控制台一次性拉全量、本地过滤用） */
+export function allCities(): CityInfo[] {
+  return ALL;
+}
 
 /**
  * 平台专有城市 id —— **只登记实测验证过的**。
@@ -40,11 +47,35 @@ export const PLATFORM_CITY_EXTRA: Record<string, Record<string, string>> = {
   yupao: { 昆明: 'a367' },
 };
 
-/** 城市列表（可按关键词过滤：匹配城市名或省份） */
+/**
+ * 城市列表（可按关键词过滤）。
+ *
+ * 关键词同时匹配 5 条路径，让「全国 373 城」真的能被找到 —— 否则只能靠肉眼滚动：
+ *   ① 城市名（汉字）      昆明
+ *   ② 省份名（汉字）      云南      → 命中该省全部城市
+ *   ③ 全拼                 kunming
+ *   ④ 拼音首字母（前缀）   km / sh / bj
+ *   ⑤ BOSS 城市码         101290100
+ *
+ * ⚠️ 同一口径在控制台 `cityMatch()` 里有一份本地副本（要即时过滤，不能每敲一键打一次接口）。
+ *    改这里请同步改那里，合约测试会断言二者一致。
+ */
 export function listCities(keyword?: string): CityInfo[] {
-  const k = String(keyword || '').trim();
+  const k = String(keyword || '').trim().toLowerCase();
   if (!k) return ALL;
-  return ALL.filter((c) => c.name.includes(k) || c.province.includes(k));
+  const latin = /^[a-z]+$/.test(k);
+  return ALL.filter((c) => cityMatches(c, k, latin));
+}
+
+/** 单条匹配规则（供 listCities 与控制台/测试共用同一口径） */
+export function cityMatches(c: CityInfo, k: string, latin = /^[a-z]+$/.test(k)): boolean {
+  return (
+    c.name.includes(k) ||
+    c.province.includes(k) ||
+    (c.pinyin || '').includes(k) ||
+    (latin && (c.abbr || '').startsWith(k)) ||
+    String(c.boss).includes(k)
+  );
 }
 
 /** 城市数量（供接口/文档展示） */

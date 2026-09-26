@@ -37,6 +37,10 @@ import { PLATFORM_PAGE } from '../server/services/platformHealth.js';
 import { DELIVERY_PLATFORMS } from '../server/services/connection.js';
 import { DEFAULT_CDP_PORTS } from '../server/services/platformPorts.js';
 import { FALLBACK_PORT_PROFILES } from '../server/services/browserHealth.js';
+import { CN_CITIES } from '../server/services/cityData.js';
+import {
+  DEFAULT_CITY, listCities, cityCount, allCities, cityMatches, findCity,
+} from '../server/services/cities.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -965,6 +969,68 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     check(`${rel} 保持纯 ASCII`, bad === 0,
       `发现 ${bad} 个非 ASCII 字节；PS 5.1 会按 GBK 解码无 BOM 脚本，交付方可能解析失败`);
   }
+}
+
+// ── C9 段：全国城市表 + 控制台城市搜索口径 ──────────────────────────────
+// 背景：控制台「目标城市」曾是一个 373 项的原生 <select> —— 打开时浏览器会滚到当前选中项，
+// 于是只看得见末尾那一段，用户合理反馈「怎么只有广东和云南」。数据本来就是全国 373 城，
+// 坏的是呈现方式。改成可搜索选择器后有两处新风险，这里各加一道机械护栏：
+//   ① 城市表被改坏（漏省 / 重名 / 拼音丢字段）→ 搜索有城市永远搜不到
+//   ② 服务端与服务端**各写一份**过滤规则 → 慢慢漂移（改了 server 忘了 client）
+{
+  const provinces = new Set(CN_CITIES.map((r) => r[1]));
+  check('城市表覆盖全国（≥370 城）', CN_CITIES.length >= 370, `实际 ${CN_CITIES.length}`);
+  check('覆盖 34 个省级行政区', provinces.size === 34, `实际 ${provinces.size}：${[...provinces].sort().join('/')}`);
+  const names = CN_CITIES.map((r) => r[0]);
+  check('城市名无重复', new Set(names).size === names.length,
+    `重复：${names.filter((n, i) => names.indexOf(n) !== i).join('/') || '无'}`);
+  const badPinyin = CN_CITIES.filter((r) => !/^[a-z]+$/.test(String(r[3] || '')));
+  check('每城都有可用拼音（小写 a-z）', badPinyin.length === 0,
+    badPinyin.slice(0, 5).map((r) => r[0] + '=' + r[3]).join(','));
+  const badAbbr = CN_CITIES.filter((r) => !/^[a-z]+$/.test(String(r[4] || '')));
+  check('每城都有拼音首字母（搜索用）', badAbbr.length === 0,
+    badAbbr.slice(0, 5).map((r) => r[0] + '=' + r[4]).join(','));
+  check('DEFAULT_CITY 在城市表内', names.includes(DEFAULT_CITY), DEFAULT_CITY);
+  check('listCities() 无参返回全量', listCities().length === cityCount(), `${listCities().length}/${cityCount()}`);
+
+  // 五条搜索路径各来一条，否则「全国城市」名义上有了、实际还是搜不到
+  const hit = (q: string) => listCities(q).map((c) => c.name);
+  check('按城市名搜：昆明', hit('昆明').includes('昆明'));
+  check('按省份搜：云南 → 只出云南城市', hit('云南').length >= 15 && hit('云南').every((n) => names.includes(n) && findCity(n)?.province === '云南'),
+    `命中 ${hit('云南').length} 个`);
+  check('按省份搜不会退化成全量', hit('云南').length < cityCount());
+  check('按全拼搜：kunming → 昆明', hit('kunming').includes('昆明'));
+  check('按首字母搜：km → 昆明', hit('km').includes('昆明'));
+  check('按首字母搜：bj → 北京', hit('bj').includes('北京'));
+  check('按 BOSS 城市码搜：101290100 → 昆明', hit('101290100').includes('昆明'));
+  check('多音字/ü 已正确处理', hit('lvliang').includes('吕梁') && hit('danzhou').includes('儋州') && hit('xianggang').includes('香港'),
+    '吕梁→lvliang、儋州→danzhou、香港→xianggang');
+
+  // 服务端口径 vs 控制台本地副本 —— 逐城市、逐关键词比对，防两边漂移
+  const ROOT9 = fileURLToPath(new URL('..', import.meta.url));
+  const html = fs.readFileSync(path.join(ROOT9, 'public', 'console.html'), 'utf-8');
+  const fnSrc = (html.match(/function cityMatch\(c, k\)\{[\s\S]*?\n\}/) || [])[0];
+  check('控制台存在本地过滤副本 cityMatch()', !!fnSrc, '未找到时下面的口径比对无法进行');
+  if (fnSrc) {
+    const clientMatch = new Function('return (' + fnSrc + ')')() as (c: any, k: string) => boolean;
+    const kws = ['', '昆明', '云南', 'kunming', 'km', 'bj', 'sh', '101290100', 'lvliang', 'danzhou', 'hai', 'z'];
+    const rows = allCities();
+    const drift: string[] = [];
+    for (const k of kws) {
+      for (const c of rows) {
+        const a = cityMatches(c, k);
+        const b = clientMatch(c, k);
+        if (a !== b && drift.length < 5) drift.push(`${c.name}/${k}: server=${a} client=${b}`);
+      }
+    }
+    check('服务端 cityMatches 与控制台 cityMatch 口径一致', drift.length === 0, drift.join(' | '));
+  }
+
+  // 选择器的接线不变量：取值只认 #batchCity（batch 提交读的就是它），且不再有原生下拉
+  check('控制台 #batchCity 仍是 hidden input（batch 提交读它）',
+    /<input[^>]*type="hidden"[^>]*id="batchCity"/.test(html) || /<input[^>]*id="batchCity"[^>]*type="hidden"/.test(html));
+  check('控制台已无原生 <select id="batchCity">（否则又退回「滚动找城市」）', !/<select[^>]*id="batchCity"/.test(html));
+  check('控制台初始化已切到 initCityPicker()', /initCityPicker\(\)/.test(html) && !/fillCitySelect\(\)/.test(html));
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

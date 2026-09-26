@@ -120,6 +120,28 @@
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
   textarea{resize:vertical;min-height:70px}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+  /* ---------- 目标城市：全国城市搜索选择器（373 城） ---------- */
+  .citypick{position:relative;flex:1;min-width:0}
+  .citypick input{width:100%;padding-right:30px}
+  .citypick-caret{position:absolute;right:1px;top:1px;height:calc(100% - 2px);width:28px;border:none;background:transparent;
+    color:var(--muted2);font-size:11px;border-radius:0 8px 8px 0}
+  .citypick-caret:hover{color:var(--ink);background:#fafbfc}
+  .citypick-panel{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:60;background:#fff;
+    border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);overflow:hidden}
+  .citypick-panel[hidden]{display:none}
+  .citypick-meta{padding:7px 11px;font-size:11.5px;color:var(--muted);background:#fafbfc;border-bottom:1px solid var(--line2)}
+  .citypick-list{max-height:270px;overflow:auto;padding:5px}
+  .citypick-sec{padding:7px 9px 3px;font-size:11px;color:var(--muted2);letter-spacing:.4px}
+  .citypick-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;cursor:pointer;font-size:13px}
+  .citypick-item:hover,.citypick-item.on{background:var(--brand-soft)}
+  /* 城市名优先占位（克孜勒苏柯尔克孜自治州 这类长名不能被截），拼音/省份先让位 */
+  .citypick-item .nm{flex:3 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .citypick-item .py{flex:1 1 0;min-width:0;max-width:34%;color:var(--muted2);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+  .citypick-item .pv{flex:none;color:var(--muted2);font-size:11.5px}
+  .citypick-item .ck{color:var(--brand);font-weight:700;flex:none}
+  .citypick-item.sel .nm{color:var(--brand);font-weight:700}
+  .citypick-empty{padding:16px 11px;color:var(--muted);font-size:12.5px;text-align:center}
   .toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--ink)}
   .toggle input{width:auto}
 
@@ -287,10 +309,22 @@
             </div>
             <div class="row2" style="margin-top:10px">
               <div><label class="f">目标城市（投递/采集按此过滤）</label>
-                <div style="display:flex;gap:8px;align-items:center">
-                  <select id="batchCity" style="flex:1"></select>
-                  <button class="btn sm" id="batchLocate" type="button" title="用出口 IP 定位当前城市">📍 定位</button>
+                <div style="display:flex;gap:8px;align-items:flex-start">
+                  <div class="citypick" id="batchCityWrap">
+                    <input id="batchCitySearch" type="text" autocomplete="off" spellcheck="false"
+                      role="combobox" aria-expanded="false" aria-autocomplete="list"
+                      aria-controls="batchCityPanel" aria-label="目标城市"
+                      placeholder="搜索全国城市：昆明 / kunming / km / 云南" />
+                    <button class="citypick-caret" id="batchCityCaret" type="button" tabindex="-1" aria-label="展开城市列表">▾</button>
+                    <div class="citypick-panel" id="batchCityPanel" role="listbox" aria-label="城市列表" hidden>
+                      <div class="citypick-meta" id="batchCityMeta"></div>
+                      <div class="citypick-list" id="batchCityList"></div>
+                    </div>
+                  </div>
+                  <button class="btn sm" id="batchLocate" type="button" title="用出口 IP 定位当前城市" style="flex:none">📍 定位</button>
                 </div>
+                <!-- 真实取值：其余代码只认 #batchCity.value（''=全部城市），选择器只负责把它写进去 -->
+                <input type="hidden" id="batchCity" value="" />
                 <span class="muted small" id="locateStatus" style="margin-top:4px;display:block"></span>
               </div>
               <div><label class="f">最低匹配分（0 = 不限制）</label>
@@ -1158,18 +1192,176 @@ function fillPlatformSelects(){
   $('#batchSource').innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
 }
 
-/* 目标城市下拉（来自 /api/cities，缺省=昆明） */
-async function fillCitySelect(){
-  const el = $('#batchCity');
+/* ---------- 目标城市：全国城市搜索选择器 ---------- */
+/* 数据来自 /api/cities（**一次拉全 373 城 / 34 个省级行政区**），之后全部本地过滤 ——
+   否则每敲一个键都要打一次接口。取值只认 #batchCity（hidden input），其余代码不必知道选择器长什么样。 */
+let CITY_ALL = [];      // 全量城市
+let CITY_DEFAULT = '';  // 服务端缺省城市（昆明）
+let CITY_SEL = '';      // 当前选中城市名；'' = 全部城市（不按城市过滤）
+let CITY_HILITE = -1;   // 键盘高亮项在 CITY_VIEW 里的下标
+let CITY_VIEW = [];     // 当前面板里**可选中**的项（段标题不入列，键盘才不会跳到标题上）
+let CITY_OPEN = false;
+
+/* 常用城市置顶（缺省城市由服务端 default 给出，会插到最前面） */
+const CITY_QUICK = ['北京', '上海', '深圳', '广州', '杭州', '成都', '武汉', '南京', '西安', '重庆'];
+
+/* ⚠️ 与 server/services/cities.ts 的 cityMatches() 同口径（本地副本；合约测试断言二者一致） */
+function cityMatch(c, k){
+  if(!k) return true;
+  const latin = /^[a-z]+$/.test(k);
+  return (c.name || '').toLowerCase().includes(k)
+    || (c.province || '').toLowerCase().includes(k)
+    || (c.pinyin || '').toLowerCase().includes(k)
+    || (latin && (c.abbr || '').toLowerCase().startsWith(k))
+    || String(c.boss || '').includes(k);
+}
+
+/* 输入框同时兼任「显示当前选中」和「搜索关键词」两个角色：内容仍等于选中城市名时，
+   视为「只是在显示」，按空关键词处理 —— 否则一打开就只剩 1 条匹配，像坏了。 */
+function cityQuery(){
+  const inp = $('#batchCitySearch');
+  const v = (inp && inp.value ? inp.value : '').trim();
+  if(CITY_SEL && v === CITY_SEL) return '';
+  return v.toLowerCase();
+}
+
+function cityItemHtml(i, name, sub, py, sel){
+  return '<div class="citypick-item' + (sel ? ' sel' : '') + '" data-i="' + i + '" role="option" aria-selected="' + (sel ? 'true' : 'false') + '">'
+    + '<span class="nm">' + esc(name || '全部城市') + '</span>'
+    + (py ? '<span class="py">' + esc(py) + '</span>' : '<span class="py"></span>')
+    + (sub ? '<span class="pv">' + esc(sub) + '</span>' : '')
+    + (sel ? '<span class="ck">✓</span>' : '')
+    + '</div>';
+}
+
+function renderCityPanel(){
+  const list = $('#batchCityList'), meta = $('#batchCityMeta');
+  if(!list) return;
+  const k = cityQuery();
+  CITY_VIEW = [];
+  let html = '';
+
+  if(!CITY_ALL.length){
+    list.innerHTML = '<div class="citypick-empty">城市列表加载失败，请刷新页面重试</div>';
+    if(meta) meta.textContent = '—';
+    return;
+  }
+
+  // 首项固定「全部城市」（'' = 不按城市过滤），否则选过城市就再也回不到「不限」
+  CITY_VIEW.push({ kind: 'all' });
+  html += cityItemHtml(0, '全部城市', '不按城市过滤', '', CITY_SEL === '');
+
+  if(!k){
+    const quickNames = [CITY_DEFAULT].concat(CITY_QUICK).filter((n, i, a) => n && a.indexOf(n) === i);
+    const quick = quickNames.map(n => CITY_ALL.find(c => c.name === n)).filter(Boolean);
+    const quickSet = {};
+    quick.forEach(c => { quickSet[c.name] = 1; });
+    if(quick.length){
+      html += '<div class="citypick-sec">常用城市</div>';
+      quick.forEach(c => { CITY_VIEW.push({ kind: 'city', c: c }); html += cityItemHtml(CITY_VIEW.length - 1, c.name, '（' + c.province + '）', c.pinyin, CITY_SEL === c.name); });
+    }
+    html += '<div class="citypick-sec">全部城市（' + CITY_ALL.length + ' 个）</div>';
+    CITY_ALL.filter(c => !quickSet[c.name]).forEach(c => { CITY_VIEW.push({ kind: 'city', c: c }); html += cityItemHtml(CITY_VIEW.length - 1, c.name, '（' + c.province + '）', c.pinyin, CITY_SEL === c.name); });
+    if(meta) meta.textContent = '共 ' + CITY_ALL.length + ' 个城市 · 覆盖 34 个省/自治区/直辖市，可直接输入拼音或首字母';
+  }else{
+    const hits = CITY_ALL.filter(c => cityMatch(c, k));
+    hits.forEach(c => { CITY_VIEW.push({ kind: 'city', c: c }); html += cityItemHtml(CITY_VIEW.length - 1, c.name, '（' + c.province + '）', c.pinyin, CITY_SEL === c.name); });
+    if(!hits.length){
+      html += '<div class="citypick-empty">没有匹配「' + esc(k) + '」的城市<br/><span class="small">换个词试试：城市名 / 省份 / 拼音 / 首字母（如 km、sh）</span></div>';
+    }
+    if(meta) meta.textContent = '匹配 ' + hits.length + ' 个城市';
+  }
+
+  list.innerHTML = html;
+  CITY_HILITE = -1;
+  // 刻意**不**把选中项滚进视野：innerHTML 重置后列表本就在顶部，而顶部第一屏正是
+  // 「常用城市」（含当前选中项）+「全部城市（373 个）」——用户一眼就能看到「覆盖全国」。
+  // 若滚到选中项，反而落回旧下拉「只看得见中间那一段」的观感，等于白改。
+  if(list.scrollTop) list.scrollTop = 0;
+}
+
+function openCityPanel(){
+  const p = $('#batchCityPanel'), inp = $('#batchCitySearch');
+  if(!p || CITY_OPEN) return;
+  CITY_OPEN = true;
+  p.hidden = false;
+  if(inp) inp.setAttribute('aria-expanded', 'true');
+  renderCityPanel();
+}
+
+function closeCityPanel(){
+  const p = $('#batchCityPanel'), inp = $('#batchCitySearch');
+  CITY_OPEN = false;
+  if(p) p.hidden = true;
+  if(inp) inp.setAttribute('aria-expanded', 'false');
+}
+
+/* 选中：写 hidden input（唯一取值）+ 回显输入框，然后收面板 */
+function setCity(name){
+  CITY_SEL = name || '';
+  const hid = $('#batchCity'); if(hid) hid.value = CITY_SEL;
+  const inp = $('#batchCitySearch'); if(inp) inp.value = CITY_SEL;
+  renderCityPanel();
+  closeCityPanel();
+}
+
+function hiliteCity(idx){
+  const list = $('#batchCityList'); if(!list) return;
+  const items = $$('.citypick-item', list);
+  if(!items.length) return;
+  if(idx < 0) idx = 0;
+  if(idx > items.length - 1) idx = items.length - 1;
+  items.forEach(el => el.classList.remove('on'));
+  items[idx].classList.add('on');
+  CITY_HILITE = idx;
+  if(items[idx].scrollIntoView) items[idx].scrollIntoView({ block: 'nearest' });
+}
+
+async function initCityPicker(){
   try{
     const data = await api('/api/cities');
-    const list = data.cities || [];
-    const opts = ['<option value="">全部城市</option>']
-      + list.map(c=>'<option value="'+esc(c.name)+'"'+(c.name===data.default?' selected':'')+'>'+esc(c.name)+'（'+esc(c.province)+'）</option>')
-      + '';
-    el.innerHTML = opts;
-  }catch(e){ el.innerHTML = '<option value="">全部城市</option>'; }
+    CITY_ALL = data.cities || [];
+    CITY_DEFAULT = data.default || '';
+  }catch(e){ CITY_ALL = []; CITY_DEFAULT = ''; }
+  // 默认城市与旧下拉保持一致（昆明），且同样写进 hidden input —— 行为不变
+  CITY_SEL = CITY_DEFAULT;
+  const hid = $('#batchCity'); if(hid) hid.value = CITY_SEL;
+  const inp = $('#batchCitySearch'); if(inp) inp.value = CITY_SEL;
 }
+
+$('#batchCitySearch').addEventListener('focus', ()=>openCityPanel());
+$('#batchCitySearch').addEventListener('click', ()=>openCityPanel());
+$('#batchCitySearch').addEventListener('input', ()=>{ openCityPanel(); renderCityPanel(); });
+$('#batchCitySearch').addEventListener('keydown', (e)=>{
+  if(e.key === 'ArrowDown'){ e.preventDefault(); openCityPanel(); hiliteCity(CITY_HILITE < 0 ? 0 : CITY_HILITE + 1); }
+  else if(e.key === 'ArrowUp'){ e.preventDefault(); hiliteCity(CITY_HILITE <= 0 ? 0 : CITY_HILITE - 1); }
+  else if(e.key === 'Enter'){
+    if(!CITY_OPEN) return;
+    e.preventDefault();
+    const v = CITY_VIEW[CITY_HILITE >= 0 ? CITY_HILITE : 0];
+    if(v) setCity(v.kind === 'all' ? '' : v.c.name);
+  }
+  else if(e.key === 'Escape'){ e.preventDefault(); closeCityPanel(); }
+  else if(e.key === 'Tab'){ closeCityPanel(); }
+});
+$('#batchCityCaret').addEventListener('click', ()=>{
+  if(CITY_OPEN) closeCityPanel();
+  else { const inp = $('#batchCitySearch'); if(inp) inp.focus(); openCityPanel(); }
+});
+$('#batchCityList').addEventListener('click', (e)=>{
+  const it = e.target.closest ? e.target.closest('.citypick-item') : null;
+  if(!it) return;
+  const v = CITY_VIEW[Number(it.dataset.i)];
+  if(!v) return;
+  setCity(v.kind === 'all' ? '' : v.c.name);
+  const inp = $('#batchCitySearch'); if(inp) inp.focus();
+});
+/* 点到选择器之外 → 收起（面板本身在 #batchCityWrap 内，正常点选不会被这里提前收掉） */
+document.addEventListener('click', (e)=>{
+  if(!CITY_OPEN) return;
+  if(e.target && e.target.closest && e.target.closest('#batchCityWrap')) return;
+  closeCityPanel();
+});
 
 /* 📍 定位：用出口 IP 反查当前城市，命中内置表则直接选中（只建议，不改档案） */
 $('#batchLocate').addEventListener('click', async ()=>{
@@ -1178,7 +1370,7 @@ $('#batchLocate').addEventListener('click', async ()=>{
   try{
     const r = await api('/api/geo/locate');
     if(r.matchedName){
-      $('#batchCity').value = r.matchedName;
+      setCity(r.matchedName);
       if(st) st.textContent = r.note || ('已定位到「'+r.matchedName+'」');
       if(st) st.style.color = '';
     }else{
@@ -1749,7 +1941,7 @@ $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') $('#modal')
 
 /* ---------- init ---------- */
 fillPlatformSelects();
-fillCitySelect();
+initCityPicker();
 checkSvc();
 loadDashboard();
 </script>
