@@ -175,9 +175,15 @@ Write-Host ("      scripts/ : " + $scriptFiles.Count + " files shipped, " + $scr
 
 # Expand server/ and shared/ into their files (minus tsc artifacts); every member is then
 # passed to tar as an argument. Using args (rather than a -T list file) is deliberate: a
-# list file written as ASCII would corrupt non-ASCII names. Every root launcher is ASCII
-# today (2026-09-26), but scripts/ and node_modules/ still hold many non-ASCII paths, so
-# this stays args-based.
+# list file adds a second encoding hop (the file itself) on top of the argv encoding, and
+# args cost nothing. Keep it that way.
+# CORRECTION (2026-09-26, measured): an earlier version of this comment claimed
+# "scripts/ and node_modules/ still hold many non-ASCII paths". That is false -- the whole
+# shipped set is 100% ASCII (0 non-ASCII paths out of 173080 files across node/,
+# node_modules/, public/, server/, shared/, scripts/, verified by a full walk; the archive
+# listing is likewise 0 bytes >127 across all 181290 entries). The argument therefore
+# stands on robustness, NOT on "there are CJK names today". See the ASCII-only guard below,
+# which now enforces that property instead of leaving it to luck.
 $members = New-Object System.Collections.Generic.List[string]
 foreach ($d in $dirs) { if (Test-Path (Join-Path $root $d)) { $members.Add($d) } }
 foreach ($d in $splitDirs) {
@@ -252,6 +258,29 @@ if ($notShipped) {
   exit 1
 }
 
+# -- ASCII-only guard, shipping set (2026-09-26) -------------------------------
+# A CJK filename inside a zip is stored as GBK bytes WITHOUT the UTF-8 flag, so an
+# English Windows extracts it as mojibake and the recipient cannot even tell which file
+# to double-click. That is exactly why the desktop-entry helper was renamed to ASCII.
+# Measured 2026-09-26: the packaged archive is 100% ASCII (all 181290 entries; 0 bytes
+# >127 in the whole `tar -tf` listing) and the shipped directories hold 0 non-ASCII
+# paths out of 173080 files. That property is load-bearing, not cosmetic: `tar -tf`
+# output is decoded with the console codepage (gb2312 on a zh-CN box, possibly UTF-8 on
+# a runner), so a non-ASCII entry can decode to U+FFFD or simply compare unequal and
+# silently defeat BOTH the $must pins and the $shippedDev basename compare -- the very
+# assertion that failed v1.0.1. Assert it instead of assuming it.
+# Runs BEFORE tar: a CJK launcher costs 3s here instead of 5min. This half covers the
+# root launchers, $files, and the file-enumerated server/ + shared/ + scripts/.
+# The wholesale dirs (node/, node_modules/, public/) are NOT in $members -- tar recurses
+# into them itself, so they are covered by the archive-level twin below.
+$nonAsciiMembers = @($members | Where-Object { $_ -match '[^\x00-\x7F]' })
+if ($nonAsciiMembers) {
+  Write-Host ("::error::ship set contains non-ASCII names: " + (($nonAsciiMembers | Select-Object -First 10) -join ', '))
+  Write-Host "[error] these would ship with a name that extracts as mojibake on an English Windows:"
+  $nonAsciiMembers | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+
 # All validations passed -- now (and only now) it is safe to replace the previous zip.
 if (Test-Path $zip) {
   try { Remove-Item $zip -Force -ErrorAction Stop }
@@ -300,11 +329,12 @@ if ($missing) {
   exit 1
 }
 # dev/self-use scripts must NOT ship (see $dropScripts for the rationale).
-# NOTE: `tar -tf` output is decoded with the console codepage, so CJK-named entries
-# may not compare equal in this process. This check therefore reliably covers the
-# ASCII names (as of 2026-09-26 that is every root launcher, so `$must` pins them all);
-# the CJK legacy packer is verified by listing the archive by hand
-# (it is dropped by the Get-ChildItem filter above, which uses real .NET strings).
+# NOTE: `tar -tf` output is decoded with the console codepage, so a CJK-named entry might
+# not compare equal in this process. That blind spot is now closed by construction rather
+# than by hand: the ASCII-only guard below asserts the archive holds ZERO non-ASCII entry
+# names, so every name in it -- the CJK legacy packer included -- is in the reliably
+# comparable class. (The packer is also dropped by the Get-ChildItem filter above, which
+# uses real .NET strings; that is the primary defence, this is the belt.)
 # Compare on BASENAME: the rule is "these names never ship, at any path level".
 # An exact-path compare only ever protected the root copy -- which is exactly how
 # v1.0.1 slipped a root `start.bat` into the archive on the runner (the root copy
@@ -357,6 +387,18 @@ if ($leftover) {
   $leftover | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
   exit 1
 }
+# -- ASCII-only guard, archive level (2026-09-26) ------------------------------
+# Twin of the pre-tar check: same rationale (see the note above that block), but this
+# one reads the REAL archive listing, so it also covers node/, node_modules/ and
+# public/, which tar recurses into on its own without $members ever seeing them.
+$nonAsciiEntries = @($listing | Where-Object { $_ -match '[^\x00-\x7F]' })
+if ($nonAsciiEntries) {
+  Write-Host ("::error::archive contains non-ASCII entry names: " + (($nonAsciiEntries | Select-Object -First 10) -join ', '))
+  Write-Host "[error] archive contains non-ASCII entry names (they extract as mojibake on an English Windows):"
+  $nonAsciiEntries | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+
 # Reverse assertion: node_modules must not be damaged -- compare against the on-disk truth,
 # not a guessed threshold. History: `--exclude=server/*.js` silently dropped 254 dependency
 # files under node_modules/**/server/*.js before this audit caught it.
