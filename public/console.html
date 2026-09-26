@@ -1132,8 +1132,25 @@ async function loadDashboard(){
     catch(e){ b.textContent='失败'; }
     setTimeout(()=>{ b.textContent='检查登录'; b.disabled=false; }, 1500);
   }));
-  $$('#pfGrid [data-open]').forEach(b=>b.addEventListener('click', ()=>{
-    api('/api/browser/exec', {method:'POST', body:JSON.stringify({platform:b.dataset.open, action:'focus'})}).catch(()=>{});
+  // ⚠️ 2026-09-26 修：此前发的是 action:'focus'，而 CDP 驱动**没有** focus 动作
+  //   （它只有 bringToFront）→ 每次点击都落到 default 分支返回 {ok:false}。
+  //   窗口之所以还能开，纯粹是 execCdpAction 开头的 ensureHealthy() 副作用把它拉了起来
+  //   （实测：action:'focus' 与瞎写的 '__nope__' 返回**一模一样**的错误）。
+  //   改用语义正确的 bringToFront：既能拉起（ensureHealthy 在前），又会真正置顶。
+  //   同时把 `.catch(()=>{})` 的静默吞错改成按钮上可见的反馈 —— 这条按钮是用户
+  //   「点击哪个平台开哪个平台」的唯一入口，点了没反应是最难排查的失败。
+  $$('#pfGrid [data-open]').forEach(b=>b.addEventListener('click', async ()=>{
+    const oldTxt = b.textContent, oldTip = b.title;
+    b.textContent='打开中…'; b.disabled=true;
+    try{
+      const r = await api('/api/browser/exec', {method:'POST', body:JSON.stringify({platform:b.dataset.open, action:'bringToFront'})});
+      if(r && r.ok===false) throw new Error(r.error || '打开失败');
+      b.textContent='已打开'; b.title='窗口已拉起并置顶';
+    }catch(e){
+      b.textContent='打开失败';
+      b.title = '打开失败：' + ((e&&e.message)||'未知原因') + '（悬停可看，或到「运行日志」查看详情）';
+    }
+    setTimeout(()=>{ b.textContent=oldTxt; b.title=oldTip; b.disabled=false; }, 1800);
   }));
 }
 
@@ -1471,10 +1488,23 @@ $('#batchRun').addEventListener('click', async ()=>{
         + '<span class="muted">在窗口里处理完（登录 / 过滑块 / 完善在线简历）再重跑本批即可。</span></div>';
       host.innerHTML = h;
       const b = $('#batchOpenDbg');
-      if(b) b.addEventListener('click', ()=>{
+      // ⚠️ 2026-09-26 修：同上面的「打开窗口」—— 原发 action:'focus'，而 CDP 驱动没有该动作
+      //   （只有 bringToFront），返回值恒为 {ok:false} 且被 .catch 吞掉。
+      //   这条按钮的存在意义就是「让人看到登录页/滑块」，「点了没反应」等于功能失效。
+      if(b) b.addEventListener('click', async ()=>{
         const pid = manual[0].platform || body.platform || $('#batchPlatform').value;
         if(!pid) return;
-        api('/api/browser/exec', {method:'POST', body:JSON.stringify({platform:pid, action:'focus'})}).catch(()=>{});
+        const old = b.textContent;
+        b.textContent='正在打开…'; b.disabled=true;
+        try{
+          const rr = await api('/api/browser/exec', {method:'POST', body:JSON.stringify({platform:pid, action:'bringToFront'})});
+          if(rr && rr.ok===false) throw new Error(rr.error || '打开失败');
+          b.textContent='已打开并置顶';
+        }catch(err){
+          b.textContent='打开失败';
+          b.title = '打开失败：' + ((err&&err.message)||'未知原因');
+        }
+        setTimeout(()=>{ b.textContent=old; b.disabled=false; }, 2500);
       });
     }
     loadQuota();

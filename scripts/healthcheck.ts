@@ -21,7 +21,7 @@ const PLATFORMS = ['boss', 'liepin', 'job51', 'zhilian'];
     console.log(`[后端] ${backendOk ? '在线' : '异常'} ${backendOk ? `(AI=${h.ai ? '已启用' : '未启用'})` : JSON.stringify(h).slice(0, 80)}`);
   } catch (e: any) {
     console.log(`[后端] 无法连接 ${API} —— ${e?.message || e}`);
-    console.log('\n请先启动后端：PORT=4400 tsx server/index.ts（或双击桌面「投递Agent」）');
+    console.log('\n请先启动后端：PORT=4400 tsx server/index.ts（或双击桌面「OfferWhere」）');
     return;
   }
   if (!backendOk) return;

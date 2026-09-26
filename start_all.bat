@@ -106,7 +106,18 @@ if %_try% GEQ 40 goto :ready
 timeout /t 1 >nul
 goto :wait_ready
 :ready
-start "" http://127.0.0.1:4400/
+REM 2026-09-26 改：控制台不再塞进用户日常浏览器的某个标签，而是用 Chrome 的 --app=
+REM   打开**独立窗口**（无地址栏/标签栏，任务栏显示本应用图标，更像个桌面程序）。
+REM   想恢复旧行为（默认浏览器新标签），删掉下面整个 if 块换成一行：
+REM     start "" http://127.0.0.1:4400/
+REM else 分支实际上不可达 —— 脚本开头已强校验 CHROME（未定义/文件不存在都 exit /b 1）。
+REM   留着属于纵深防御：万一将来有人挪掉那道前置校验，这里还能退化成「至少能打开」。
+if defined CHROME (
+  start "" "%CHROME%" --app=http://127.0.0.1:4400/ --no-first-run --no-default-browser-check
+) else (
+  echo [warn] CHROME 未定义，回退为默认浏览器打开控制台。
+  start "" http://127.0.0.1:4400/
+)
 echo.
 echo 已为每个平台打开独立 Chrome 窗口（并排排列）。
 echo 在控制台选择平台与数量后点「开始投递」即可，各平台互不干扰。

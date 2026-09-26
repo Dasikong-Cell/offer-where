@@ -15,8 +15,8 @@
 
 【快速开始】
 1. 解压到任意位置。
-2. （可选）双击「创建桌面快捷方式.bat」→ 桌面只会出现一个「投递Agent」图标。
-3. 双击「投递Agent」（或直接双击 start_all.bat）：
+2. （可选）双击「create_desktop_shortcut.bat」→ 桌面只会出现一个「OfferWhere」图标。
+3. 双击「OfferWhere」（或直接双击 start_all.bat）：
    - 自动打开独立的 Chrome 调试窗口
    - 自动启动后端服务并打开控制台页面 http://127.0.0.1:4400
 4. 在弹出的 Chrome 调试窗口里登录你要投的平台账号。
@@ -25,11 +25,11 @@
    进度和每条结果会实时显示在页面下方的日志区。
 
 【目录与文件说明】
-  投递Agent（桌面唯一入口）  启动服务并打开控制台
+  OfferWhere（桌面唯一入口）  启动服务并打开控制台
   start_all.bat              一键启动 CDP Chrome + 后端服务 + 打开控制台
   start_server.bat           仅启动后端服务（被 start_all 调用，已做幂等：服务在跑就跳过）
   setenv.bat                 公共环境初始化（自动找 Node / Chrome / profile）
-  创建桌面快捷方式.bat        在桌面创建唯一入口「投递Agent」
+  create_desktop_shortcut.bat 在桌面创建唯一入口「OfferWhere」（原名「创建桌面快捷方式.bat」，改 ASCII 治英文 Windows 乱码）
   打包.bat                   生成可分发压缩包（已排除个人登录态）
   public/console.html        控制台页面（单页，由后端 4400 端口托管）
   node\node.exe              自带 Node 运行时（接收者无需安装 Node）
@@ -51,7 +51,7 @@ Q: 猎聘提示短信验证？
 A: 在调试 Chrome 窗口里完成短信验证，然后重新点「开始投递」。
 
 Q: 换电脑/移动文件夹后还能用吗？
-A: 能。所有路径都相对本文件夹；移动后双击一次「创建桌面快捷方式.bat」重建入口即可。
+A: 能。所有路径都相对本文件夹；移动后双击一次「create_desktop_shortcut.bat」重建入口即可。
 
 Q: 为什么压缩包较大（约 330MB）？
 A: 内含完整 node_modules 运行依赖与自带 Node，为的是“无需安装任何环境”。

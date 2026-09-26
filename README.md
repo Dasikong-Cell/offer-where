@@ -157,9 +157,10 @@ offer-where/
 > **便携包**：`job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装 Node 环境
 > （约 455MB / 18 万文件，**解压约 5 分钟**，视磁盘而定）。
 
-1. 双击 `start_all.bat`：自动启动 CDP Chrome + 后端(4400) + 打开控制台页。
-   - 想让桌面有个入口，先双击一次 `创建桌面快捷方式.bat`，之后即可双击桌面「投递Agent」。
-   - `start_all.bat` 默认启动 **BOSS / 猎聘 / 51job / 智联 / 官网** 5 个平台窗口；其余平台（国聘、鱼泡、中华英才、应届生等）用 `start_platforms.bat` 按需启动。
+1. 双击 `start_all.bat`：自动启动 CDP Chrome + 后端(4400) + 用 Chrome `--app=` 打开**独立控制台窗口**（无地址栏/标签栏，任务栏显示本应用图标）。
+   - 想让桌面有个入口，先双击一次 `create_desktop_shortcut.bat`，之后即可双击桌面「OfferWhere」。
+   - `start_all.bat` 默认**只**启动 **BOSS / 猎聘 / 51job / 智联 / 官网** 5 个平台窗口 —— 刻意不默认开满 15 个（多开 Chrome 很吃内存）。
+   - **其余平台按需开**：在控制台首页对应的平台卡片上点「打开窗口」，即可拉起该平台窗口并置顶（先登录再投递）。也可以跑 `start_platforms.bat`（无参再开 9 个，加 `all` 开满 15 个）。
 2. **看控制台首页的「开箱自检」面板**：它会把「还差什么」列清楚（Chrome / 调试窗口 / 简历 / AI）。
 3. 在控制台勾选平台、设置数量/间隔，**先点「仅预览」**确认链路，再点「开始投递」。
 4. 首次使用需在打开的 Chrome 里登录各招聘平台账号（登录态持久化在 `C:/chrome-cdp-profile`）。
@@ -187,7 +188,7 @@ LLM_MODEL=gpt-4o-mini                       # 或 qwen2.5:7b / deepseek-chat ...
 
 兼容：OpenAI / DeepSeek / SiliconFlow / 通义 / 智谱 / Groq / 本地 Ollama 等。
 
-> **加载机制**：后端 `server/env.ts` 在启动时（早于其它模块）解析根目录 `.env` 注入 `process.env`，无需安装 dotenv、也无需在启动命令里手动 `export`。改完 `.env` 重启后端即生效（双击桌面「投递Agent」或 `start_server.bat`）。
+> **加载机制**：后端 `server/env.ts` 在启动时（早于其它模块）解析根目录 `.env` 注入 `process.env`，无需安装 dotenv、也无需在启动命令里手动 `export`。改完 `.env` 重启后端即生效（双击桌面「OfferWhere」或 `start_server.bat`）。
 
 ### AI 用在哪
 
@@ -443,7 +444,7 @@ npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「
 `npm run hooks:install` 会设置 `core.hooksPath=.githooks`（配置随 `.githooks/` 一起入库）。
 紧急时可 `git push --no-verify` 跳过。
 
-> 生产一键启动：双击桌面「投递Agent」（= `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 自动打开 `http://127.0.0.1:4400/`（console.html 控制台）。
+> 生产一键启动：双击桌面「OfferWhere」（= `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 用 Chrome `--app=` 打开独立控制台窗口（console.html）。
 
 ## 部署与安全（分发 / 多人共用）
 

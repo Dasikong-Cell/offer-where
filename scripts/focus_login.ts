@@ -83,7 +83,7 @@ async function activate(id: string) {
   const nav = await ex('navigate', { url, waitUntil: 'domcontentloaded', timeout: 30000 });
   console.log(`  导航结果: ok=${nav.ok}${nav.error ? ' error=' + nav.error : ''}`);
   if (!nav.ok) {
-    console.log(`\n⚠ 无法导航。请确认：\n  1) 后端 4400 已启动\n  2) 端口 ${CDP} 对应的 Chrome 调试窗口已启动（双击桌面「投递Agent」）`);
+    console.log(`\n⚠ 无法导航。请确认：\n  1) 后端 4400 已启动\n  2) 端口 ${CDP} 对应的 Chrome 调试窗口已启动（双击桌面「OfferWhere」，或直接在控制台该平台卡片上点「打开窗口」）`);
     process.exit(1);
   }
   await sleep(3500);

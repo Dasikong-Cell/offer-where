@@ -908,7 +908,7 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const icoPath = path.join(ROOT, 'public', 'app.ico');
   const icoOk = fs.existsSync(icoPath)
     && con.includes('rel="icon" href="/app.ico"')
-    && fs.readFileSync(path.join(ROOT, '创建桌面快捷方式.bat'), 'utf8').includes('IconLocation');
+    && fs.readFileSync(path.join(ROOT, 'create_desktop_shortcut.bat'), 'utf8').includes('IconLocation');
   check('应用图标已生成且被快捷方式/控制台引用', icoOk,
     '缺 favicon 浏览器标签显默认地球；快捷方式不设 IconLocation 显通用 bat 图标');
 
@@ -968,6 +968,43 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     const rel = path.relative(ROOT, p).replace(/\\/g, '/');
     check(`${rel} 保持纯 ASCII`, bad === 0,
       `发现 ${bad} 个非 ASCII 字节；PS 5.1 会按 GBK 解码无 BOM 脚本，交付方可能解析失败`);
+  }
+}
+
+// ── C10 段：控制台发出的浏览器动作名必须在驱动里真实存在（2026-09-26）─────────
+// 背景：控制台有两处按钮发送 action:'focus'（平台卡片「打开窗口」、批量结果里的
+// 「打开该平台调试窗口」），而 **CDP 驱动根本没有 focus 动作**（它叫 bringToFront）。
+// 于是每次点击都落到 default 分支返回 {ok:false}，而前端 `.catch(()=>{})` 把错误吞掉。
+// 窗口之所以还能开，纯粹是 execCdpAction 开头 `ensureHealthy()` 的副作用把它拉了起来
+// ——「靠副作用蒙对」。实测证据：action:'focus' 与瞎写的 '__nope__' 返回**一字不差**的
+// 错误（{"ok":false,"error":"CDP 驱动不支持的动作：focus"}）。
+// 用户已决定「不默认开满 15 窗口，点击哪个平台开哪个平台」⇒ 这条按钮成了开平台的主入口，
+// 不能再靠运气。此处机械校验「控制台写的每个动作名，驱动里都有对应 case」。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const consoleHtml = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
+  const cdpSrc = fs.readFileSync(path.join(ROOT, 'server', 'services', 'cdpDriver.ts'), 'utf8');
+  const pwSrc = fs.readFileSync(path.join(ROOT, 'server', 'services', 'browser.ts'), 'utf8');
+
+  // 只匹配「浏览器动作」的调用点形态：{platform: …, action: 'xxx'}
+  // 先剔掉**整行注释**（缩进后的 //）：否则将来有人在注释里写
+  // `// 原为 {platform:p, action:'focus'}` 会造成假失败。只剔整行，
+  // 不剔行内 `//`——那会把 `http://` 之后的整行切掉。
+  const liveSource = consoleHtml
+    .split('\n')
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join('\n');
+  const emitted = new Set<string>();
+  for (const m of liveSource.matchAll(/platform\s*:\s*[^,}]+,?\s*action\s*:\s*'([A-Za-z][A-Za-z0-9_-]*)'/g)) {
+    emitted.add(m[1]);
+  }
+  check('解析到控制台发出的浏览器动作（护栏自身有效性）', emitted.size > 0,
+    `解析到 ${emitted.size} 个；=0 说明写法变了、护栏会静默失效（匹配 {platform:…, action:'x'}）`);
+
+  for (const a of [...emitted].sort()) {
+    const inCdp = new RegExp(`case '${a}'\\s*:`).test(cdpSrc);
+    check(`控制台动作 '${a}' 在 CDP 驱动里有实现`, inCdp,
+      inCdp ? '' : 'CDP 驱动无此 case → 点击必落到 default 返回 {ok:false}（窗口可能仍因 ensureHealthy 副作用打开，但响应是错的）');
   }
 }
 

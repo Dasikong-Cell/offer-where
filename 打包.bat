@@ -30,7 +30,7 @@ if "%RC%"=="0" (
   echo   2. 双击 start_all.bat 启动（首次让你在各平台登录）
   echo   3. 看控制台首页「开箱自检」面板确认还差什么
   echo   4. 先「仅预览」再真实投递
-  echo   （可选）双击 创建桌面快捷方式.bat 生成桌面入口
+  echo   （可选）双击 create_desktop_shortcut.bat 生成桌面入口
 ) else (
   echo [失败] 打包未通过校验（退出码 %RC%），请查看上方 pack.ps1 的报错。
 )

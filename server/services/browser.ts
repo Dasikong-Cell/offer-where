@@ -431,6 +431,16 @@ export async function execAction(
         return okResult(page);
       }
 
+      /** 把窗口置顶（用户人工介入时用：登录扫码 / 短信验证）。
+       *  ⚠️ 2026-09-26 补：default 分支的 hint 里早就列了 bringToFront，
+       *  但这里一直没有实现 —— 控制台「打开窗口」按钮发的正是这个动作，
+       *  在非 CDP 平台（走 Playwright 分支）上会直接落到 default 报「不支持的动作」。
+       *  CDP 平台另有一份实现（cdpDriver.ts 的 Page.bringToFront），两边保持一致。 */
+      case 'bringToFront': {
+        await page.bringToFront();
+        return okResult(page);
+      }
+
       case 'close': {
         await context.close();
         sessions.delete(session.platform);

@@ -81,12 +81,15 @@ $files = @("package.json", "package-lock.json", "tsconfig.json", ".env.example",
 # dropped the *.bat helpers, so the *.sh one-shots and the repacker itself still
 # shipped -- the comment claimed otherwise, which is exactly how such lists rot.
 # KEEP (deliberately): setenv.bat / start_all.bat / start_server.bat /
-# start_platforms.bat (the real launchers), the CJK desktop-shortcut helper, and
-# ensure_chrome.sh (README's script table and the console's "window offline" hint
-# still point at it as a manual recovery path).
-# NOTE: names below are ASCII by requirement (see the encoding note at the top).
-# The legacy repacker is named with two CJK characters, so it is built from
-# codepoints at runtime instead of being written literally.
+# start_platforms.bat / create_desktop_shortcut.bat (the real launchers plus the
+# desktop-entry helper), and ensure_chrome.sh (README's script table and the
+# console's "window offline" hint still point at it as a manual recovery path).
+# NOTE: all root launchers are ASCII as of 2026-09-26. The desktop-entry helper was
+# renamed FROM a CJK name precisely because a CJK entry inside the zip is stored as
+# GBK bytes WITHOUT the UTF-8 flag, so an English Windows extracts it as mojibake and
+# the recipient cannot even tell which file to double-click.
+# The one remaining CJK-named root script is the legacy repacker (dropped from the
+# package below), so it is built from codepoints at runtime instead of literally.
 $repackBat = ([char]0x6253) + ([char]0x5305) + '.bat'   # legacy robocopy-based packer
 $dropScripts = @(
   # CDP / one-shot apply launchers
@@ -171,9 +174,10 @@ Write-Host ("      scripts/ : " + $scriptFiles.Count + " files shipped, " + $scr
 # already gone.
 
 # Expand server/ and shared/ into their files (minus tsc artifacts); every member is then
-# passed to tar as an argument. Using args (rather than a -T list file) keeps the
-# Chinese-named root launchers intact -- an ASCII-encoded
-# list file would corrupt them.
+# passed to tar as an argument. Using args (rather than a -T list file) is deliberate: a
+# list file written as ASCII would corrupt non-ASCII names. Every root launcher is ASCII
+# today (2026-09-26), but scripts/ and node_modules/ still hold many non-ASCII paths, so
+# this stays args-based.
 $members = New-Object System.Collections.Generic.List[string]
 foreach ($d in $dirs) { if (Test-Path (Join-Path $root $d)) { $members.Add($d) } }
 foreach ($d in $splitDirs) {
@@ -275,6 +279,11 @@ $must = @(
   "start_all.bat",
   "start_server.bat",
   "start_platforms.bat",
+  # Pinned as of 2026-09-26. The desktop-entry helper is ASCII now, and that is what
+  # makes this assertion possible at all: tar -tf output is decoded with the console
+  # codepage, so a CJK-named entry could not be compared reliably (see the note above
+  # the $shippedDev check). Renaming it closed that blind spot.
+  "create_desktop_shortcut.bat",
   # scripts/ is now file-enumerated (see $scriptDrop), so pin the ones that must always
   # be there: the single script the server spawns at runtime, the shared CDP helper, and
   # a representative collector. Without these the app starts but one core feature is dead.
@@ -293,7 +302,8 @@ if ($missing) {
 # dev/self-use scripts must NOT ship (see $dropScripts for the rationale).
 # NOTE: `tar -tf` output is decoded with the console codepage, so CJK-named entries
 # may not compare equal in this process. This check therefore reliably covers the
-# ASCII names; the CJK legacy packer is verified by listing the archive by hand
+# ASCII names (as of 2026-09-26 that is every root launcher, so `$must` pins them all);
+# the CJK legacy packer is verified by listing the archive by hand
 # (it is dropped by the Get-ChildItem filter above, which uses real .NET strings).
 # Compare on BASENAME: the rule is "these names never ship, at any path level".
 # An exact-path compare only ever protected the root copy -- which is exactly how
