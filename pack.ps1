@@ -245,7 +245,7 @@ $items += 'scripts'
 
 Write-Host "[1/2] packaging $($items.Count) top-level items ..."
 Write-Host ("      dirs: " + (($items | Where-Object { $dirs -contains $_ }) -join ', '))
-Write-Host ("      split(minus *.js): " + (($items | Where-Object { $splitDirs -contains $_ }) -join ', '))
+Write-Host ("      split(minus *.js, *.d.ts): " + (($items | Where-Object { $splitDirs -contains $_ }) -join ', '))
 Write-Host ("      files: " + (($items | Where-Object { $files -contains $_ }) -join ', '))
 Write-Host ("      root launchers: " + ($scripts -join ', '))
 Write-Host ("      scripts/ : " + $scriptFiles.Count + " files shipped, " + $scriptDrop.Count + " dev-only dropped (" + ($scriptDrop -join ', ') + ")")
@@ -259,6 +259,14 @@ Write-Host ("      scripts/ : " + $scriptFiles.Count + " files shipped, " + $scr
 # passed to tar as an argument. Using args (rather than a -T list file) is deliberate: a
 # list file adds a second encoding hop (the file itself) on top of the argv encoding, and
 # args cost nothing. Keep it that way.
+# "tsc artifacts" means BOTH .js and .d.ts. The filter only excluded .js until 2026-09-27,
+# while this very comment claimed otherwise -- and the .d.ts files turned out to be the last
+# remaining source of "the local package is not the CI package". Measured: two CI builds of
+# the same source (differing only in pack.ps1, which is not shipped) produced DIFFERENT .d.ts
+# sets -- one shipped server/services/resume.d.ts, the next shipped
+# server/services/skillsDict.d.ts instead. So .d.ts made the artifact non-reproducible, on top
+# of being useless at runtime (the package executes .ts through tsx; nothing reads .d.ts).
+# .gitignore already treats server|shared/**/*.d.ts as generated output, not source.
 # CORRECTION (2026-09-26, measured): an earlier version of this comment claimed
 # "scripts/ and node_modules/ still hold many non-ASCII paths". That is false -- the whole
 # shipped set is 100% ASCII (0 non-ASCII paths out of 173080 files across node/,
@@ -272,7 +280,7 @@ foreach ($d in $splitDirs) {
   $base = Join-Path $root $d
   if (Test-Path $base) {
     Get-ChildItem $base -Recurse -File -Force |
-      Where-Object { $_.Extension -ne '.js' } |
+      Where-Object { $_.Extension -ne '.js' -and $_.Name -notlike '*.d.ts' } |
       ForEach-Object { $members.Add(($_.FullName.Substring($root.Length + 1) -replace '\\', '/')) }
   }
 }
@@ -507,7 +515,10 @@ if ($danglingInZip) {
 }
 Write-Host ("      scripts/ verified: " + $scriptFiles.Count + " shipped, " + $scriptDrop.Count + " dev-only excluded, " + $refs.Count + " referenced paths all present")
 # secrets / personal data must NOT be in there
-$forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like "src/*" -or $_ -like ".git/*" }
+# Also: no tsc build output may survive for server/ or shared/ (belt to the argv-filter braces).
+# A .d.ts is generated, gitignored, environment-dependent and useless to the end user; shipping
+# it is what made two consecutive CI builds of the same source differ by one entry.
+$forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like "src/*" -or $_ -like ".git/*" -or $_ -like "server/*.d.ts" -or $_ -like "shared/*.d.ts" }
 if ($forbidden) {
   Write-Host ("::error::archive contains files that must never be shipped: " + (($forbidden | Select-Object -First 10) -join ', '))
   Write-Host "[error] archive contains files that must never be shipped:"
