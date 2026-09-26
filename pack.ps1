@@ -165,10 +165,10 @@ Write-Host ("      files: " + (($items | Where-Object { $files -contains $_ }) -
 Write-Host ("      root launchers: " + ($scripts -join ', '))
 Write-Host ("      scripts/ : " + $scriptFiles.Count + " files shipped, " + $scriptDrop.Count + " dev-only dropped (" + ($scriptDrop -join ', ') + ")")
 
-if (Test-Path $zip) {
-  try { Remove-Item $zip -Force -ErrorAction Stop }
-  catch { Write-Host "[warn] could not delete old zip; tar will overwrite it" }
-}
+# NOTE: the old zip is deleted just before tar runs (below), NOT here. Deleting early
+# meant that a failed validation left the user with no artifact at all -- noticed on
+# 2026-09-26 when the reference guard aborted after this point and the desktop zip was
+# already gone.
 
 # Expand server/ and shared/ into their files (minus tsc artifacts); every member is then
 # passed to tar as an argument. Using args (rather than a -T list file) keeps the
@@ -246,6 +246,12 @@ if ($notShipped) {
   Write-Host "[error] these are referenced by shipped files but would not be packaged:"
   $notShipped | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
   exit 1
+}
+
+# All validations passed -- now (and only now) it is safe to replace the previous zip.
+if (Test-Path $zip) {
+  try { Remove-Item $zip -Force -ErrorAction Stop }
+  catch { Write-Host "[warn] could not delete old zip; tar will overwrite it" }
 }
 
 & $tar -a -c -f $zip -C $root @members

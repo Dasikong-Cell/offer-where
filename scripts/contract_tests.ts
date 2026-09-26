@@ -938,15 +938,30 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
 // ── 打包脚本必须纯 ASCII（2026-09-26）──────────────────────────────────────
 // Windows PowerShell 5.1 读「无 BOM 的 .ps1」按 ANSI/GBK 解码：中文字节会被解成
 // 乱码，某些组合还会吞掉引号/换行，导致脚本在别人机器上直接解析失败，而本机
-// （BOM 或代码页不同）却完全正常。这个约束此前只写在注释里，结果 pack.ps1 里积了
-// 316 个非 ASCII 字节（全是注释里的横线装饰），甚至我自己又新加了一个 emoji。
-// 写进合约测试，让「注释说了一件事、文件却是另一件事」不再可能。
+// （代码页不同）却完全正常。这个约束此前只写在注释里，结果 pack.ps1 里积了 316 个
+// 非 ASCII 字节（注释里的横线装饰），甚至我自己又新加了一个 emoji。
+//
+// 注意这里**枚举**而不是硬编码文件名：pack_smoke.ps1 不随包分发，在包里硬编码它会让
+// 这条用例因文件不存在而崩；枚举写法在「仓库」与「解压后的包」两种环境下都成立，
+// 也让将来新增的 *.ps1 自动纳入检查。
 {
   const ROOT = fileURLToPath(new URL('..', import.meta.url));
-  for (const rel of ['pack.ps1', 'scripts/pack_smoke.ps1']) {
-    const p = path.join(ROOT, rel);
-    const buf = fs.readFileSync(p);
-    const bad = [...buf].filter(b => b > 127).length;
+  const psDirs = [ROOT, path.join(ROOT, 'scripts')];
+  const targets: string[] = [];
+  for (const d of psDirs) {
+    if (!fs.existsSync(d)) continue;
+    for (const f of fs.readdirSync(d)) {
+      if (f.endsWith('.ps1')) targets.push(path.join(d, f));
+    }
+  }
+  // 前置自检只在源码树里有意义：分发包里 pack.ps1 / pack_smoke.ps1 都不存在（不发包），
+  // 枚举结果为空是正常的，不能因此判失败。
+  if (fs.existsSync(path.join(ROOT, 'pack.ps1'))) {
+    check('发现待检查的 .ps1 打包脚本', targets.length > 0, '没有 .ps1 说明枚举写错了（本仓库至少有 pack.ps1）');
+  }
+  for (const p of targets) {
+    const bad = [...fs.readFileSync(p)].filter(b => b > 127).length;
+    const rel = path.relative(ROOT, p).replace(/\\/g, '/');
     check(`${rel} 保持纯 ASCII`, bad === 0,
       `发现 ${bad} 个非 ASCII 字节；PS 5.1 会按 GBK 解码无 BOM 脚本，交付方可能解析失败`);
   }
