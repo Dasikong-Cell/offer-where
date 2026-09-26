@@ -2,11 +2,11 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 if (-not $root) { Write-Host "[error] cannot resolve script directory"; exit 1 }
 
-# ── CI diagnosability ─────────────────────────────────────────────────────────
+# -- CI diagnosability ---------------------------------------------------------
 # GitHub Actions logs are NOT readable without a token, but check-run ANNOTATIONS
 # are. Emitting the `::error::` workflow command turns every failure branch into
 # an annotation, so a red release run can be diagnosed via the public API alone
-# (2026-09-26: v1.0.0's "打包" step failed on the runner while the identical
+# (2026-09-26: v1.0.0's "pack" step failed on the runner while the identical
 # pack.ps1 was green in ci.yml's Windows job, and the log was unreachable).
 # Messages must stay ASCII (this file is ASCII-only; see the encoding note below).
 trap { Write-Host ("::error::pack.ps1 unexpected failure: " + $_.Exception.Message.Replace("`r"," ").Replace("`n"," ")); break }
@@ -32,14 +32,14 @@ if (-not (Test-Path $tar)) { Write-Host "::error::tar.exe not found (needs Windo
 
 $sw = [Diagnostics.Stopwatch]::StartNew()
 
-# ── ALLOW-LIST packaging ──────────────────────────────────────────────────────
+# -- ALLOW-LIST packaging ------------------------------------------------------
 # Deliver only what an end user needs. Anything not listed here is simply never
 # archived -- that automatically keeps out: .env (API keys!), data/ (personal
 # resume + DB + browser profiles), src/, dist/, .git/, internal reports.
 # Do NOT go back to "--exclude=<name>": bsdtar matches exclude patterns against
 # directory NAMES too, so "--exclude=./dist" also killed node_modules/tsx/dist/
 # and produced a package that could not start.
-$dirs  = @("node", "node_modules", "public", "scripts")
+$dirs  = @("node", "node_modules", "public")
 # server/ and shared/ are archived file-by-file so their tsc build artifacts (*.js emitted
 # next to *.ts) can be dropped -- the app runs .ts via tsx, so those .js are redundant and
 # a stale copy could shadow its same-named .ts.
@@ -48,7 +48,7 @@ $dirs  = @("node", "node_modules", "public", "scripts")
 # (254 dependency files silently lost -- caught by the audit assertion below).
 # Enumerating files explicitly is the only reliable way to scope it to the top level.
 $splitDirs = @("server", "shared")
-# ── build stamp ───────────────────────────────────────────────────────────────
+# -- build stamp ---------------------------------------------------------------
 # Every distributed zip must be traceable. History: a hand-made zip on the desktop
 # turned out to be a snapshot of a HALF-FINISHED working tree (some fixes in, some
 # out) matched by no commit at all -- impossible to tell what a recipient had.
@@ -103,17 +103,67 @@ $scripts = Get-ChildItem $root -File -Force |
   Where-Object { @('.bat', '.sh', '.ps1') -contains $_.Extension -and $dropScripts -notcontains $_.Name } |
   Select-Object -ExpandProperty Name
 
+# -- scripts/ pruning (2026-09-26) ---------------------------------------------
+# scripts/ used to ship wholesale. By now ~93 files live there and a third of them
+# are one-off debug instrumentation (DOM probes, diag dumps, temp scripts) that only
+# ever ran on the author's machine. A recipient looking for "how do I collect jobs"
+# cannot tell `diag_chat_sendflow.ts` from `collect_boss.ts`.
+#
+# The line is drawn by KIND, not by "looks unused":
+#   DROP  one-off debug/temp tools (diag*, probe*, peek_*, `_`-prefixed temp scripts)
+#         + dev-only tooling (pack_smoke.ps1 repacks and needs pack.ps1, which never
+#           ships; icon_candidates.py is the icon design scratchpad and needs Pillow)
+#   KEEP  everything else, *including* collectors/checkers that no document mentions
+#         (collect_zhilian.ts, apply_one51.ts, cleanup_data.ts, countjobs.ts, ...).
+#         Those are part of the CLI capability surface -- a user can run them with the
+#         bundled node, and "not mentioned in README" is not evidence of junk.
+# Nothing here is taken on trust: the reference guard below refuses to ship a package
+# in which any drop target is still referenced by a shipped file.
+$scriptDrop = @(
+  # --- one-off debug instrumentation (by kind) ---
+  '_probe_cdp_diag.ts', '_probe_resume_sent.ts', '_tmp_plan_probe.ts',
+  'diag51.ts', 'diag51b.ts', 'diag51c.ts',
+  'diag_boss_list.ts', 'diag_boss_msgs.ts',
+  'diag_chat.ts', 'diag_chat_click.ts', 'diag_chat_dom.ts', 'diag_chat_input.ts',
+  'diag_chat_list.ts', 'diag_chat_resume_pick.ts', 'diag_chat_sendflow.ts',
+  'diag_chat_upload_resume.ts',
+  'diag_job51_jd.ts', 'diag_job51_jd_modal.ts', 'diag_job51_modal.ts', 'diag_login.ts',
+  'peek_page.ts', 'probe2.ts', 'probe_boss_apply.ts', 'probe_findim.ts',
+  'probe_imdeep.ts', 'probe_multi.ts',
+  # --- dev-only tooling ---
+  'pack_smoke.ps1',        # repack+smoke driver; pack.ps1 itself is never shipped
+  'calibrate_pending.sh',  # bash calibration one-shot (needs Git Bash; author-only)
+  'icon_candidates.py'     # icon candidate renderer (needs Pillow; design-time only)
+)
+$allScriptNames = @(Get-ChildItem (Join-Path $root 'scripts') -Recurse -File -Force | ForEach-Object { $_.Name })
+$scriptFiles = @(Get-ChildItem (Join-Path $root 'scripts') -Recurse -File -Force |
+  Where-Object { $scriptDrop -notcontains $_.Name })
+# fail-closed the other way: a drop entry that no longer exists means the list has rotted.
+# NOTE: compare against $allScriptNames (the unfiltered listing) -- comparing against
+# $scriptFiles would always report every entry as stale, since that list is the result
+# of removing them (2026-09-26: wrote it the wrong way round first; the guard failed
+# loudly rather than silently passing, which is the point of fail-closed).
+$staleDrops = @($scriptDrop | Where-Object { $allScriptNames -notcontains $_ })
+if ($staleDrops) {
+  Write-Host ("::error::scriptDrop entries no longer exist in scripts/: " + ($staleDrops -join ', '))
+  Write-Host "[error] scriptDrop is stale (file renamed or removed?):"
+  $staleDrops | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+
 $items = @()
 $items += $dirs      | Where-Object { Test-Path (Join-Path $root $_) }
 $items += $splitDirs | Where-Object { Test-Path (Join-Path $root $_) }
 $items += $files     | Where-Object { Test-Path (Join-Path $root $_) }
 $items += $scripts
+$items += 'scripts'
 
 Write-Host "[1/2] packaging $($items.Count) top-level items ..."
 Write-Host ("      dirs: " + (($items | Where-Object { $dirs -contains $_ }) -join ', '))
 Write-Host ("      split(minus *.js): " + (($items | Where-Object { $splitDirs -contains $_ }) -join ', '))
 Write-Host ("      files: " + (($items | Where-Object { $files -contains $_ }) -join ', '))
-Write-Host ("      scripts: " + ($scripts -join ', '))
+Write-Host ("      root launchers: " + ($scripts -join ', '))
+Write-Host ("      scripts/ : " + $scriptFiles.Count + " files shipped, " + $scriptDrop.Count + " dev-only dropped (" + ($scriptDrop -join ', ') + ")")
 
 if (Test-Path $zip) {
   try { Remove-Item $zip -Force -ErrorAction Stop }
@@ -136,11 +186,72 @@ foreach ($d in $splitDirs) {
 }
 foreach ($f in $files)   { if (Test-Path (Join-Path $root $f)) { $members.Add($f) } }
 foreach ($s in $scripts) { $members.Add($s) }
+# scripts/ is enumerated file-by-file so the dev-only drop list is actually enforced.
+# [!] Do NOT also pass the bare directory name: `tar -c scripts` recurses and archives
+# everything inside it, silently undoing the enumeration (2026-09-26: the archive-level
+# assertion below caught exactly that). Passing the file paths alone is enough -- tar
+# creates the parent entry implicitly.
+foreach ($sf in $scriptFiles) {
+  $members.Add(($sf.FullName.Substring($root.Length + 1) -replace '\\', '/'))
+}
+
+# -- REFERENCE GUARD (runs BEFORE tar, so a bad drop costs 3s instead of 5min) --
+# The safety net for pruning: if a file that WILL be shipped (server code, the console,
+# the manual, a launcher, or another shipped script) mentions `scripts/<name>`, then that
+# script must be in the archive. This is what makes "drop by kind" safe -- a drop that
+# removes something still in use fails the build instead of shipping a dead reference.
+# History: this guard immediately found two dangling references that had been sitting in
+# shipped code (`scripts/ensure_chrome.sh` -- the file is at the repo root, so the console's
+# offline hint was telling users to run a path that does not exist).
+$refFiles = New-Object System.Collections.Generic.List[string]
+foreach ($d in @('server', 'shared')) {
+  $p = Join-Path $root $d
+  if (Test-Path $p) {
+    Get-ChildItem $p -Recurse -File -Force |
+      Where-Object { $_.Extension -in @('.ts', '.html') -and $_.Name -notlike '*.d.ts' } |
+      ForEach-Object { $refFiles.Add($_.FullName) }
+  }
+}
+$pub = Join-Path $root 'public'
+if (Test-Path $pub) {
+  Get-ChildItem $pub -Recurse -File -Force -Filter *.html | ForEach-Object { $refFiles.Add($_.FullName) }
+}
+foreach ($f in @('README.md', 'DEVELOPMENT.md', 'LOGIN_GUIDE.md')) {
+  $p = Join-Path $root $f
+  if (Test-Path $p) { $refFiles.Add($p) }
+}
+foreach ($s in $scripts) { $refFiles.Add((Join-Path $root $s)) }
+foreach ($sf in $scriptFiles) { $refFiles.Add($sf.FullName) }
+
+$refs = New-Object System.Collections.Generic.List[string]
+foreach ($f in $refFiles) {
+  $txt = Get-Content -LiteralPath $f -Raw
+  foreach ($m in [regex]::Matches($txt, 'scripts/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+')) {
+    if (-not $refs.Contains($m.Value)) { $refs.Add($m.Value) }
+  }
+}
+# only enforce for paths that exist in the repo: a typo pointing at nothing is a doc bug,
+# not something the drop list caused -- but it must not be silently ignored either, so it
+# is reported as an error too (that is how the ensure_chrome.sh hint was caught).
+$missingOnDisk = @($refs | Where-Object { -not (Test-Path (Join-Path $root $_)) })
+if ($missingOnDisk) {
+  Write-Host ("::error::shipped files reference scripts that do not exist: " + (($missingOnDisk | Select-Object -First 10) -join ', '))
+  Write-Host "[error] dangling references (fix the path in the referencing file):"
+  $missingOnDisk | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+$notShipped = @($refs | Where-Object { $members -notcontains $_ })
+if ($notShipped) {
+  Write-Host ("::error::referenced scripts are excluded by the drop list: " + (($notShipped | Select-Object -First 10) -join ', '))
+  Write-Host "[error] these are referenced by shipped files but would not be packaged:"
+  $notShipped | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
 
 & $tar -a -c -f $zip -C $root @members
 if ($LASTEXITCODE -ne 0) { Write-Host "::error::tar failed with exit code $LASTEXITCODE (zip=$zip)"; Write-Host "[error] tar failed with code $LASTEXITCODE"; exit 1 }
 
-# ── VERIFY the archive before declaring success ───────────────────────────────
+# -- VERIFY the archive before declaring success -------------------------------
 Write-Host "[2/2] verifying archive ..."
 $listing = & $tar -tf $zip
 $must = @(
@@ -157,7 +268,14 @@ $must = @(
   "setenv.bat",
   "start_all.bat",
   "start_server.bat",
-  "start_platforms.bat"
+  "start_platforms.bat",
+  # scripts/ is now file-enumerated (see $scriptDrop), so pin the ones that must always
+  # be there: the single script the server spawns at runtime, the shared CDP helper, and
+  # a representative collector. Without these the app starts but one core feature is dead.
+  "scripts/ocr_wechat_jd.ts",
+  "scripts/lib/browser.ts",
+  "scripts/lib/apiAuth.ts",
+  "scripts/collect_boss.ts"
 )
 $missing = $must | Where-Object { $listing -notcontains $_ }
 if ($missing) {
@@ -185,6 +303,27 @@ if ($shippedDev) {
   $shippedDev | ForEach-Object { Write-Host "   - $_" }
   exit 1
 }
+
+# -- scripts/ guards (2026-09-26) ----------------------------------------------
+# (a) no drop target may survive in the archive (the enumeration above is the only
+#     thing enforcing the drop list -- prove it worked instead of assuming).
+$shippedDrops = $listing | Where-Object { $scriptDrop -contains ($_ -replace '^.*/', '') }
+if ($shippedDrops) {
+  Write-Host ("::error::dropped dev scripts are still in the archive: " + (($shippedDrops | Select-Object -First 10) -join ', '))
+  Write-Host "[error] scripts/ drop list was not enforced:"
+  $shippedDrops | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+# (b) every referenced script must be inside the REAL archive too (the pre-tar guard worked
+#     on the intended member list; this proves tar did not silently skip any of them).
+$danglingInZip = @($refs | Where-Object { $listing -notcontains $_ })
+if ($danglingInZip) {
+  Write-Host ("::error::referenced scripts missing from the archive: " + (($danglingInZip | Select-Object -First 10) -join ', '))
+  Write-Host "[error] these are referenced by shipped files but absent from the zip:"
+  $danglingInZip | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  exit 1
+}
+Write-Host ("      scripts/ verified: " + $scriptFiles.Count + " shipped, " + $scriptDrop.Count + " dev-only excluded, " + $refs.Count + " referenced paths all present")
 # secrets / personal data must NOT be in there
 $forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like "src/*" -or $_ -like ".git/*" }
 if ($forbidden) {

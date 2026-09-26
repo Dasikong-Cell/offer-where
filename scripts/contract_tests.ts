@@ -935,6 +935,23 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     'scripts/ico_pack.py 会在写完后回读 ICONDIR 校验帧数，避免再次静默只剩一帧');
 }
 
+// ── 打包脚本必须纯 ASCII（2026-09-26）──────────────────────────────────────
+// Windows PowerShell 5.1 读「无 BOM 的 .ps1」按 ANSI/GBK 解码：中文字节会被解成
+// 乱码，某些组合还会吞掉引号/换行，导致脚本在别人机器上直接解析失败，而本机
+// （BOM 或代码页不同）却完全正常。这个约束此前只写在注释里，结果 pack.ps1 里积了
+// 316 个非 ASCII 字节（全是注释里的横线装饰），甚至我自己又新加了一个 emoji。
+// 写进合约测试，让「注释说了一件事、文件却是另一件事」不再可能。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  for (const rel of ['pack.ps1', 'scripts/pack_smoke.ps1']) {
+    const p = path.join(ROOT, rel);
+    const buf = fs.readFileSync(p);
+    const bad = [...buf].filter(b => b > 127).length;
+    check(`${rel} 保持纯 ASCII`, bad === 0,
+      `发现 ${bad} 个非 ASCII 字节；PS 5.1 会按 GBK 解码无 BOM 脚本，交付方可能解析失败`);
+  }
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}`);
 

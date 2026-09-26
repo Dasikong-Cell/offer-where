@@ -136,7 +136,7 @@ export const BLOCK_RE = /(访问验证|滑动验证|安全验证|人机验证|�
 
 /** 建议动作：把结论翻译成「用户下一步该做什么」 */
 const ACTION: Record<HealthVerdict, string> = {
-  offline: 'Chrome 调试窗口没起来 → 跑 scripts/ensure_chrome.sh（或 start_all.bat）',
+  offline: 'Chrome 调试窗口没起来 → 跑根目录的 ensure_chrome.sh（或 start_all.bat）',
   blocked: '被风控拦住 → 在该平台窗口人工过一次滑块/短信，冷却 10 分钟后再跑；期间勿并发采集/投递',
   'not-logged-in': '未登录 → 用 scripts/focus_login.ts <平台> 把登录页置顶，人工登录',
   unknown: '页面内容不符合预期 → 手动打开该平台窗口确认；若页面正常请更新 PLATFORM_PAGE 特征词',

@@ -73,12 +73,12 @@ try {
   $q = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/apply/quota?platform=boss" -TimeoutSec 8
   if ($q.platform -ne 'boss') { throw "quota endpoint broken: " + ($q | ConvertTo-Json -Compress) }
 
-  # ── P0 regression guard: the port table MUST resolve without data/browser/cdp.json ──
+  # -- P0 regression guard: the port table MUST resolve without data/browser/cdp.json --
   # data/ never ships (it holds the resume, DB and login profiles), so a recipient has
   # no cdp.json. History (2026-09-25 out-of-box test): connection.ts / browser.ts
   # returned null when the file was missing -> every platform reported "not configured"
   # and the apply engine degraded to Playwright's own Chromium -> the recipient got
-  # "Chromium 浏览器未下载。请执行：npx playwright install chromium" and the app's
+  # "Chromium browser is not downloaded. Run:npx playwright install chromium" and the app's
   # single core feature was dead on arrival. This assert is the guard for that.
   $conn = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/browser/connections" -TimeoutSec 15
   $boss = $conn.connections.boss
@@ -93,7 +93,7 @@ try {
   # response SHAPE guard for the platform health feed. History (2026-09-25): the API
   # returns {deep, summary, platforms:[...]} (an ARRAY), but console.html indexed it as
   # a keyed map (health[platformId]) and read non-existent fields (st.status / st.logged
-  # instead of verdict) -> all 15 dashboard cards silently showed "未知" forever while
+  # instead of verdict) -> all 15 dashboard cards silently showed "unknown" forever while
   # typecheck and every other test stayed green. deep=0 does not navigate any page, so
   # this assert is fast and cannot disturb the platform windows.
   $ph = Invoke-RestMethod -Uri "http://127.0.0.1:4401/api/platforms/health?deep=0" -TimeoutSec 40

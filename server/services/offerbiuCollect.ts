@@ -55,7 +55,7 @@ const EXTRACT = `(() => {
     seen.add(url);
     // ⚠️ txt 是「列表页卡片」的 innerText（含「更新X月X日 / 投递入口 / 2027届」），
     // **不是岗位描述**。曾整批写进 jd，导致 JD 覆盖率虚高、匹配与 AI 文案失效。
-    // 现在存进 card_text，jd 留空等详情页回填（见 scripts/backfill_wechat_jd.ts）。
+    // 现在存进 card_text，jd 留空等详情页回填（见 scripts/backfill_jd.ts）。
     out.push({ company, position, city, apply_url: url, card_text: txt.slice(0, 300) });
   }
   return out;
