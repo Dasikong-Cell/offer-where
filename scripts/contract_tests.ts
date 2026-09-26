@@ -1031,6 +1031,14 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     /<input[^>]*type="hidden"[^>]*id="batchCity"/.test(html) || /<input[^>]*id="batchCity"[^>]*type="hidden"/.test(html));
   check('控制台已无原生 <select id="batchCity">（否则又退回「滚动找城市」）', !/<select[^>]*id="batchCity"/.test(html));
   check('控制台初始化已切到 initCityPicker()', /initCityPicker\(\)/.test(html) && !/fillCitySelect\(\)/.test(html));
+  // 搜索框必须是「纯搜索框」：选中值另有常显位置（#batchCityNow）。
+  // 曾经让输入框兼顾「显示选中值」，并用「文字===选中值 ⇒ 当作空关键词」的隐式判断兜，
+  // 结果用户搜自己已选的城市时列表毫无反应（截图实证）—— 隐藏模式，必须有机械护栏挡住回退。
+  check('控制台有选中值常显位 #batchCityNow（输入框是纯搜索框）', /id="batchCityNow"/.test(html),
+    '缺它则只能把选中值回显进搜索框，必然再造出「输入文字却不搜索」的隐藏模式');
+  check('搜索框不再预填/回显选中值（cityQuery 无回显分支）',
+    /function cityQuery\(\)/.test(html) && !/v === CITY_SEL\s*\)\s*return ''/.test(html),
+    'cityQuery 里若出现「等于 CITY_SEL 就按空处理」，就是那个隐藏模式回来了');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

@@ -123,7 +123,15 @@
 
   /* ---------- 目标城市：全国城市搜索选择器（373 城） ---------- */
   .citypick{position:relative;flex:1;min-width:0}
-  .citypick input{width:100%;padding-right:30px}
+  .citypick input{width:100%;padding-right:58px}
+  /* 选中项常显（输入框已被清空，选中值必须有面板外的落点） */
+  .citypick-now{margin-left:8px;padding:2px 9px;border-radius:999px;background:var(--brand-soft);
+    color:var(--brand);font-size:11.5px;font-weight:700;vertical-align:1px}
+  .citypick-now.none{background:#eef1f5;color:var(--muted);font-weight:600}
+  .citypick-clear{position:absolute;right:29px;top:1px;height:calc(100% - 2px);width:26px;border:none;background:transparent;
+    color:var(--muted2);font-size:16px;line-height:1}
+  .citypick-clear:hover{color:var(--ink);background:#fafbfc}
+  .citypick-clear[hidden]{display:none}
   .citypick-caret{position:absolute;right:1px;top:1px;height:calc(100% - 2px);width:28px;border:none;background:transparent;
     color:var(--muted2);font-size:11px;border-radius:0 8px 8px 0}
   .citypick-caret:hover{color:var(--ink);background:#fafbfc}
@@ -308,13 +316,14 @@
                 <select id="batchSource"></select></div>
             </div>
             <div class="row2" style="margin-top:10px">
-              <div><label class="f">目标城市（投递/采集按此过滤）</label>
+              <div><label class="f">目标城市（投递/采集按此过滤）<span class="citypick-now none" id="batchCityNow">全部城市</span></label>
                 <div style="display:flex;gap:8px;align-items:flex-start">
                   <div class="citypick" id="batchCityWrap">
                     <input id="batchCitySearch" type="text" autocomplete="off" spellcheck="false"
                       role="combobox" aria-expanded="false" aria-autocomplete="list"
-                      aria-controls="batchCityPanel" aria-label="目标城市"
-                      placeholder="搜索全国城市：昆明 / kunming / km / 云南" />
+                      aria-controls="batchCityPanel" aria-label="目标城市搜索"
+                      placeholder="输入城市名 / 拼音 / 首字母搜索全国城市" />
+                    <button class="citypick-clear" id="batchCityClear" type="button" tabindex="-1" aria-label="清空搜索" hidden>×</button>
                     <button class="citypick-caret" id="batchCityCaret" type="button" tabindex="-1" aria-label="展开城市列表">▾</button>
                     <div class="citypick-panel" id="batchCityPanel" role="listbox" aria-label="城市列表" hidden>
                       <div class="citypick-meta" id="batchCityMeta"></div>
@@ -1216,13 +1225,28 @@ function cityMatch(c, k){
     || String(c.boss || '').includes(k);
 }
 
-/* 输入框同时兼任「显示当前选中」和「搜索关键词」两个角色：内容仍等于选中城市名时，
-   视为「只是在显示」，按空关键词处理 —— 否则一打开就只剩 1 条匹配，像坏了。 */
+/* 输入框**就是**搜索框：框里的文字一律当关键词。
+   ⚠️ 曾在这里加过一个「文字等于当前选中城市名 ⇒ 视为只是回显、按空关键词处理」的隐式判断，
+   为了「重开面板不只剩一条」。结果制造了**隐藏模式**：用户搜自己已选的城市时列表毫无反应
+   （截图实证：框里写着「北京」、北京也已选中，列表却仍是全量 373 项）。
+   隐藏模式比「只剩一条」更糟 —— 现在改成选中后**清空输入框**，选中值移到面板外常显（#batchCityNow）。 */
 function cityQuery(){
   const inp = $('#batchCitySearch');
-  const v = (inp && inp.value ? inp.value : '').trim();
-  if(CITY_SEL && v === CITY_SEL) return '';
-  return v.toLowerCase();
+  return (inp && inp.value ? inp.value : '').trim().toLowerCase();
+}
+
+/* 选中项常显：输入框被清空后，这是面板关闭时唯一能看到「当前选了谁」的地方 */
+function updateCityChip(){
+  const chip = $('#batchCityNow'); if(!chip) return;
+  chip.textContent = CITY_SEL || '全部城市';
+  chip.classList.toggle('none', !CITY_SEL);
+}
+
+/* 有输入才显示「×」（清空搜索，不影响已选城市） */
+function syncCityClear(){
+  const btn = $('#batchCityClear'), inp = $('#batchCitySearch');
+  if(!btn || !inp) return;
+  btn.hidden = !(inp.value || '').trim();
 }
 
 function cityItemHtml(i, name, sub, py, sel){
@@ -1237,6 +1261,7 @@ function cityItemHtml(i, name, sub, py, sel){
 function renderCityPanel(){
   const list = $('#batchCityList'), meta = $('#batchCityMeta');
   if(!list) return;
+  syncCityClear();
   const k = cityQuery();
   CITY_VIEW = [];
   let html = '';
@@ -1296,11 +1321,14 @@ function closeCityPanel(){
   if(inp) inp.setAttribute('aria-expanded', 'false');
 }
 
-/* 选中：写 hidden input（唯一取值）+ 回显输入框，然后收面板 */
+/* 选中：写 hidden input（唯一取值）+ 常显 chip，然后**清空搜索框**并收面板
+   —— 留着文字会让下次打开被过滤成一条，看起来像列表坏了。 */
 function setCity(name){
   CITY_SEL = name || '';
   const hid = $('#batchCity'); if(hid) hid.value = CITY_SEL;
-  const inp = $('#batchCitySearch'); if(inp) inp.value = CITY_SEL;
+  const inp = $('#batchCitySearch'); if(inp) inp.value = '';
+  updateCityChip();
+  syncCityClear();
   renderCityPanel();
   closeCityPanel();
 }
@@ -1326,7 +1354,10 @@ async function initCityPicker(){
   // 默认城市与旧下拉保持一致（昆明），且同样写进 hidden input —— 行为不变
   CITY_SEL = CITY_DEFAULT;
   const hid = $('#batchCity'); if(hid) hid.value = CITY_SEL;
-  const inp = $('#batchCitySearch'); if(inp) inp.value = CITY_SEL;
+  // 输入框是**纯搜索框**，不预填当前城市（选中值由 #batchCityNow 常显）
+  const inp = $('#batchCitySearch'); if(inp) inp.value = '';
+  updateCityChip();
+  syncCityClear();
 }
 
 $('#batchCitySearch').addEventListener('focus', ()=>openCityPanel());
@@ -1347,6 +1378,12 @@ $('#batchCitySearch').addEventListener('keydown', (e)=>{
 $('#batchCityCaret').addEventListener('click', ()=>{
   if(CITY_OPEN) closeCityPanel();
   else { const inp = $('#batchCitySearch'); if(inp) inp.focus(); openCityPanel(); }
+});
+/* × = 只清空搜索词，回到全量列表；已选城市不受影响（要取消选择请点「全部城市」） */
+$('#batchCityClear').addEventListener('click', ()=>{
+  const inp = $('#batchCitySearch');
+  if(inp){ inp.value = ''; inp.focus(); }
+  renderCityPanel();
 });
 $('#batchCityList').addEventListener('click', (e)=>{
   const it = e.target.closest ? e.target.closest('.citypick-item') : null;
