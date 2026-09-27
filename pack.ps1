@@ -86,6 +86,57 @@ Write-Host "[0/2] build stamp: $stamp"
 # carry a second copy of the rule that could rot out of sync with build_app.ps1.
 # ~0.3s over ~10 files, so it runs BEFORE tar: a stale binary costs one second here
 # instead of a 5-minute pack plus a wrong artifact on the release page.
+# -- Source hashing: must stay byte-for-byte identical to build_app.ps1 -------------
+# These two functions are the ONLY duplicated piece of the provenance rule (the
+# exclude list is read from the stamp; the hashing algorithm cannot be). They exist
+# here because pack.ps1 must be able to verify a stamp without running build_app.ps1.
+# scripts/contract_tests.ts re-derives the aggregate hash in TypeScript from the rule
+# recorded in BUILD_INFO.json, so if either copy drifts, the test goes red.
+#
+# (1) CRLF -> LF normalization. Rationale and the CI evidence: see the long comment on
+#     Get-FileSha256Norm in build_app.ps1. Short version: hashing raw on-disk bytes
+#     made the stamp depend on git's autocrlf, so a CRLF checkout (the Windows CI
+#     runner) hashed differently from an LF checkout of the same commit and this guard
+#     refused to pack a tree that was actually correct (run 36331333538).
+# (2) Ordinal (not culture) path order. Sort-Object is culture-sensitive, so the
+#     aggregate depended on the machine locale.
+function Get-FileSha256Norm([string]$Path) {
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  # 28591 = ISO-8859-1: every byte maps to U+0000..U+00FF and back, so binary input
+  # survives the round trip. Decoding as UTF-8 would replace invalid sequences with
+  # U+FFFD and silently hash the wrong bytes.
+  $enc = [System.Text.Encoding]::GetEncoding(28591)
+  $text = $enc.GetString($bytes).Replace("`r`n", "`n")
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  return ([System.BitConverter]::ToString($sha.ComputeHash($enc.GetBytes($text))) -replace '-', '').ToLower()
+}
+
+function Sort-EntriesByPathOrdinal($Entries) {
+  $paths = New-Object System.Collections.Generic.List[string]
+  foreach ($e in $Entries) { $paths.Add([string]$e.path) }
+  $paths.Sort([System.StringComparer]::Ordinal)
+  $map = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+  foreach ($e in $Entries) { $map[[string]$e.path] = $e }
+  $out = New-Object System.Collections.Generic.List[object]
+  foreach ($p in $paths) { $out.Add($map[$p]) }
+  return $out.ToArray()
+}
+
+# One-line byte-level fingerprint of a drifted file, printed with the drift message.
+# WHY: diagnosing the CI failure above took an hour of offline reproduction because the
+# log only said WHICH files differed, never WHY. "on-disk 24218 bytes, 542 CR bytes"
+# would have pointed straight at line endings. Cheap (a few small files) and it only
+# runs on the failure path.
+function Get-DriftHint([string]$RelPath) {
+  try {
+    $abs = Join-Path $root ($RelPath.Replace('/', '\'))
+    $b = [System.IO.File]::ReadAllBytes($abs)
+    $cr = 0
+    foreach ($x in $b) { if ($x -eq 13) { $cr++ } }
+    return ('  [on-disk ' + $b.Length + ' bytes, ' + $cr + ' CR bytes]')
+  } catch { return '' }
+}
+
 $appDir   = Join-Path $root 'dist-app'
 $appInfoP = Join-Path $appDir 'BUILD_INFO.json'
 $appExeP  = Join-Path $appDir 'offer-where.exe'
@@ -111,10 +162,10 @@ foreach ($f in (Get-ChildItem -LiteralPath $appSrcP -Recurse -File -Force)) {
   if ($skip) { continue }
   $curSrc.Add([pscustomobject]@{
     path   = $rel
-    sha256 = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLower()
+    sha256 = (Get-FileSha256Norm $f.FullName)
   })
 }
-$curSrc = @($curSrc | Sort-Object path)
+$curSrc = @(Sort-EntriesByPathOrdinal $curSrc)
 
 $sb = New-Object System.Text.StringBuilder
 foreach ($e in $curSrc) { [void]$sb.Append($e.path).Append("`n").Append($e.sha256).Append("`n") }
@@ -129,7 +180,7 @@ foreach ($e in $appInfo.sourceFiles) { $stampMap[[string]$e.path] = ([string]$e.
 $curPaths = @($curSrc | ForEach-Object { $_.path })
 foreach ($e in $curSrc) {
   if (-not $stampMap.ContainsKey($e.path)) { $drift.Add('added since build: ' + $e.path) }
-  elseif ($stampMap[$e.path] -ne $e.sha256) { $drift.Add('modified since build: ' + $e.path) }
+  elseif ($stampMap[$e.path] -ne $e.sha256) { $drift.Add('modified since build: ' + $e.path + (Get-DriftHint $e.path)) }
 }
 foreach ($e in $appInfo.sourceFiles) {
   if ($curPaths -notcontains [string]$e.path) { $drift.Add('deleted since build: ' + [string]$e.path) }

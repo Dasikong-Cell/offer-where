@@ -2,27 +2,19 @@
     "schema":  1,
     "product":  "OfferWhere",
     "arch":  "x86_64-pc-windows-gnu",
-    "builtAt":  "2026-09-27T21:52:16+08:00",
-    "hashRule":  "sha256 of the UTF-8 text formed by, for every source file in path order: relative path + LF + lowercase hex sha256 + LF",
+    "builtAt":  "2026-09-28T00:09:01+08:00",
+    "hashRule":  "sha256 of the UTF-8 text formed by, for every source file in ORDINAL path order: relative path + LF + lowercase hex sha256 of the file bytes with CRLF normalized to LF + LF",
     "excludeDirNames":  [
                             "target",
                             ".git",
                             "gen"
                         ],
-    "sourceHash":  "f057d715a8177939e51bd80f128ca27ec7b92d316276ce0020a593f054c192e8",
+    "sourceHash":  "4de6323162809f79dad76bfb3e9dbe5a58b0218e0e4e9861fb8b1937e2e4ae4f",
     "sourceCount":  9,
     "sourceFiles":  [
                         {
                             "path":  "src-tauri/.gitignore",
                             "sha256":  "298172e50e4d08ed0476a23df466241bb04d8251941699e65e94547fa03fc86a"
-                        },
-                        {
-                            "path":  "src-tauri/build.rs",
-                            "sha256":  "487059eaf8a947b80f20a9aacac038a5047b2ad69d2401b827376c67d6fe847f"
-                        },
-                        {
-                            "path":  "src-tauri/capabilities/default.json",
-                            "sha256":  "ea365a32915af911dd3f5ca5001bdeb9b6b2b9011b0e300871af1abfa2662c48"
                         },
                         {
                             "path":  "src-tauri/Cargo.lock",
@@ -33,8 +25,16 @@
                             "sha256":  "d7dfa03a8e6da441439881a538c92093a53a412d9deea225bbdb2761395492e4"
                         },
                         {
+                            "path":  "src-tauri/build.rs",
+                            "sha256":  "487059eaf8a947b80f20a9aacac038a5047b2ad69d2401b827376c67d6fe847f"
+                        },
+                        {
+                            "path":  "src-tauri/capabilities/default.json",
+                            "sha256":  "ea365a32915af911dd3f5ca5001bdeb9b6b2b9011b0e300871af1abfa2662c48"
+                        },
+                        {
                             "path":  "src-tauri/icons/icon.ico",
-                            "sha256":  "1b3762c5afae8f06874caa97e1c68d9992b1971bfa58a810d51d3f642b517d5d"
+                            "sha256":  "2d80444936a4367ee08cee8d53a9dd05147ea741c94f682926e90f62092602f3"
                         },
                         {
                             "path":  "src-tauri/src/lib.rs",

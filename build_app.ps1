@@ -7,7 +7,8 @@
 #   ship. Nothing in tsc / selftest / contract tests / smoke can see that, because
 #   the assertion has to span "source on disk" and "bytes inside the binary".
 #   So this script turns it into a mechanical check:
-#     - hash every source file under src-tauri/ (recipe recorded in the artifact)
+#     - hash every source file under src-tauri/ (recipe recorded in the artifact;
+#       CRLF-normalized and ordinal-ordered -- see Get-FileSha256Norm for why)
 #     - hash the two shipped artifacts
 #     - write dist-app/BUILD_INFO.json
 #   pack.ps1 recomputes the same thing and REFUSES to build a package if anything
@@ -36,7 +37,9 @@
 param(
   # Cargo target dir. Defaults to CARGO_TARGET_DIR, then src-tauri\target.
   [string]$TargetDir = '',
-  # Skip the build and only re-stamp (use after copying artifacts by hand).
+  # Skip the build AND the artifact copy, then re-hash whatever is already committed in
+  # dist-app/ (useful after changing the hash rule; needs no cargo output, so it works
+  # on a machine without the Rust toolchain).
   [switch]$StampOnly
 )
 
@@ -60,15 +63,69 @@ $excludeDirNames = @('target', '.git', 'gen')
 # Kept free of quotes and angle brackets on purpose: Windows PowerShell 5.1's
 # ConvertTo-Json escapes those to \u0027 / \u003c / \u003e, which makes the stamp noisy
 # and (worse) makes its bytes depend on the PowerShell version that wrote it.
-$aggregateRule = 'sha256 of the UTF-8 text formed by, for every source file in path order: ' +
-                 'relative path + LF + lowercase hex sha256 + LF'
+$aggregateRule = 'sha256 of the UTF-8 text formed by, for every source file in ORDINAL path order: ' +
+                 'relative path + LF + lowercase hex sha256 of the file bytes with CRLF normalized to LF + LF'
 
 function Get-RelPath([string]$Full, [string]$Base) {
   return ($Full.Substring($Base.Length + 1)).Replace('\', '/')
 }
 
+# Raw bytes hash. Correct ONLY for the shipped artifacts (the exe/dll are binary and
+# git never rewrites them), so this is the one used for dist-app/, not for sources.
 function Get-FileSha256([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower()
+}
+
+# sha256 of the file bytes after CRLF -> LF normalization. This is the hash used for
+# every SOURCE file. Two portability bugs lived here; both were caught by CI, not here.
+#
+# (1) LINE ENDINGS. Hashing raw on-disk bytes makes the stamp a fact about the machine
+#     that checked the tree out, not about the source. git on the Windows CI runner
+#     runs with core.autocrlf=true, which rewrites src-tauri/'s 8 TEXT files to CRLF;
+#     icon.ico (binary) is left alone. So pack.ps1 -- whose whole job is to prove "the
+#     committed exe matches the committed source" -- refused to pack a tree that was
+#     perfect: measured 2026-09-27 on run 36331333538,
+#       stamped f057d715a817...   current 4747e9e230f3...
+#     while the identical commit was green locally (LF checkout). Reproduced offline:
+#     hashing the CRLF variants reproduces 4747e9e2 exactly, and the file list CI
+#     reported as modified is exactly the 8 text files. Normalizing CRLF away makes
+#     LF and CRLF checkouts of one commit hash the same.
+# (2) SORT ORDER. "Sort-Object path" is culture-sensitive, so the aggregate also
+#     depended on the machine locale. Ordinal is a pure byte order -- see
+#     Sort-EntriesByPathOrdinal below.
+#
+# Applied to EVERY file including binaries, on purpose: git does not rewrite binaries,
+# so both sides see identical bytes for them and the normalization is a no-op. One
+# rule, no text/binary guesswork. (icon.ico does contain a few 0x0D0A byte pairs; both
+# sides strip the same ones, so the comparison stays meaningful.)
+function Get-FileSha256Norm([string]$Path) {
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  # 28591 = ISO-8859-1: maps every byte to U+0000..U+00FF, so GetString/GetBytes round
+  # trips byte-for-byte. Decoding as UTF-8 instead would corrupt binary input into
+  # U+FFFD and silently hash the wrong thing.
+  $enc = [System.Text.Encoding]::GetEncoding(28591)
+  $text = $enc.GetString($bytes).Replace("`r`n", "`n")
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  return ([System.BitConverter]::ToString($sha.ComputeHash($enc.GetBytes($text))) -replace '-', '').ToLower()
+}
+
+# Sort source entries by path using StringComparer.Ordinal.
+# WHY: Sort-Object compares with the current culture, so zh-CN here and en-US on the
+# runner could order the same set differently and produce different aggregate hashes.
+# Ordinal is byte order: identical on every machine and trivially reproducible in
+# another language, which is how scripts/contract_tests.ts re-derives this hash.
+function Sort-EntriesByPathOrdinal($Entries) {
+  $paths = New-Object System.Collections.Generic.List[string]
+  foreach ($e in $Entries) { $paths.Add([string]$e.path) }
+  $paths.Sort([System.StringComparer]::Ordinal)
+  # Ordinal-keyed lookup: a plain @{} hashtable is case-INSENSITIVE, which would merge
+  # two paths differing only in case. Nothing here has that shape today; the Ordinal
+  # comparer keeps it that way if a file is ever added.
+  $map = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+  foreach ($e in $Entries) { $map[[string]$e.path] = $e }
+  $out = New-Object System.Collections.Generic.List[object]
+  foreach ($p in $paths) { $out.Add($map[$p]) }
+  return $out.ToArray()
 }
 
 function Get-SourceEntries {
@@ -83,9 +140,9 @@ function Get-SourceEntries {
       if ($Exclude -contains $parts[$i]) { $skip = $true; break }
     }
     if ($skip) { continue }
-    $entries.Add([pscustomobject]@{ path = $rel; sha256 = (Get-FileSha256 $f.FullName) })
+    $entries.Add([pscustomobject]@{ path = $rel; sha256 = (Get-FileSha256Norm $f.FullName) })
   }
-  return ($entries | Sort-Object path)
+  return (Sort-EntriesByPathOrdinal $entries)
 }
 
 function Get-AggregateHash($Entries) {
@@ -131,28 +188,39 @@ if (-not $StampOnly) {
 }
 
 # -- 2) locate artifacts and copy them into dist-app/ --------------------------
-$resolvedTarget = $TargetDir
-if (-not $resolvedTarget) { $resolvedTarget = $env:CARGO_TARGET_DIR }
-if (-not $resolvedTarget) { $resolvedTarget = Join-Path $srcRoot 'target' }
-$releaseDir = Join-Path $resolvedTarget 'release'
-Write-Host "[2/3] artifacts from $releaseDir"
+# Skipped entirely with -StampOnly. Re-stamping means "re-derive the stamp from the
+# bytes that are already committed in dist-app/" -- it must NOT require a cargo target
+# dir, and in particular must work on a machine with no Rust toolchain at all (the
+# normal case for a re-stamp, e.g. after changing the hash rule). Until 2026-09-27 this
+# step ran unconditionally, so -StampOnly died with "built exe not found:
+# src-tauri\target\release\offer-where.exe" unless the build output happened to still
+# be around -- which is exactly what its own doc comment promised it did not need.
+if (-not $StampOnly) {
+  $resolvedTarget = $TargetDir
+  if (-not $resolvedTarget) { $resolvedTarget = $env:CARGO_TARGET_DIR }
+  if (-not $resolvedTarget) { $resolvedTarget = Join-Path $srcRoot 'target' }
+  $releaseDir = Join-Path $resolvedTarget 'release'
+  Write-Host "[2/3] artifacts from $releaseDir"
 
-$builtExe = Join-Path $releaseDir $exeName
-if (-not (Test-Path -LiteralPath $builtExe)) {
-  Write-Host "[error] built exe not found: $builtExe"
-  Write-Host '        pass -TargetDir <cargo target dir> if CARGO_TARGET_DIR is unset here.'
-  exit 1
-}
-New-Item -ItemType Directory -Force -Path $appDir | Out-Null
-Copy-Item -LiteralPath $builtExe -Destination (Join-Path $appDir $exeName) -Force
-foreach ($n in $extra) {
-  $src = Join-Path $releaseDir $n
-  if (Test-Path -LiteralPath $src) {
-    Copy-Item -LiteralPath $src -Destination (Join-Path $appDir $n) -Force
-    Write-Host "      copied $n"
-  } else {
-    Write-Host "      [warn] $n not found in the build output; keeping any existing copy"
+  $builtExe = Join-Path $releaseDir $exeName
+  if (-not (Test-Path -LiteralPath $builtExe)) {
+    Write-Host "[error] built exe not found: $builtExe"
+    Write-Host '        pass -TargetDir <cargo target dir> if CARGO_TARGET_DIR is unset here.'
+    exit 1
   }
+  New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+  Copy-Item -LiteralPath $builtExe -Destination (Join-Path $appDir $exeName) -Force
+  foreach ($n in $extra) {
+    $src = Join-Path $releaseDir $n
+    if (Test-Path -LiteralPath $src) {
+      Copy-Item -LiteralPath $src -Destination (Join-Path $appDir $n) -Force
+      Write-Host "      copied $n"
+    } else {
+      Write-Host "      [warn] $n not found in the build output; keeping any existing copy"
+    }
+  }
+} else {
+  Write-Host '[2/3] -StampOnly: keeping the artifacts already committed in dist-app/'
 }
 
 # -- 3) stamp ------------------------------------------------------------------

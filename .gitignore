@@ -68,6 +68,9 @@ version.json
 .workbuddy/
 
 # ── 临时调试脚本（未被任何源码引用）─────────────────────
+# _tools/ 是本机排查/一次性工具目录（如离线用 Git Data API 推送的 gh_api_push.mjs、
+# 复现 CI 哈希差异的诊断脚本）。它只服务本机调试，不属于产品源码，也不该进包。
+_tools/
 _dbinspect.cjs
 _dbjobs.cjs
 _dbprofile.cjs

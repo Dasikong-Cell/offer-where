@@ -43,6 +43,7 @@ import {
 } from '../server/services/cities.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_DAILY_LIMIT, resolveDailyLimit, todayAppliedCount,
@@ -1151,6 +1152,109 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     check('pii_guard.ts 未被列入 $scriptDrop（contract_tests 会 import 它）',
       dropBlock.length > 0 && !dropBlock.includes('pii_guard.ts'),
       '一进 $scriptDrop，包内 npm test 就会在 import 处崩');
+  }
+}
+
+// ── 原生外壳 provenance：sourceHash 必须与「检出环境」无关（2026-09-27）──────────
+// 起因：pack.ps1 的守卫对 src-tauri/ 的**磁盘字节**求哈希，而 git 在 Windows runner 上
+// 以 core.autocrlf=true 检出 —— 8 个文本文件被写成 CRLF、二进制(.ico) 保持原样。于是
+// 「同一份提交」在 CI 上算出与本地不同的哈希，守卫拒绝打包一棵完全正确的树：
+//   run 36331333538  stamped f057d715… / current 4747e9e2…（而本地同提交全绿）
+// 离线复现确认：把 CRLF 变体哈希出来正好得到 4747e9e2，且 CI 报 modified 的文件恰好是那 8 个
+// 文本文件（icon.ico 不在其中）。修法两条：①哈希前把 CRLF 归一化为 LF；②改用 ordinal
+// 排序（Sort-Object 是文化敏感的，同一份文件集在 zh-CN / en-US 下可能排出不同顺序）。
+//
+// 这里做三件事：
+//   ① 章里必须**写明**规则（换行 + 排序），否则换语言复算无从下手；
+//   ② 用 TS **独立实现**该规则从当前 src-tauri/ 复算，逐文件 + 聚合两级断言 —— 两个 .ps1
+//      里的实现只要与文档漂移，这条就红；
+//   ③ 模拟一次「CRLF 检出」（git 只转文本、不动二进制）再复算，断言哈希不变 —— 这是那条
+//      CI 失败的直接回归测试。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const infoPath = path.join(ROOT, 'dist-app', 'BUILD_INFO.json');
+  if (fs.existsSync(infoPath)) {
+    const info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
+    const rule = String(info.hashRule || '');
+    check('BUILD_INFO.hashRule 写明 CRLF 归一化', /CRLF normalized to LF/.test(rule),
+      '不写明就等于规则只活在代码里，换实现复算必然各说各话');
+    check('BUILD_INFO.hashRule 写明 ORDINAL 排序', /ORDINAL/.test(rule),
+      '文化敏感排序会让同一份提交在不同 locale 上盖章不一致');
+
+    const srcRoot = path.join(ROOT, 'src-tauri');
+    const exclude: string[] = info.excludeDirNames || [];
+    const rels: string[] = [];
+    (function walk(dir: string) {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { if (!exclude.includes(e.name)) walk(full); continue; }
+        rels.push(path.relative(ROOT, full).split(path.sep).join('/'));
+      }
+    })(srcRoot);
+    // 默认 sort 即 UTF-16 码元序（ASCII 下等价 ordinal）——与 PS 的 StringComparer.Ordinal 对齐
+    rels.sort();
+
+    const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+    // 28591/latin1 往返是**逐字节**忠实的；用 utf8 解码会把二进制里的非法序列变成 U+FFFD 再
+    // 哈希回去，等于算了个错的值
+    const normalize = (b: Buffer) => Buffer.from(b.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+    // git 的文本判定用 NUL 字节：没有 NUL 才做 autocrlf 转换。用同一判据模拟检出。
+    const toCrlf = (b: Buffer) => Buffer.from(b.toString('latin1').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n'), 'latin1');
+
+    const aggregate = (bytesOf: (rel: string) => Buffer) => {
+      let text = '';
+      for (const rel of rels) text += rel + '\n' + sha(normalize(bytesOf(rel))) + '\n';
+      return sha(Buffer.from(text, 'utf8'));
+    };
+    const raw = new Map(rels.map((r) => [r, fs.readFileSync(path.join(ROOT, r))]));
+
+    check('参与哈希的文件数与章一致', rels.length === info.sourceCount,
+      `disk=${rels.length} stamp=${info.sourceCount}`);
+
+    const stampMap = new Map<string, string>((info.sourceFiles || []).map((e: any) => [String(e.path), String(e.sha256).toLowerCase()]));
+    const mismatched = rels.filter((r) => stampMap.get(r) !== sha(normalize(raw.get(r)!)));
+    // 逐文件比对比只比聚合更强：聚合是同一组文件的哈希，逐文件还能指出是哪一个漂了
+    check('逐文件 sha256（CRLF 归一化后）与章一致', mismatched.length === 0,
+      mismatched.length ? mismatched.join(', ') : `${rels.length} 个文件全部一致`);
+
+    check('聚合 sourceHash 可用文档规则复现', aggregate((r) => raw.get(r)!) === String(info.sourceHash).toLowerCase(),
+      'TS 独立实现与 PS 侧盖章结果一致；若不等，说明两边对同一份规则的理解已经分叉');
+
+    // ③ 回归测试：模拟 CRLF 检出（文本转、二进制不转）后哈希必须不变
+    const crlfBytes = (r: string) => (raw.get(r)!.includes(0) ? raw.get(r)! : toCrlf(raw.get(r)!));
+    const crlfChanged = rels.filter((r) => crlfBytes(r) !== raw.get(r));
+    check('CRLF 检出后哈希不变（CI 误杀的直接回归）', aggregate(crlfBytes) === String(info.sourceHash).toLowerCase(),
+      `模拟转换了 ${crlfChanged.length} 个文件（应等于文本文件数，二进制不动）`);
+    check('模拟检出不误转二进制文件', !crlfChanged.includes('src-tauri/icons/icon.ico'),
+      'git 不做二进制转换；若这里也转，模拟本身就不忠实');
+
+    // ④ 接线：规则在两份 .ps1 里各有一份实现（无法从章里执行），必须逐字一致 —— 否则
+    //    「哪一份对」就成了未定义行为，且失败信息还会互相矛盾
+    const appPs = path.join(ROOT, 'build_app.ps1');
+    const packPs = path.join(ROOT, 'pack.ps1');
+    if (fs.existsSync(appPs) && fs.existsSync(packPs)) {
+      const a = fs.readFileSync(appPs, 'utf8');
+      const b = fs.readFileSync(packPs, 'utf8');
+      const grab = (src: string, name: string) =>
+        ((src.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n\\}')) || [''])[0])
+          .split('\n')
+          .map((l) => l.trim())
+          // 只比**代码**：整行注释与空行不计（两侧各写各的说明文字是允许的，
+          // 但可执行部分只要有一处不同，「以哪份为准」就没有答案了）
+          .filter((l) => l && !l.startsWith('#'))
+          .join('\n');
+      for (const fn of ['Get-FileSha256Norm', 'Sort-EntriesByPathOrdinal']) {
+        const fa = grab(a, fn), fb = grab(b, fn);
+        check(`两份 .ps1 的 ${fn} 实现（代码部分）逐字一致`, fa.length > 0 && fa === fb,
+          '算法有两份拷贝，「以哪份为准」不该是个问题 —— 不一致即视为回归');
+      }
+      check('build_app.ps1 用归一化哈希给源文件盖章', /sha256 = \(Get-FileSha256Norm/.test(a));
+      check('pack.ps1 用归一化哈希复算源文件', /sha256 = \(Get-FileSha256Norm/.test(b));
+      check('pack.ps1 已不再用文化敏感的 Sort-Object 排源文件', !/\$curSrc \| Sort-Object path/.test(b),
+        'Sort-Object 依 locale 排序 ⇒ 同一提交在 zh-CN / en-US 上盖章不同');
+      check('pack.ps1 漂移信息带字节级提示', /Get-DriftHint/.test(b),
+        'CI 日志只说「哪些文件不同」，诊断出换行符问题花了一小时 —— 提示要能直接指向原因');
+    }
   }
 }
 
