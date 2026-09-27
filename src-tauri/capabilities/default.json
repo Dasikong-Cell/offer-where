@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "控制台窗口所需的最小权限集（页面加载的是本机后端，不走 Tauri IPC）。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

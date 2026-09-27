@@ -20,6 +20,7 @@
  */
 import { upsertJob } from '../server/db.ts';
 import { makeEx } from './lib/browser.ts';
+import { SERIALIZE_DOM_SRC, serializeToStructuredText } from '../server/services/domSerialize.ts';
 
 const ex = makeEx('liepin');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -60,7 +61,11 @@ const LIST_EVAL = `(function(){
 
 /** 详情页：公司 / 薪资 / 城市 / JD（职位名由列表锚文本提供） */
 const DETAIL_EVAL = `(function(){
+  ${SERIALIZE_DOM_SRC}
   var d=document; var flat=(d.body?d.body.innerText.replace(/[\\s]+/g,' '):'');
+  // 技术债 D1 修复：JD 用「结构化序列化」（保留标签与关键 class），而非整块 innerText，
+  // 这样「岗位职责 / 任职要求」分段不丢失；Node 侧再 serializeToStructuredText 转纯文本入库。
+  var bodyHtml=__tidyDoc(__serializeClean(d.body,0));
   var title=d.title||'';
   var CITYD='北京|上海|广州|深圳|杭州|成都|武汉|西安|南京|苏州|天津|重庆|长沙|郑州|合肥|厦门|青岛|大连|福州|济南|昆明|南昌|宁波|无锡|佛山|东莞|珠海|中山|惠州|沈阳|哈尔滨|长春|石家庄|太原|贵阳|南宁|兰州|乌鲁木齐|海口|三亚';
   // 公司：优先取 <title> 的「-<公司>招聘信息-」（实测最稳，如「-金山软件招聘信息-猎聘」）
@@ -79,20 +84,20 @@ const DETAIL_EVAL = `(function(){
     var m2=win.match(new RegExp('('+CITYD+')'));
     if(m2) city=m2[1];
   }
-  // JD：职位介绍/岗位描述 起，截到 截止日期/公司简介
+  // JD：职位介绍/岗位描述 起，截到 截止日期/公司简介（在结构化 HTML 上切片，分段保留）
   var keys=['职位介绍','岗位描述','工作职责','职位描述','岗位职责','任职要求'];
-  var jd='';
+  var jdHtml='';
   for(var i=0;i<keys.length;i++){
-    var k=flat.indexOf(keys[i]);
-    if(k>=0){ jd=flat.slice(k,k+3200); break; }
+    var k=bodyHtml.indexOf(keys[i]);
+    if(k>=0){ jdHtml=bodyHtml.slice(k,k+6000); break; }
   }
-  if(!jd) jd=flat.slice(0,3000);
-  var cut=jd.search(/(截止日期|公司简介|猎聘温馨提示)/);
-  if(cut>80) jd=jd.slice(0,cut);
+  if(!jdHtml) jdHtml=bodyHtml.slice(0,4000);
+  var cut=jdHtml.search(/(截止日期|公司简介|猎聘温馨提示)/);
+  if(cut>80) jdHtml=jdHtml.slice(0,cut);
   // 风控识别：liepin 会在异常访问时 302 到 safe.liepin.com 的短信验证页
   //（实测文案「账号行为异常…请进行短信验证」）→ 调用方应立刻中止本批，别硬刚验证码。
   var blocked = /safe\\.liepin\\.com/.test(location.href) || /(安全中心|风险提示|账号行为异常|短信验证)/.test(title + flat.slice(0, 200));
-  return {company:co, salary:sal, city:city, jd:jd.slice(0,6000), textLen:flat.length, blocked:blocked};
+  return {company:co, salary:sal, city:city, jdHtml:jdHtml.slice(0,8000), textLen:flat.length, blocked:blocked};
 })()`;
 
 (async () => {
@@ -132,7 +137,7 @@ const DETAIL_EVAL = `(function(){
             blockedOut = true;
             break;
           }
-          item = { ...item, city: det.city || null, company: det.company || null, salary: det.salary || null, jd: (det.jd || '').slice(0, 6000) || null };
+          item = { ...item, city: det.city || null, company: det.company || null, salary: det.salary || null, jd: serializeToStructuredText(det.jdHtml || '').slice(0, 6000) || null };
         }
         detailOpened++;
         const s = `${(item.position || '')} ${(item.jd || '')}`.toLowerCase();

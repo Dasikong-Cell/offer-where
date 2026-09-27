@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OfferWhere",
+  "version": "1.0.0",
+  "identifier": "com.offerwhere.desktop",
+  "build": {
+    "frontendDist": "../public",
+    "devUrl": "http://127.0.0.1:4400"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OfferWhere 投递助手",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "center": true,
+        "url": "http://127.0.0.1:4400"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": []
+  }
+}

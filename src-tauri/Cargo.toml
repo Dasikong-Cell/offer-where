@@ -1,0 +1,35 @@
+[package]
+name = "offer-where"
+version = "1.0.0"
+description = "OfferWhere 求职投递助手（Tauri 桌面外壳）"
+authors = ["OfferWhere"]
+edition = "2021"
+rust-version = "1.77"
+
+# Tauri v2 约定：业务逻辑放 lib（main.rs 只做入口），便于后续单元测试与多平台复用。
+[lib]
+name = "offer_where_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+# schemars 0.8.22（经 tauri-build → tauri-utils 引入）把 `Map<K, V>` 定义成 `indexmap::IndexMap<K, V>`，
+# 而 indexmap 1.9.3 的 `IndexMap<K, V, S = RandomState>` 只有在 has_std 时才带默认哈希器；
+# has_std 由 indexmap 的 build.rs 决定：未显式开 std 时用 autocfg 探测 sysroot（本机探测失败 ⇒ E0107）。
+# 显式打开 std ⇒ build.rs 直接 emit(has_std)，不再探测。
+indexmap = { version = "1.9", features = ["std"] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 见 [build-dependencies] 处的说明：显式打开 indexmap 的 std。
+indexmap = { version = "1.9", features = ["std"] }
+
+[profile.release]
+# 分发体积优先：外壳本身极小，真正的负载（node/ + node_modules/）走 resources。
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

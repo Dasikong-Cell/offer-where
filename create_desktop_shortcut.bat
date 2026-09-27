@@ -15,8 +15,17 @@ REM (see docs/out-of-box-test-2026-09-25.md), so on an English Windows the extra
 REM name is mojibake and the recipient cannot tell which file to double-click.
 REM Side benefit: the CJK entry name was also interpolated into the PowerShell
 REM CreateShortcut command line, which is codepage-sensitive.
+REM
+REM 2026-09-27: added a /silent switch. install_first_run.bat (the first-run
+REM install dialog) calls this with /silent so the desktop entry is created without
+REM any console output or pause -- the dialog already owns the user interaction.
 REM ============================================================
 set "PKG=%~dp0"
+REM /silent: invoked by the first-run install dialog. Create the entry quietly,
+REM with no echoes and no pause.
+set "SILENT="
+if /i "%~1"=="/silent" set "SILENT=1"
+
 REM Resolve the real desktop path (some systems redirect it away from %USERPROFILE%\Desktop)
 for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP=%%D"
 if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
@@ -25,8 +34,10 @@ REM Single source of truth for the entry name: used by the .lnk, by the .bat fal
 REM and by every message below, so the three can never drift apart.
 set "ENTRY=OfferWhere"
 
-echo 正在桌面创建唯一入口 "%ENTRY%" ...
-echo 指向：%PKG%start_all.bat
+if not defined SILENT (
+  echo 正在桌面创建唯一入口 "%ENTRY%" ...
+  echo 指向：%PKG%start_all.bat
+)
 
 REM 图标：包内自带 public\app.ico（靛蓝渐变底 + 白对话气泡；
 REM   同一份文件还用作控制台 favicon 与控制台侧边栏品牌标记，改图标只需改这一处）。
@@ -48,14 +59,16 @@ if errorlevel 1 (
     echo call "%%PKG%%start_all.bat"
     echo pause
   ) > "%DESKTOP%\%ENTRY%.bat"
-  echo 已创建：%DESKTOP%\%ENTRY%.bat（本机禁用了 .lnk COM，故用 .bat，双击效果相同）
+  if not defined SILENT echo 已创建：%DESKTOP%\%ENTRY%.bat（本机禁用了 .lnk COM，故用 .bat，双击效果相同）
 ) else (
-  echo 已创建：%DESKTOP%\%ENTRY%.lnk
+  if not defined SILENT echo 已创建：%DESKTOP%\%ENTRY%.lnk
 )
 
-echo.
-echo 双击桌面「%ENTRY%」即可打开控制台：选择平台 → 设置数量 → 开始投递。
-REM 旧的中文名入口不自动删除 —— 删桌面文件属于用户自己的决定，脚本不越权代劳。
-if exist "%DESKTOP%\投递Agent.lnk" echo 提示：桌面旧入口「投递Agent.lnk」已停止更新，可自行删除。
-if exist "%DESKTOP%\投递Agent.bat" echo 提示：桌面旧入口「投递Agent.bat」已停止更新，可自行删除。
-pause
+if not defined SILENT (
+  echo.
+  echo 双击桌面「%ENTRY%」即可打开控制台：选择平台 → 设置数量 → 开始投递。
+  REM 旧的中文名入口不自动删除 —— 删桌面文件属于用户自己的决定，脚本不越权代劳。
+  if exist "%DESKTOP%\投递Agent.lnk" echo 提示：桌面旧入口「投递Agent.lnk」已停止更新，可自行删除。
+  if exist "%DESKTOP%\投递Agent.bat" echo 提示：桌面旧入口「投递Agent.bat」已停止更新，可自行删除。
+  pause
+)

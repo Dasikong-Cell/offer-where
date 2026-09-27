@@ -98,6 +98,42 @@ export function buildStructuredTextEval(opts: SerializeEvalOptions = {}): string
 }
 
 /**
+ * 生成 JD 结构化提取脚本（技术债 D1 的落地封装，供 apply 脚本与各采集器复用）。
+ *
+ * 与 `buildSerializeEval` 的区别：专门面向「抓 JD 入库」这一诉求，返回值里额外带
+ * `bodyLen`（正文 innerText 长度，用于判定是否真的拿到了详情页）与 `docTitle`
+ * （辅助定位公司/职位），且 `html` 字段即为**保留标签与关键 class 的结构化 HTML**。
+ *
+ * 调用方拿到结果后，务必用 `serializeToStructuredText(html)` 转成结构化纯文本再入库，
+ * 这样 `jobs.jd` 既能喂 LLM 又能展示、还能本地匹配，且**保留「岗位职责/任职要求」分段**
+ * （而非 `innerText` 那样把整块正文压成一段、模型只能靠语序猜）。
+ *
+ * 返回形状与 `parseSerializeResult` 兼容（`found` + `html`），可直接复用其解析。
+ */
+export function buildJdExtractEval(opts: SerializeEvalOptions = {}): string {
+  const maxLen = opts.maxLen ?? 8000;
+  const sels = opts.selectors && opts.selectors.length ? opts.selectors : (opts.selector ? [opts.selector] : []);
+  return `(function(){
+    ${SERIALIZE_DOM_SRC}
+    var sels = ${JSON.stringify(sels)};
+    var el = null;
+    for (var i = 0; i < sels.length; i++) {
+      try { el = document.querySelector(sels[i]); } catch (e) { el = null; }
+      if (el) break;
+    }
+    if (!el && sels.length) return JSON.stringify({ found: false, html: '', bodyLen: 0, docTitle: document.title || '' });
+    if (!el) el = document.body;
+    var html = __tidyDoc(__serializeClean(el, 0));
+    return JSON.stringify({
+      found: true,
+      html: html.slice(0, ${maxLen}),
+      bodyLen: (document.body ? (document.body.innerText || '').length : 0),
+      docTitle: document.title || ''
+    });
+  })()`;
+}
+
+/**
  * 从序列化结果里解析出 `{ found, html }`；容错（CDP 可能返回字符串化的 JSON）。
  */
 export function parseSerializeResult(raw: unknown): { found: boolean; html: string } {

@@ -15,6 +15,7 @@
  */
 import { upsertJob } from '../server/db.ts';
 import { makeEx } from './lib/browser.ts';
+import { SERIALIZE_DOM_SRC, serializeToStructuredText } from '../server/services/domSerialize.ts';
 
 const ex = makeEx('yupao');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -52,16 +53,19 @@ const LIST_EVAL = `(function(){
 
 /** 详情页：职位/薪资/公司/JD */
 const DETAIL_EVAL = `(function(){
+  ${SERIALIZE_DOM_SRC}
   var t=(document.body&&document.body.innerText)||'';
   var flat=t.replace(/\\s+/g,' ');
+  // 技术债 D1 修复：JD 用结构化序列化（保留标签与关键 class），分段不丢失；Node 侧再转纯文本。
+  var bodyHtml=__tidyDoc(__serializeClean(document.body,0));
   var h1=document.querySelector('h1');
   var pos=h1?h1.innerText.trim().slice(0,60):'';
   var sal=(flat.match(/\\d{3,6}-\\d{3,6}元\\/(天|月)/)||[])[1]?flat.match(/\\d{3,6}-\\d{3,6}元\\/(天|月)/)[0]:'';
   var co=(flat.match(/公司名称[：:]\\s*([^\\s·]{2,30})/)||[])[1]||'';
   if(!co){ var m=flat.match(/([\\u4e00-\\u9fa5A-Za-z0-9()（）]{4,30}(?:有限公司|有限责任公司|集团|科技|研究院|事务所))/); co=m?m[1]:''; }
-  var start=flat.indexOf('职位详情');
-  var jd=start>=0?flat.slice(start, start+2500):flat.slice(0,2500);
-  return JSON.stringify({position:pos, salary:sal, company:co, jd:jd, textLen:flat.length,
+  var start=bodyHtml.indexOf('职位详情');
+  var jdHtml=start>=0?bodyHtml.slice(start, start+6000):bodyHtml.slice(0,4000);
+  return JSON.stringify({position:pos, salary:sal, company:co, jdHtml:jdHtml, textLen:flat.length,
     loginWall:/(点击登录|请登录)/.test(t)});
 })()`;
 
@@ -103,7 +107,7 @@ const DETAIL_EVAL = `(function(){
             position: det.position || item.position,
             company: det.company || null,
             salary: det.salary || null,
-            jd: (det.jd || '').slice(0, 6000) || null,
+            jd: serializeToStructuredText(det.jdHtml || '').slice(0, 6000) || null,
           };
           console.log(`[${i + 1}/${target.length}] ✅ ${String(item.position).slice(0, 22)} | ${String(item.company || '').slice(0, 16)} | ${item.salary || '-'} | JD ${String(item.jd || '').length}字`);
         }

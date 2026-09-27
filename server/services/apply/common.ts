@@ -13,6 +13,18 @@ import type { ApplyLog, ApplyProfile } from './types.js';
 
 export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+/**
+ * 拟人化等待：在 [min, max] 区间内随机抖动，避免固定的 `sleep(N)` 暴露机械节奏
+ * （自动化浏览器最容易被识别的特征之一）。用于投递动作之间的等待。
+ * 单参数形式 `humanDelay(base)` 视为 [base*0.75, base*1.25]（±25%）。
+ */
+export function humanDelay(minOrBase: number, max?: number): Promise<void> {
+  const min = max === undefined ? Math.round(minOrBase * 0.75) : minOrBase;
+  const hi = max === undefined ? Math.round(minOrBase * 1.25) : max;
+  const ms = Math.round(min + Math.random() * Math.max(0, hi - min));
+  return sleep(ms);
+}
+
 // 本项目 package.json 为 "type": "module"，tsx 下 __dirname 不会被注入。
 // 统一用 import.meta.url 推导模块目录（server/services/apply/ → 项目根）。
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));

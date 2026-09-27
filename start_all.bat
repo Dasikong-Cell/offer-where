@@ -3,6 +3,13 @@ chcp 65001 >nul
 call "%~dp0setenv.bat"
 if errorlevel 1 exit /b 1
 
+REM 首次运行安装引导：未安装（data/.installed 不存在）则弹出「安装」对话框，
+REM 在桌面建入口并写标记；之后每次运行都跳过，不再打扰。
+REM data/ 不进包，故每个收件人解压后首次双击必弹一次。
+if not exist "%~dp0data\.installed" (
+  call "%~dp0install_first_run.bat"
+)
+
 echo ============================================
 echo   One-click launch: per-platform CDP Chrome + backend
 echo   Each platform opens its OWN Chrome window (Zhideya-style)

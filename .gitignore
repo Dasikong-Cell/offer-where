@@ -5,6 +5,7 @@ node_modules/
 
 # ── 构建产物 ──────────────────────────────────────────
 dist/
+dist-app/
 build/
 *.tsbuildinfo
 tsconfig.node.tsbuildinfo

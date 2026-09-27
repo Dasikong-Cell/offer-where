@@ -169,7 +169,10 @@ function __findEl(opts){
  *  - 强制 navigator.webdriver = false（配合启动参数 AutomationControlled 双保险）
  *  - 移除常见自动化全局标记（__nightmare / __puppeteer_* 等）
  *  - 补全 window.chrome.runtime 桩，避免部分站点据此判定为非真实浏览器
- * 注意：刻意不伪造 navigator.plugins / languages（伪造错误结构反而更可疑）。
+ *  - 补全 Client Hints / 语言 / 通知权限 等真实 Chrome 才有的指纹，与 Playwright 路径（browser.ts）
+ *    对齐 —— 这些缺口会让 check_stealth 标 WARN/BAD，被竞品识别为自动化浏览器。
+ *    其中 plugins / mimeTypes 只在为空时补一个结构正确的桩（真实 Chrome 至少含 PDF Viewer），
+ *    避免伪造错误结构反而更可疑。
  */
 const STEALTH_SRC = `
 (function () {
@@ -202,6 +205,78 @@ const STEALTH_SRC = `
         getManifest: function () { return {}; },
         getURL: function () { return ''; }
       };
+    }
+  } catch (e) {}
+  // ── 以下与 Playwright 路径（browser.ts addInitScript）对齐，补齐真实 Chrome 指纹 ──
+  try {
+    // navigator.languages：真实中文 Chrome 为 ['zh-CN','zh','en']；
+    // 自动化 Chrome 常只剩 ['en-US']，与 UA / Accept-Language 不一致，易被识别。
+    Object.defineProperty(navigator, 'languages', {
+      get: function () { return ['zh-CN', 'zh', 'en']; },
+      configurable: true
+    });
+  } catch (e) {}
+  try {
+    // navigator.userAgentData（Client Hints）：真实 Chrome 151 携带 brands；
+    // 缺失会被判定为非真实浏览器。
+    Object.defineProperty(navigator, 'userAgentData', {
+      get: function () {
+        return {
+          brands: [
+            { brand: 'Google Chrome', version: '151' },
+            { brand: 'Chromium', version: '151' }
+          ],
+          mobile: false,
+          platform: 'Windows'
+        };
+      },
+      configurable: true
+    });
+  } catch (e) {}
+  try {
+    // permissions.query 通知泄漏：自动化浏览器对 notifications 的查询行为与真实浏览器不同。
+    // 对齐为返回当前 Notification 权限状态（真实 Chrome 行为）。
+    var origQuery = (window.navigator.permissions && window.navigator.permissions.query)
+      ? window.navigator.permissions.query.bind(window.navigator.permissions)
+      : null;
+    if (origQuery) {
+      window.navigator.permissions.query = function (p) {
+        if (p && p.name === 'notifications') {
+          var st = (typeof Notification !== 'undefined' && Notification.permission) ? Notification.permission : 'prompt';
+          return Promise.resolve({ state: st, onchange: null });
+        }
+        return origQuery(p);
+      };
+    }
+  } catch (e) {}
+  try {
+    // plugins / mimeTypes：真实 Chrome 至少含 PDF Viewer（非空）；自动化 Chrome 常为空。
+    // 仅当为空时补一个结构正确的桩，避免伪造错误结构。
+    if (navigator.plugins && navigator.plugins.length === 0) {
+      var fakeMime = {
+        type: 'application/pdf',
+        description: 'Portable Document Format',
+        suffixes: 'pdf',
+        enabledPlugin: null
+      };
+      var fakePlugin = {
+        name: 'PDF Viewer',
+        description: 'Portable Document Format',
+        filename: 'internal-pdf-viewer',
+        length: 1,
+        item: function (i) { return i === 0 ? fakeMime : null; },
+        namedItem: function (n) { return n === 'application/pdf' ? fakeMime : null; }
+      };
+      fakeMime.enabledPlugin = fakePlugin;
+      var pluginsArr = [fakePlugin];
+      pluginsArr.item = function (i) { return pluginsArr[i] || null; };
+      pluginsArr.namedItem = function (n) { return n === 'application/pdf' ? fakePlugin : null; };
+      pluginsArr.refresh = function () {};
+      Object.defineProperty(navigator, 'plugins', { get: function () { return pluginsArr; }, configurable: true });
+      var mimeArr = [fakeMime];
+      mimeArr.item = function (i) { return mimeArr[i] || null; };
+      mimeArr.namedItem = function (n) { return n === 'application/pdf' ? fakeMime : null; };
+      Object.defineProperty(navigator, 'mimeTypes', { get: function () { return mimeArr; }, configurable: true });
     }
   } catch (e) {}
 })();

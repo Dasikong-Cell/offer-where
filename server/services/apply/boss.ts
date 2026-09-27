@@ -7,9 +7,10 @@
  * 脚本状态驱动、可重复执行：登录态由持久化上下文保留，遇到滑块返回 need_captcha，
  * 用户在打开的浏览器里人工过一下后再次调用即可继续。
  */
-import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode, resolveResumePath } from './common.js';
+import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, humanDelay, loginViaEmailCode, resolveResumePath } from './common.js';
 import type { ApplyInput, ApplyResult } from './types.js';
 import { detectRiskSignal, riskStatusOf } from '../riskSignals.js';
+import { buildJdExtractEval, parseSerializeResult, serializeToStructuredText } from '../domSerialize.js';
 import * as db from '../../db.js';
 
 const LOGIN_URL = 'https://www.zhipin.com/web/user/?ka=header-login';
@@ -22,24 +23,31 @@ function needsLogin(url: string, text: string): boolean {
 
 /**
  * 从 BOSS 岗位详情页抓取 JD 文本（职位描述）。
- * BOSS 搜索卡片不含 JD，只有进到 JD 页才有完整职位描述；多选择器兜底 + 正文「职位描述」截取，
+ * BOSS 搜索卡片不含 JD，只有进到 JD 页才有完整职位描述。
+ *
+ * ⚠️ 技术债 D1 修复：不再用 `document.body.innerText` 把整块正文压成一段（那样会丢失
+ * 「岗位职责 / 任职要求 / 福利」的分段结构，喂给 LLM 做匹配判定时模型只能靠语序猜）。
+ * 改用 `domSerialize.ts` 的结构化序列化：保留标签与关键 class，再 `serializeToStructuredText`
+ * 转成「小标题带 `##` 前缀、段落边界保留」的纯文本入库。多选择器兜底 + 整页兜底。
  * 失败返回空串（调用方忽略即可，不影响投递）。
  */
 async function extractBossJd(platform: string, logs: ApplyLogger): Promise<string> {
-  const script = `(() => {
-    const pick = (sels) => { for (const s of sels) { const el = document.querySelector(s); if (el && el.innerText && el.innerText.trim().length > 20) return el.innerText.trim(); } return ''; };
-    const sel = ['#job-description', '.job-description', '.job-detail .text', '.job-sec .text', '.job-detail', 'div[class*="job-description"]', 'div[class*="description"]', '.text'];
-    let jd = pick(sel);
-    if (!jd) {
-      const body = document.body ? (document.body.innerText || '') : '';
-      const i = body.indexOf('职位描述');
-      jd = i >= 0 ? body.slice(i + 4) : body.slice(0, 2000);
-    }
-    return (jd || '').replace(/\\s+/g, ' ').slice(0, 4000);
-  })()`;
+  const sel = ['#job-description', '.job-description', '.job-detail .text', '.job-sec .text', '.job-detail', 'div[class*="job-description"]', 'div[class*="description"]', '.text'];
   try {
-    const r = await bexec(platform, 'eval', { script }, logs, '提取 JD 文本');
-    return typeof r.data === 'string' ? r.data : '';
+    // 首选：命中 JD 容器选择器 → 结构化序列化（保留分段）
+    let evalStr = buildJdExtractEval({ selectors: sel, maxLen: 6000 });
+    let r = await bexec(platform, 'eval', { script: evalStr }, logs, '提取 JD 结构化文本');
+    let p = parseSerializeResult(r.data);
+    if (!p.found || !p.html) {
+      // 兜底：整页结构化序列化（仍非裸 innerText，结构保留）
+      evalStr = buildJdExtractEval({ maxLen: 6000 });
+      r = await bexec(platform, 'eval', { script: evalStr }, logs, '兜底：整页结构化序列化');
+      p = parseSerializeResult(r.data);
+    }
+    if (!p.html) return '';
+    // serializeToStructuredText 已保留换行与 `##` 小标题，切勿再 flatten 空白（会丢结构）
+    const jd = serializeToStructuredText(p.html);
+    return jd.length > 6000 ? jd.slice(0, 6000) : jd;
   } catch (e: any) {
     logs.step('JD 补全', false, `抓取失败（忽略）：${e?.message}`);
     return '';
@@ -189,7 +197,7 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
         }
         return { platform, status: 'need_manual', message: '未找到「立即沟通/投简历」按钮，可能页面结构变化或需先完善在线简历', logs: logs.logs, company, position, screenshot: shot };
       }
-      await sleep(2500);
+      await humanDelay(2500);
 
       // 3.4) 二次确认弹窗：若与该 Boss 此前已沟通过，点「继续沟通」后 BOSS 会弹
       //      「温馨提示：是否就新职位<岗位名>继续沟通？取消 / 沟通新职位」。
@@ -197,7 +205,7 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       //      （原生 JS 对话框由 cdpDriver 统一自动确认；此处专门处理这种 React 弹窗）
       if (await dismissBossSwitchJobModal(platform, logs)) {
         logs.step('更换沟通职位', true, '该 Boss 此前已沟通过，已确认就本岗位继续沟通');
-        await sleep(2000);
+        await humanDelay(2000);
       }
 
       // 3.5) 点击后检测页面状态：可能进入聊天，也可能被引导到「完善在线简历 / 开通 VIP」页
@@ -213,7 +221,7 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
       if (guidedToResume && !inChat) {
         logs.step('投递引导', false, `点击后进入简历完善/VIP 引导页：${postClickUrl}，尝试直接发送附件简历`);
         const sent = await uploadResumeAttachment(platform, resumePath, logs);
-        await sleep(2500);
+        await humanDelay(2500);
         const afterText = await pageText(platform);
         const afterUrl = await pageUrl(platform);
         const shot = await tryScreenshot(platform);
@@ -255,10 +263,10 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
           const rr = await bexec(platform, 'click', { text: label, timeout: 8000 }, logs, `补点「${label}」`);
           if (rr.ok) break;
         }
-        await sleep(2500);
+        await humanDelay(2500);
         if (await dismissBossSwitchJobModal(platform, logs)) {
           logs.step('更换沟通职位', true, '补点后确认就本岗位继续沟通');
-          await sleep(2000);
+          await humanDelay(2000);
         }
         opened = await chatOpen(6000);
       }
@@ -283,7 +291,7 @@ export async function runBoss(input: ApplyInput): Promise<ApplyResult> {
 
       // 上传附件简历（固定使用默认简历 PDF，无需完善在线简历）
       await uploadResumeAttachment(platform, resumePath, logs);
-      await sleep(2000);
+      await humanDelay(2000);
 
       text = await pageText(platform);
       const finalUrl = await pageUrl(platform);

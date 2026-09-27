@@ -20,6 +20,7 @@
  */
 import { upsertJob } from '../server/db.ts';
 import { makeEx } from './lib/browser.ts';
+import { SERIALIZE_DOM_SRC, serializeToStructuredText } from '../server/services/domSerialize.ts';
 
 const ex = makeEx('chinahr');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -52,7 +53,10 @@ const LIST_EVAL = `(function(){
 
 /** 详情页：职位 / 公司 / 薪资 / 城市 / JD */
 const DETAIL_EVAL = `(function(){
+  ${SERIALIZE_DOM_SRC}
   var d=document; var flat=(d.body?d.body.innerText.replace(/\\s+/g,' '):'');
+  // 技术债 D1 修复：JD 用结构化序列化（保留标签与关键 class），分段不丢失；Node 侧再转纯文本。
+  var bodyHtml=__tidyDoc(__serializeClean(d.body,0));
   var title=d.title||'';
   var pos=(title.match(/【(.+?)招聘】/)||[])[1]||'';
   var h1=d.querySelector('h1'); if(!pos && h1) pos=h1.innerText.trim();
@@ -66,9 +70,9 @@ const DETAIL_EVAL = `(function(){
          || (flat.match(/(工作地点|工作城市|城市|地点|办公地点)[：:]\\s*([\\u4e00-\\u9fa5]{2,8}(?:市|区|县)?)/)||[])[2] || '';
   city=(city||'').replace(/^[^-－\\u4e00-\\u9fa5]+/,'').replace(/[-－].*$/,function(m){return m.length>6?'':m;}).trim().slice(0,20);
   var keys=['职位描述','岗位职责','工作职责','职位职责','岗位要求','任职要求','招聘要求'];
-  var jd=''; for(var i=0;i<keys.length;i++){var idx=flat.indexOf(keys[i]); if(idx>=0){jd=flat.slice(idx,idx+3000);break;}}
-  if(!jd) jd=flat.slice(0,3000);
-  return ({position:pos, company:co, salary:salary, city:city, jd:jd.slice(0,5000), textLen:flat.length});
+  var jdHtml=''; for(var i=0;i<keys.length;i++){var idx=bodyHtml.indexOf(keys[i]); if(idx>=0){jdHtml=bodyHtml.slice(idx,idx+6000);break;}}
+  if(!jdHtml) jdHtml=bodyHtml.slice(0,4000);
+  return ({position:pos, company:co, salary:salary, city:city, jdHtml:jdHtml.slice(0,8000), textLen:flat.length});
 })()`;
 
 (async () => {
@@ -102,7 +106,7 @@ const DETAIL_EVAL = `(function(){
           position: det.position || null,
           company: det.company || null,
           salary: det.salary || null,
-          jd: (det.jd || '').slice(0, 6000) || null,
+          jd: serializeToStructuredText(det.jdHtml || '').slice(0, 6000) || null,
         };
         const s = `${(item.position || '')} ${(item.jd || '')}`.toLowerCase();
         if (EXCLUDE.some((e) => s.includes(e)) && !KEEP.some((k) => s.includes(k))) {
