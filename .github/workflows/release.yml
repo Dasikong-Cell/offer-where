@@ -64,6 +64,27 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # denylist 住在 data/ 里，而 data/ 被 gitignore ⇒ runner 上永远不存在。
+      # 结果就是「保护产物的那道门」恰好在「构建公开产物的那台机器上」静默失效
+      # （2026-09-27 读 runner 自己的日志才发现：`PII check: SKIPPED`）。
+      # 从仓库 secret 落到磁盘，并置 REQUIRE_PII_SCAN=1 —— 之后缺 denylist 即构建失败，
+      # 而不是安静地跳过。secret 未配置时只给 warning 并维持旧行为，不会突然把流水线打红。
+      - name: 落 PII denylist（来自仓库 secret）
+        shell: pwsh
+        env:
+          PII_DENYLIST: ${{ secrets.PII_DENYLIST }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PII_DENYLIST)) {
+            Write-Host "::warning::repository secret PII_DENYLIST is not set -- this release will NOT be scanned for personal data"
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path data | Out-Null
+          # WriteAllText defaults to UTF-8 without BOM, which is what pack.ps1 (ReadAllLines)
+          # and scripts/pii_guard.ts (readFileSync utf8) both expect.
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'data/.pii_denylist.txt'), $env:PII_DENYLIST)
+          "REQUIRE_PII_SCAN=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "PII denylist materialised; the pack step now fails closed if the scan cannot run"
+
       - name: 类型检查 + 控制台语法门禁
         run: npm run verify
 

@@ -55,6 +55,22 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # 与 release.yml 同一理由：denylist 在 data/ 下、data/ 被 gitignore ⇒ runner 上不存在，
+      # 于是 pack.ps1 里的 PII 护栏会静默跳过。这里补上，让冒烟跑的那次打包也真被扫。
+      - name: 落 PII denylist（来自仓库 secret）
+        shell: pwsh
+        env:
+          PII_DENYLIST: ${{ secrets.PII_DENYLIST }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PII_DENYLIST)) {
+            Write-Host "::warning::repository secret PII_DENYLIST is not set -- the packaged artifact will NOT be scanned for personal data"
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path data | Out-Null
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'data/.pii_denylist.txt'), $env:PII_DENYLIST)
+          "REQUIRE_PII_SCAN=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "PII denylist materialised; the pack step now fails closed if the scan cannot run"
+
       # 仓库里 node/ 被 gitignore（只在打包时需要），CI 里用 runner 自带的 node 顶上
       - name: 准备自带 Node 运行时
         shell: pwsh

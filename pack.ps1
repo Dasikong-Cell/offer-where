@@ -589,12 +589,28 @@ Write-Host ("      portability: " + $scanSet.Count + " shipped text files scanne
 # person's name in a comment or an injected string is syntactically perfect.
 # The tokens are read from data/.pii_denylist.txt: data/ is gitignored AND excluded from
 # the package, so this guard never bakes the very strings it looks for into the repo.
-# Present => fail closed. Absent (CI, or a machine that never held the resume) => skip,
-# same posture as the scripts/-tracking check above.
+# Present => fail closed. Absent => skipped, same posture as the scripts/-tracking check.
+#
+# The skip is the dangerous half. data/ is gitignored, so on CI this file NEVER exists --
+# which means the guard that exists to protect the artifact was silently inert in the one
+# place the public artifact is built (found 2026-09-27, by reading the runner's own log:
+# "PII check: SKIPPED"). A skipped guard that prints one calm line is indistinguishable
+# from a guard that passed, which is the recurring failure mode of this project.
+# Fix: the workflow materialises the denylist from the PII_DENYLIST repo secret and sets
+# REQUIRE_PII_SCAN=1. With that flag set, a missing denylist is fatal instead of silent --
+# so the check can only be skipped on a machine where no artifact is being published.
 # Kept pure ASCII on purpose: a contract test asserts this file has 0 non-ASCII bytes.
 $piiFile = Join-Path $root 'data/.pii_denylist.txt'
+$piiRequired = ($env:REQUIRE_PII_SCAN -eq '1')
 if (-not (Test-Path -LiteralPath $piiFile -PathType Leaf)) {
+  if ($piiRequired) {
+    Write-Host "::error::REQUIRE_PII_SCAN=1 but data/.pii_denylist.txt is absent -- refusing to build an unscanned package"
+    Write-Host "[error] the PII guard cannot run, so this artifact would ship unchecked."
+    Write-Host "[error] fix: set the PII_DENYLIST repository secret (one deny token per line)."
+    exit 1
+  }
   Write-Host "      PII check: SKIPPED (data/.pii_denylist.txt not present)"
+  Write-Host "      [warn] the package about to be built was NOT scanned for personal data."
 } else {
   $piiTokens = @()
   foreach ($line in [System.IO.File]::ReadAllLines($piiFile)) {

@@ -121,15 +121,35 @@ function failClosed(msg: string, hint: string): number {
   return 1;
 }
 
+/**
+ * 跳过路径。默认返回 0（放行），但 **REQUIRE_PII_SCAN=1 时改为 fail-closed**。
+ *
+ * 为什么：denylist 在 data/ 下、而 data/ 被 gitignore ⇒ 在 CI 上这个文件永远不存在，
+ * 于是「保护产物的那道门」恰好在「构建公开产物的那台机器上」静默失效（2026-09-27 读
+ * runner 自己的日志才发现：`PII check: SKIPPED`）。打印一行平静的 SKIPPED 与「检查通过」
+ * 在日志上无法区分 —— 这正是本项目反复踩的那个坑（见 skill 12.5「绿得比实际更绿」）。
+ * 配了 REQUIRE_PII_SCAN=1（由 workflow 在写入 denylist 之后设置）后，跳过即致命，
+ * 于是这道门只可能在「不发布任何产物」的机器上被跳过。
+ */
+function skip(msg: string): number {
+  if (process.env.REQUIRE_PII_SCAN === '1') {
+    console.log('❌ PII guard: ' + msg);
+    console.log('   REQUIRE_PII_SCAN=1 → 拒绝在未扫描的情况下放行。');
+    console.log('   修法：配置仓库 secret PII_DENYLIST（每行一个 deny token），由 workflow 落到 data/.pii_denylist.txt。');
+    return 1;
+  }
+  console.log('PII guard: SKIPPED (' + msg + ')');
+  console.log('⚠️  本次**没有**做 PII 校验 —— 若这是发布前的检查，请设 REQUIRE_PII_SCAN=1 让它变成致命。');
+  return 0;
+}
+
 function main(): number {
   if (!fs.existsSync(DENY_FILE)) {
-    console.log('PII guard: SKIPPED (data/.pii_denylist.txt not present)');
-    return 0;
+    return skip('data/.pii_denylist.txt not present');
   }
   const tokens = parseDenyList(fs.readFileSync(DENY_FILE, 'utf8'));
   if (!tokens.length) {
-    console.log('PII guard: SKIPPED (data/.pii_denylist.txt has no usable tokens)');
-    return 0;
+    return skip('data/.pii_denylist.txt has no usable tokens');
   }
 
   // 文件列表必须由调用方给出：本环境下 node 自己 spawn 一律 EBUSY（见文件头）。

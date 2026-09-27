@@ -1426,6 +1426,43 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   // 无人值守开关：这是能对自解压包做端到端验证的前提（否则 MessageBox 会挡住自动化）。
   check('stub 支持 --extract-only 无人值守分支', sfxC.includes('--extract-only'),
     '没有它就只能靠人手点对话框来验收，等于没验收');
+
+  // ── ⑥ PII 护栏必须在「构建发布产物的那条流水线」上真的跑起来 ──────────
+  // 事故形状（2026-09-27 读 runner 自己的日志才发现）：denylist 住在 data/ 下，
+  // 而 data/ 被 gitignore ⇒ runner 上永远不存在 ⇒ pack.ps1 打印一行平静的
+  // "PII check: SKIPPED" 然后照常打包发布。于是「保护产物的那道门」恰好在
+  // 「构建公开产物的那台机器上」静默失效，而日志上它与「检查通过」无法区分 ——
+  // 与本项目 12.5 那条「绿得比实际更绿」是同一个失败模式。
+  // 修法：workflow 从仓库 secret 落盘 denylist + 置 REQUIRE_PII_SCAN=1；
+  // 两个消费者都必须把「缺 denylist」当致命错误。以下把这条链路钉住。
+  //
+  // ⚠️ 必须**先剥注释再匹配**。第一版这里直接用 includes()，阳性对照当场证明它没牙：
+  // 上面这段说明文字里就写着 REQUIRE_PII_SCAN=1，所以把真正的 YAML 行改掉之后断言照样通过
+  // —— 断言被自己的注释满足了。与 pack.ps1 那条「引用守卫抓到自己的注释」是同一个坑。
+  const stripHash = (s: string) => s.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
+  const stripSlash = (s: string) => s.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
+
+  const packCode = stripHash(readText('pack.ps1'));
+  check('pack.ps1 认 REQUIRE_PII_SCAN 并在缺 denylist 时拒绝打包',
+    packCode.includes('$env:REQUIRE_PII_SCAN') &&
+      /REQUIRE_PII_SCAN[^\n]*\n(?:[^\n]*\n){0,6}[^\n]*exit 1/.test(packCode),
+    '没有这条，发布流水线会安静地发出未经 PII 扫描的包');
+  const guardCode = stripSlash(readText('scripts/pii_guard.ts'));
+  check('scripts/pii_guard.ts 认 REQUIRE_PII_SCAN（跳过路径改为 fail-closed）',
+    /process\.env\.REQUIRE_PII_SCAN\s*===\s*'1'/.test(guardCode),
+    'pre-push 的第 3 道门同样会在无 denylist 的机器上静默放行');
+  for (const wf of ['release.yml', 'ci.yml']) {
+    const y = stripHash(readText(`.github/workflows/${wf}`));
+    check(`${wf}: 从仓库 secret 落盘 PII denylist`,
+      y.includes('secrets.PII_DENYLIST') && y.includes('pii_denylist.txt'),
+      '不落盘则护栏在 runner 上恒为跳过');
+    check(`${wf}: 置 REQUIRE_PII_SCAN=1 让跳过变成致命`,
+      y.includes('"REQUIRE_PII_SCAN=1" | Out-File'),
+      '只落盘不置旗标，护栏仍可被静默跳过');
+  }
+  check('denylist 永不入库（data/ 被 gitignore）',
+    readText('.gitignore').split(/\r?\n/).some((l) => l.trim() === 'data/'),
+    'denylist 里就是它要防的那些字符串，入库等于二次泄露');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
