@@ -1456,10 +1456,20 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     check(`${wf}: 从仓库 secret 落盘 PII denylist`,
       y.includes('secrets.PII_DENYLIST') && y.includes('pii_denylist.txt'),
       '不落盘则护栏在 runner 上恒为跳过');
-    check(`${wf}: 置 REQUIRE_PII_SCAN=1 让跳过变成致命`,
-      y.includes('"REQUIRE_PII_SCAN=1" | Out-File'),
-      '只落盘不置旗标，护栏仍可被静默跳过');
+    // 开关必须来自**仓库 variable**：若它与 secret 同源，删掉 secret 就等于同时关掉了开关，
+    // 于是「未扫描的包」又变成静默可发的（这正是这道门原本失效的方式）。
+    check(`${wf}: 开关来自仓库 variable（不跟随 secret 消失）`,
+      y.includes('vars.REQUIRE_PII_SCAN'),
+      '开关与 secret 同源 ⇒ 删掉 secret 就静默退回「跳过扫描」');
+    check(`${wf}: 缺 secret 时**提前硬失败**（不是只警告）`,
+      /PII_DENYLIST secret is not set[^\n]*\n(?:[^\n]*\n){0,3}[^\n]*exit 1/.test(y),
+      '只警告不失败 ⇒ 仍能在无人察觉的情况下发出未扫描的包');
   }
+  check('ci.yml: PR 事件不强制（fork 拿不到 secret，强制会把陌生人的 CI 打红）',
+    /github\.event_name == 'pull_request' && '0' \|\| vars\.REQUIRE_PII_SCAN/.test(
+      stripHash(readText('.github/workflows/ci.yml')),
+    ),
+    '缺这条会让来自 fork 的 PR 恒红，而 PR 产物本来也不对外发布');
   check('denylist 永不入库（data/ 被 gitignore）',
     readText('.gitignore').split(/\r?\n/).some((l) => l.trim() === 'data/'),
     'denylist 里就是它要防的那些字符串，入库等于二次泄露');

@@ -35,6 +35,11 @@ jobs:
   release:
     name: 打包并发布
     runs-on: windows-latest
+    # 开关来自**仓库 variable**，不是 secret —— 这是刻意的：如果它跟着 secret 一起走，
+    # 那么「删掉 PII_DENYLIST」就会静默退回「跳过扫描」，而这一步本该是最后一道防线。
+    # 本 workflow 不带 pull_request 触发，所以不需要 ci.yml 里那个 fork 例外。
+    env:
+      REQUIRE_PII_SCAN: ${{ vars.REQUIRE_PII_SCAN }}
     steps:
       - uses: actions/checkout@v5
 
@@ -75,6 +80,11 @@ jobs:
           PII_DENYLIST: ${{ secrets.PII_DENYLIST }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:PII_DENYLIST)) {
+            if ($env:REQUIRE_PII_SCAN -eq '1') {
+              Write-Host "::error::REQUIRE_PII_SCAN=1 but the PII_DENYLIST secret is not set -- refusing to build an unscanned artifact"
+              Write-Host "[error] fix: add the PII_DENYLIST repository secret (one deny token per line)."
+              exit 1
+            }
             Write-Host "::warning::repository secret PII_DENYLIST is not set -- this release will NOT be scanned for personal data"
             exit 0
           }
@@ -82,7 +92,6 @@ jobs:
           # WriteAllText defaults to UTF-8 without BOM, which is what pack.ps1 (ReadAllLines)
           # and scripts/pii_guard.ts (readFileSync utf8) both expect.
           [System.IO.File]::WriteAllText((Join-Path $PWD 'data/.pii_denylist.txt'), $env:PII_DENYLIST)
-          "REQUIRE_PII_SCAN=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "PII denylist materialised; the pack step now fails closed if the scan cannot run"
 
       - name: 类型检查 + 控制台语法门禁

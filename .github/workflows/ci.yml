@@ -44,6 +44,12 @@ jobs:
   package-smoke:
     name: Windows 打包 + 解压即用冒烟
     runs-on: windows-latest
+    # 开关来自**仓库 variable**，不是 secret —— 这是刻意的：如果它跟着 secret 一起走，
+    # 那么「删掉 PII_DENYLIST」就会静默退回「跳过扫描」，而这一步本该是最后一道防线。
+    # PR 一律置 '0'：来自 fork 的 PR 拿不到 secret（GitHub 不给 fork 传 secrets），
+    # 强制会让陌生人的 CI 变红；而 PR 产物本来也不对外发布。
+    env:
+      REQUIRE_PII_SCAN: ${{ github.event_name == 'pull_request' && '0' || vars.REQUIRE_PII_SCAN }}
     steps:
       - uses: actions/checkout@v5
 
@@ -63,12 +69,16 @@ jobs:
           PII_DENYLIST: ${{ secrets.PII_DENYLIST }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:PII_DENYLIST)) {
+            if ($env:REQUIRE_PII_SCAN -eq '1') {
+              Write-Host "::error::REQUIRE_PII_SCAN=1 but the PII_DENYLIST secret is not set -- refusing to build an unscanned artifact"
+              Write-Host "[error] fix: add the PII_DENYLIST repository secret (one deny token per line)."
+              exit 1
+            }
             Write-Host "::warning::repository secret PII_DENYLIST is not set -- the packaged artifact will NOT be scanned for personal data"
             exit 0
           }
           New-Item -ItemType Directory -Force -Path data | Out-Null
           [System.IO.File]::WriteAllText((Join-Path $PWD 'data/.pii_denylist.txt'), $env:PII_DENYLIST)
-          "REQUIRE_PII_SCAN=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "PII denylist materialised; the pack step now fails closed if the scan cannot run"
 
       # 仓库里 node/ 被 gitignore（只在打包时需要），CI 里用 runner 自带的 node 顶上
