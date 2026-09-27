@@ -61,7 +61,7 @@ const CARD_EVAL = `(function(){
     if(!txt) return;
     var m=href.match(/[?&]property=([^&]+)/);
     var prop={}; try{ prop=JSON.parse(decodeURIComponent(m[1])); }catch(e){}
-    // 城市：卡片正文形如 "兰州无需经验..." / "苏州-苏州工业园区..." / "昆明-五华区..."
+    // 城市：卡片正文形如 "兰州无需经验..." / "苏州-苏州工业园区..." / "杭州-西湖区..."
     var cm=txt.match(/([\\u4e00-\\u9fa5]{2,8}(?:市|区|县))\\s*(无需经验|在校生|1年|2年|3年|本科|大专|硕士|高中)/);
     var city=cm?cm[1]:(txt.match(/([\\u4e00-\\u9fa5]{2,8}(?:市|区|县))/)||[])[1]||'';
     out.push({href:base, jobTitle:prop.jobTitle||'', companyName:prop.companyName||'', salary:prop.monthSalary||'', city:city, txt:txt});

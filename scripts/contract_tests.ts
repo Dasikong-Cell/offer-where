@@ -50,6 +50,7 @@ import {
   humanizedGap,
 } from '../server/services/apply/batch.js';
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
+import { parseDenyList, parseFileList, findDenyHits, maskToken } from './pii_guard.js';
 
 let pass = 0, fail = 0;
 const fails: string[] = [];
@@ -1094,6 +1095,63 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   check('搜索框不再预填/回显选中值（cityQuery 无回显分支）',
     /function cityQuery\(\)/.test(html) && !/v === CITY_SEL\s*\)\s*return ''/.test(html),
     'cityQuery 里若出现「等于 CITY_SEL 就按空处理」，就是那个隐藏模式回来了');
+}
+
+// ── PII 守卫：范围必须覆盖「git 跟踪但**不进包**」的文件（2026-09-27）──────────
+// 起因：pack.ps1 里那份 PII 守卫只扫「会进分发包的文件」（$scanSet 来自 tar 成员表），
+// 于是 git 跟踪但不进包的 docs/ 成了**永久盲区**。实测后果：c09b6e5 号称清理 PII，
+// 实际只把 docs/REFERENCE_gagajob.md 改名为 REFERENCE_competitor.md，第 30 行转录的
+// 「学校 + 出生年月 + 籍贯到区」原样留着并继续公开可见——而那次打包检查是**全绿**的。
+// 这里把四件事变成机械断言：①匹配器真的会命中（正/反/二进制各一次）；②输出不泄露明文；
+// ③pre-push 必须真的调用它，且走 stdin 喂列表；④它不能被排除出发货集。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+  // ① 匹配器。用中日韩字符，顺带证明是按 UTF-8 字节比对的（而非字符串包含）。
+  const token = '张某某';
+  const hit = findDenyHits([token], [{ rel: 'a.ts', buf: Buffer.from(`前缀${token}后缀`, 'utf8') }]);
+  const miss = findDenyHits([token], [{ rel: 'b.ts', buf: Buffer.from('完全无关的内容', 'utf8') }]);
+  check('PII 守卫命中含 deny 项的文件', hit.length === 1 && hit[0].rel === 'a.ts');
+  check('PII 守卫不误报无关文件', miss.length === 0);
+  // 二进制里烘进的字符串同样是泄露（exe / zip 都算），必须能命中
+  const bin = findDenyHits([token], [{
+    rel: 'x.exe',
+    buf: Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(token, 'utf8'), Buffer.from([0])]),
+  }]);
+  check('PII 守卫在二进制内容里同样能命中', bin.length === 1);
+
+  // ② 输出掩码：CI 日志本身不能变成新的泄露面
+  const masked = maskToken(token);
+  check('PII 守卫的命中输出不含明文', !masked.includes(token) && masked.includes(`len=${token.length}`));
+
+  // ③ 词表 / 文件列表解析
+  check('PII 词表解析跳过空行与 # 注释', parseDenyList('# 说明\n\n  张某某  \n').join('|') === '张某某');
+  // 只剥 \r，**不 trim** —— 路径两端的空格是合法的，裁掉会指向另一个文件
+  check('PII 文件列表解析保留路径两端空格',
+    parseFileList('a b.ts\r\nc.ts\n\n').join('|') === 'a b.ts|c.ts');
+
+  // ④ 接线：pre-push 必须真的调它（否则守卫只是个没人跑的文件）
+  const hook = path.join(ROOT, '.githooks', 'pre-push');
+  if (fs.existsSync(hook)) {
+    const src = fs.readFileSync(hook, 'utf8');
+    check('pre-push 钩子调用了 PII 守卫', src.includes('scripts/pii_guard.ts'),
+      '钩子是发布前唯一的闸门；守卫不接进去等于没有');
+    // 必须走管道喂文件列表：实测本环境下 node 内 spawn 任何子进程都 EBUSY
+    // （同一个坑见 scripts/check_console_syntax.ts 顶部），所以枚举权交给 shell。
+    check('pre-push 通过 stdin 喂文件列表给 PII 守卫',
+      /ls-files\s*\|\s*"\$NODE"/.test(src) && src.includes('--stdin'),
+      'node 内 spawn 会 EBUSY ⇒ 必须由 shell 管道喂 git ls-files');
+  }
+
+  // ⑤ 守卫不能被排除出发货集：随包的 contract_tests.ts 会 import 它
+  //    （分发包里 pack.ps1 不存在，所以这条只在源码树里判）
+  const packPath = path.join(ROOT, 'pack.ps1');
+  if (fs.existsSync(packPath)) {
+    const dropBlock = (fs.readFileSync(packPath, 'utf8').match(/\$scriptDrop = @\(([\s\S]*?)\n\)/) || ['', ''])[1];
+    check('pii_guard.ts 未被列入 $scriptDrop（contract_tests 会 import 它）',
+      dropBlock.length > 0 && !dropBlock.includes('pii_guard.ts'),
+      '一进 $scriptDrop，包内 npm test 就会在 import 处崩');
+  }
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
