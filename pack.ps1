@@ -251,7 +251,11 @@ $dropScripts = @(
   'pack.ps1',
   # the native-shell builder: same reason (recipients do not build the app), plus it
   # would expose the author's toolchain layout in a package that ships a built exe.
-  'build_app.ps1'
+  'build_app.ps1',
+  # the SFX builder: it concatenates tools\sfx\build\stub.exe into OfferWhere-Setup.exe,
+  # and `tools\` is not shipped. Keeping it would make the launcher cross-reference guard
+  # fire on paths that only exist in the source tree -- a false alarm for the recipient.
+  'make_sfx.ps1'
 )
 $scripts = Get-ChildItem $root -File -Force |
   Where-Object { @('.bat', '.sh', '.ps1') -contains $_.Extension -and $dropScripts -notcontains $_.Name } |
@@ -648,6 +652,15 @@ $must = @(
   "start_all.bat",
   "start_server.bat",
   "start_platforms.bat",
+  # First-run install guide (added to $must 2026-09-28). start_all.bat does
+  # `call "%~dp0install_first_run.bat"`, and that script IS the whole implementation of
+  # "unzip, then get an Install button". It used to be absent from this list, shipping
+  # only thanks to "all root .bat files minus $dropScripts" -- so blacklisting or
+  # renaming it would keep every gate green while the recipient's Install button
+  # never appears (the only trace being a lib.rs log line saying "script missing").
+  # Presence is pinned here; the reference itself is pinned by the launcher
+  # cross-reference guard below. Both are needed.
+  "install_first_run.bat",
   # Pinned as of 2026-09-26. The desktop-entry helper is ASCII now, and that is what
   # makes this assertion possible at all: tar -tf output is decoded with the console
   # codepage, so a CJK-named entry could not be compared reliably (see the note above
@@ -674,6 +687,118 @@ if ($missing) {
   $missing | ForEach-Object { Write-Host "   - $_" }
   exit 1
 }
+# -- ROOT LAUNCHER CROSS-REFERENCE GUARD (2026-09-28) --------------------------
+# Why this exists: $must can only pin "this file must be in the archive". It cannot pin
+# the REFERENCES between launchers.
+#
+# Three real gaps, all found on 2026-09-28 while checking whether "unzip, then an Install
+# button pops up" was actually achievable:
+#   1) start_all.bat does `call "%~dp0install_first_run.bat"`, but that file was NOT in
+#      $must -- it shipped only because "all root .bat files" minus $dropScripts happened
+#      to include it. Blacklist it (or rename it) and every gate stays green while the
+#      recipient's Install button never appears.
+#   2) create_desktop_shortcut.bat tested the ROOT `%PKG%offer-where.exe`, while the shell
+#      ships at `dist-app\offer-where.exe` (that is what $files/$must deliver). The test was
+#      therefore ALWAYS false: the desktop entry silently fell back to start_all.bat, so the
+#      recipient got the black console + Chrome --app experience and the native shell was
+#      never used once -- with every gate green. This guard turns "wrong path, silent
+#      degradation" into a build failure.
+#   3) install_first_run.bat's reference to create_desktop_shortcut.bat lives inside an
+#      `-EncodedCommand` base64 payload -- plain-text scanning cannot see it. So the
+#      payloads are decoded (UTF-16LE) and scanned as well. base64 is a natural reference
+#      black hole; this closes it.
+#
+# Scope (stated so nobody assumes more): shipped ROOT launchers only, and only references
+# that name a concrete file. `scripts/<name>` style references are covered by the
+# $refs/$danglingInZip guard above. References inside decoded payloads that are not local
+# paths (URLs, registry keys) are out of scope. A payload that fails to decode is skipped
+# AND reported -- never silently ignored.
+$launcherDangling = New-Object System.Collections.Generic.List[string]
+# All three "package root" spellings must be covered: `%~dp0` (own directory), `%PKG%`
+# (used by create_desktop_shortcut / install_first_run), and `%ROOT%` (defined by
+# setenv.bat as `set "ROOT=%~dp0"` and used by start_server.bat to locate
+# node_modules\tsx\dist\cli.mjs). Covering only the first two would miss the third --
+# and `%ROOT%` points at the file whose absence is the most fatal of all.
+$refRootPatterns = @('%~dp0([A-Za-z0-9_\.\-\\/]+)', '%PKG%([A-Za-z0-9_\.\-\\/]+)', '%ROOT%([A-Za-z0-9_\.\-\\/]+)')
+# Bare quoted filenames: used ONLY on decoded payloads (plain text contains echo/help
+# strings that would false-positive).
+$refQuotedPattern = '["'']([A-Za-z0-9_\.\-\\/]+\.(?:bat|cmd|exe|ps1|sh|mjs|cjs|ts|js|json|dll|ico))["'']'
+# Only these extensions count as "naming a concrete file"; anything else (e.g. `%~dp0data`,
+# `%PKG%public`) is a directory and is skipped.
+$refFileExt = '\.(bat|cmd|exe|ps1|sh|mjs|cjs|ts|js|json|dll|ico)$'
+# Comment lines are stripped before scanning. Rationale (learned by hitting it): a comment
+# that DOCUMENTS a past bad path -- e.g. "this used to test the root %PKG%offer-where.exe" --
+# is not a reference, because it is never executed. Scanning it makes the guard fire on its
+# own documentation, and the only way to get green again would be to DELETE the explanation
+# of the bug. That trade is backwards: the explanation is exactly what keeps the bug from
+# coming back. So: strip comments, then scan. Rule is per extension, applied to both the
+# plain-text pass and the decoded-payload pass (a payload is PowerShell, so it uses '#').
+$commentPatterns = @{
+  '.bat' = '^\s*(?:@?rem\b|::)'
+  '.cmd' = '^\s*(?:@?rem\b|::)'
+  '.ps1' = '^\s*#'
+  '.sh'  = '^\s*#'
+}
+function Remove-CommentLines {
+  param([string]$Text, [string]$Ext)
+  $pat = $null
+  if ($commentPatterns.ContainsKey($Ext)) { $pat = $commentPatterns[$Ext] }
+  if (-not $pat) { return $Text }
+  $kept = New-Object System.Collections.Generic.List[string]
+  foreach ($l in ($Text -split "`r?`n")) {
+    if ($l -match $pat) { continue }
+    $kept.Add($l)
+  }
+  return ($kept -join "`n")
+}
+$payloadSeen = 0
+$payloadDecoded = 0
+$scriptExt = ''
+foreach ($ln in $scripts) {
+  $lp = Join-Path $root $ln
+  if (-not (Test-Path $lp)) { continue }
+  $scriptExt = [System.IO.Path]::GetExtension($ln).ToLower()
+  $raw = Get-Content -LiteralPath $lp -Raw -Encoding UTF8
+  $texts = New-Object System.Collections.Generic.List[string]
+  $texts.Add((Remove-CommentLines -Text $raw -Ext $scriptExt))
+  foreach ($m in [regex]::Matches($raw, '-EncodedCommand\s+([A-Za-z0-9+/=]{40,})')) {
+    $payloadSeen++
+    try {
+      $payload = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($m.Groups[1].Value))
+      $texts.Add((Remove-CommentLines -Text $payload -Ext '.ps1'))
+      $payloadDecoded++
+    } catch {
+      Write-Host ("[warn] " + $ln + ": -EncodedCommand payload could not be decoded; references inside it were NOT checked")
+    }
+  }
+  for ($i = 0; $i -lt $texts.Count; $i++) {
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($pat in $refRootPatterns) {
+      foreach ($m in [regex]::Matches($texts[$i], $pat)) { $names.Add($m.Groups[1].Value) }
+    }
+    if ($i -gt 0) {
+      foreach ($m in [regex]::Matches($texts[$i], $refQuotedPattern)) { $names.Add($m.Groups[1].Value) }
+    }
+    foreach ($n in $names) {
+      # Normalize to the archive's own spelling (forward slashes, no trailing separator);
+      # only references that name a concrete file are checked.
+      $norm = ($n -replace '\\', '/').TrimEnd('/')
+      if ($norm -notmatch $refFileExt) { continue }
+      if ($listing -notcontains $norm) { $launcherDangling.Add(($ln + ' -> ' + $norm)) }
+    }
+  }
+}
+if ($launcherDangling.Count -gt 0) {
+  $uniq = $launcherDangling | Select-Object -Unique
+  Write-Host ("::error::shipped launcher references a file that is not in the archive: " + (($uniq | Select-Object -First 10) -join ', '))
+  Write-Host "[error] root launcher cross-reference check failed:"
+  $uniq | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  Write-Host "      (see the ROOT LAUNCHER CROSS-REFERENCE GUARD note in pack.ps1: a wrong path here"
+  Write-Host "       silently degrades a recipient to .bat, or kills the Install button, with all gates green)"
+  exit 1
+}
+Write-Host ("      launcher cross-refs: " + $scripts.Count + " root launchers, " + $payloadSeen + " encoded payload(s) decoded (" + $payloadDecoded + "), 0 dangling")
+
 # dev/self-use scripts must NOT ship (see $dropScripts for the rationale).
 # NOTE: `tar -tf` output is decoded with the console codepage, so a CJK-named entry might
 # not compare equal in this process. That blind spot is now closed by construction rather

@@ -39,11 +39,21 @@ REM Single source of truth for the entry name: used by the .lnk, by the .bat fal
 REM and by every message below, so the three can never drift apart.
 set "ENTRY=OfferWhere"
 
-REM 入口目标：优先原生外壳 offer-where.exe（无黑框、带托盘、自带后端与 5 个窗口的本机生命周期），
+REM 入口目标：优先原生外壳（无黑框、带托盘、自带后端与 5 个窗口的本机生命周期），
 REM 不存在时回退 start_all.bat（开发树 / 未附外壳的包）。
 REM 用「存在性」而不是「是否打包」来判：同一份脚本在开发机与收件人机器上都对。
+REM
+REM ⚠️ 2026-09-28 修（真实缺陷）：外壳在包里的位置是 **dist-app\offer-where.exe**
+REM   （pack.ps1 只发 dist-app 下那三个文件；DEVELOPMENT.md:70 也写明 dist-app/ 是
+REM   「便携包与桌面入口的首选入口」）。而此前这里判的是根目录 `%PKG%offer-where.exe`
+REM   —— 那个文件**在开发树和分发包里都不存在**，于是条件恒假、桌面入口永远回退到
+REM   start_all.bat：用户点完「安装」拿到的仍是黑框 + Chrome --app 标签页，原生外壳
+REM   一次都没被用上，而四道门禁全绿（$must 钉的是 dist-app 下的 exe，引用检查此前
+REM   也不覆盖根启动器之间的路径）。
+REM   现在只认一个落位（dist-app\），落位若再变，pack.ps1 的启动器交叉引用守卫与
+REM   合约测试会同时报错，不会再静默退化成 .bat。
 set "TARGET=%PKG%start_all.bat"
-if exist "%PKG%offer-where.exe" set "TARGET=%PKG%offer-where.exe"
+if exist "%PKG%dist-app\offer-where.exe" set "TARGET=%PKG%dist-app\offer-where.exe"
 
 if not defined SILENT (
   echo 正在桌面创建唯一入口 "%ENTRY%" ...

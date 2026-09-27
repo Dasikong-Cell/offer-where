@@ -1271,6 +1271,136 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ H. 首跑安装链路（解压后弹出安装按钮） ══════');
+// 背景（2026-09-28）：用户问「解压后自动弹安装按钮、点一下就能用」到底能不能做到。核查时
+// 发现两处**四道门禁全绿也拦不住**的缺陷，都属于"打包/落位"类不变量 —— 只有跑 200 秒的
+// pack.ps1 才会暴露。所以在这里用纯文本 + 文件系统断言复刻同一套判据，让 npm test 秒级拦住；
+// pack.ps1 里保留同一套守卫（发布时兜底），两侧互相独立，避免"改一处同时移动指针和靶子"。
+//   ① install_first_run.bat 是这条链路的**唯一实现**，却没被 $must 钉住，只靠
+//      「根目录 .bat 全收 − $dropScripts」侥幸进包 ⇒ 被拉黑/改名后包仍过全部门禁，
+//      而收件人的安装按钮不会出现。
+//   ② create_desktop_shortcut.bat 判的是根目录 `%PKG%offer-where.exe`，而外壳在包里位于
+//      `dist-app\offer-where.exe` ⇒ 条件**恒假**，桌面入口永远退回 start_all.bat：
+//      用户点完「安装」拿到的仍是黑框 + Chrome --app，原生外壳一次都没被用上。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const readText = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  const pack = readText('pack.ps1');
+
+  // ── ① $must 必须钉住首跑安装脚本 ──────────────────────────────────
+  const mustStart = pack.indexOf('$must = @(');
+  const mustBlock = pack.slice(mustStart, pack.indexOf('\n)', mustStart));
+  check('pack.ps1 的 $must 钉住 install_first_run.bat', mustBlock.includes('"install_first_run.bat"'),
+    '$must 只钉文件存在性；漏钉它 ⇒ 拉黑/改名后四道门禁全绿，收件人却没有安装按钮');
+  check('pack.ps1 的 $must 钉住 create_desktop_shortcut.bat',
+    mustBlock.includes('"create_desktop_shortcut.bat"'));
+
+  // ── ② 桌面入口必须指向包里真实存在的落位（dist-app/）─────────────
+  // ⚠️ 只判**代码行**：这个文件的 REM 注释里为了说明缺陷，本身就写着那个错误路径
+  // （`%PKG%offer-where.exe`）—— 拿整份文本判会把我自己的说明文字当成违规。
+  const shortcut = readText('create_desktop_shortcut.bat');
+  const shortcutCode = shortcut.split(/\r?\n/)
+    .filter((l) => !/^\s*(REM|::)/i.test(l)).join('\n');
+  check('桌面入口优先指向 dist-app 下的原生外壳', shortcutCode.includes('dist-app\\offer-where.exe'),
+    '判根目录 offer-where.exe 时条件恒假 ⇒ 静默退回 start_all.bat（黑框 + Chrome --app）');
+  check('桌面入口的代码行不再判断不存在的根目录外壳', !shortcutCode.includes('%PKG%offer-where.exe'),
+    '该路径在开发树与分发包里都不存在（pack.ps1 只发 dist-app 下那三个文件）');
+  check('dist-app 下的外壳确实在仓库里（否则入口又指向空气）',
+    fs.existsSync(path.join(ROOT, 'dist-app', 'offer-where.exe')));
+
+  // ── ③ 根启动器交叉引用：%~dp0 / %PKG% / %ROOT%，含 base64 载荷 ────
+  // 三种"包根"写法都要扫：%ROOT% 是 setenv.bat 里 `set "ROOT=%~dp0"` 定义的，被
+  // start_server.bat 用来定位 node_modules\tsx\dist\cli.mjs —— 只扫前两种会漏掉它。
+  const dropStart = pack.indexOf('$dropScripts = @(');
+  const dropBlock = pack.slice(dropStart, pack.indexOf('\n)', dropStart));
+  const droppedNames = new Set([...dropBlock.matchAll(/'([A-Za-z0-9_.\-]+\.(?:bat|sh|ps1))'/g)].map((m) => m[1]));
+  const rootLaunchers = fs.readdirSync(ROOT)
+    .filter((n) => /\.(bat|sh|ps1)$/.test(n) && !droppedNames.has(n))
+    // 非 ASCII 名的根脚本不进包（无论它是否在 drop 列表里）：归档必须 0 个非 ASCII 条目名，
+    // 这是既有不变量。曾经的 legacy 打包器 `打包.bat` 就是这类 —— 它的名字在 pack.ps1 里是
+    // 用码点拼出来的（`[char]0x6253 + [char]0x5305`），所以上面的字面量解析找不到它。
+    .filter((n) => !/[^\x00-\x7F]/.test(n));
+  check('根启动器清单可解析（防止 drop 列表规则改动后这条静默空转）', rootLaunchers.length >= 5,
+    `${rootLaunchers.length} 个：${rootLaunchers.join(', ')}`);
+
+  const FILE_EXT = /\.(bat|cmd|exe|ps1|sh|mjs|cjs|ts|js|json|dll|ico)$/;
+  const rootRefRe = /(?:%~dp0|%PKG%|%ROOT%)([^\s"'&|<>]+)/g;
+  const quotedRefRe = /["']([A-Za-z0-9_.\-\\/]+\.(?:bat|cmd|exe|ps1|sh|mjs|cjs|ts|js|json|dll|ico))["']/g;
+  const decodePayloads = (text: string) => {
+    const out: string[] = [];
+    for (const m of text.matchAll(/-EncodedCommand\s+([A-Za-z0-9+/=]{40,})/g)) {
+      try { out.push(Buffer.from(m[1], 'base64').toString('utf16le')); } catch { /* 该载荷跳过 */ }
+    }
+    return out;
+  };
+  const dangling: string[] = [];
+  let payloadsSeen = 0;
+  for (const ln of rootLaunchers) {
+    const text = readText(ln);
+    const payloads = decodePayloads(text);
+    payloadsSeen += payloads.length;
+    for (const body of [text, ...payloads]) {
+      for (const m of body.matchAll(rootRefRe)) {
+        const norm = m[1].replace(/\\/g, '/').replace(/\/+$/, '');
+        if (!FILE_EXT.test(norm)) continue;                     // 目录引用（%~dp0data）跳过
+        if (!fs.existsSync(path.join(ROOT, norm))) dangling.push(`${ln} -> ${norm}`);
+      }
+      // 引号里的裸文件名只在**解码后的载荷**里生效（纯文本里 echo 的说明文字会误报）
+      if (body !== text) {
+        for (const m of body.matchAll(quotedRefRe)) {
+          if (!fs.existsSync(path.join(ROOT, m[1].replace(/\\/g, '/')))) dangling.push(`${ln} -> ${m[1]} (payload)`);
+        }
+      }
+    }
+  }
+  check('根启动器引用的文件全部实际存在（含 base64 载荷内）', dangling.length === 0,
+    dangling.length ? dangling.join(', ') : `${rootLaunchers.length} 个启动器、${payloadsSeen} 个编码载荷，0 处悬空`);
+  check('install_first_run.bat 的 -EncodedCommand 载荷可解码（守卫不能只是"看起来在扫"）',
+    decodePayloads(readText('install_first_run.bat')).length === 1);
+
+  // ── ④ 首跑标记「data\.installed」三处写法必须一致 ───────────────
+  // 三处是**同一规则的三个独立实现**（bat / 编码载荷 / Rust），任一漂移都会造成
+  // "已经装过了还反复弹"或"永远不弹"。
+  // 用 includes 而不是正则：字面量里含反斜杠（`data\.installed`），走正则容易被转义层级坑到
+  // —— 第一版就是这么写成"匹配 data.installed"而误报失败的。
+  const MARKER = 'data\\.installed';   // 这串字符本身就是 data\.installed
+  check('start_all.bat 用 data\\.installed 做首跑判定', readText('start_all.bat').includes(MARKER));
+  check('install_first_run.bat（解码后）写的是同一个标记',
+    decodePayloads(readText('install_first_run.bat')).join('\n').includes(MARKER));
+  const libRs = fs.existsSync(path.join(ROOT, 'src-tauri', 'src', 'lib.rs'))
+    ? readText('src-tauri/src/lib.rs') : '';
+  check('lib.rs 判的是同一个标记（.installed）', libRs.includes('.installed'),
+    '外壳与 bat 必须判同一处，否则双击 exe 与双击 bat 的行为会分叉');
+
+  // ── ⑤ 自解压安装包（OfferWhere-Setup.exe）的布局契约 ────────────────
+  // 布局：`[stub PE][payload zip][footer: magic(8) + u64 offset + u64 length]`。
+  // footer 的 magic 与尺寸只在 **C 源码**里定义一次，make_sfx.ps1 构建时**读它**再写 ——
+  // 这样两边不可能漂移。若哪天有人在 make_sfx.ps1 里重新写死一份，产物就会变成
+  // 「看着正常、双击只报『尾部标记缺失』」的 exe，且只有真跑一次才会暴露 ⇒ 这里钉住：
+  // ① C 源的取值自洽；② 构建脚本确实是从 C 源读的，不是自带副本。
+  const sfxC = readText('tools/sfx/offerwhere_sfx.c');
+  const magicM = /FOOTER_MAGIC\[8\]\s*=\s*\{([^}]*)\}/.exec(sfxC);
+  const magicChars = magicM ? [...magicM[1].matchAll(/'([^']*)'/g)].map((m) => m[1]).join('') : '';
+  const footerSize = Number((/#define\s+FOOTER_SIZE\s+(\d+)/.exec(sfxC) || [])[1] || 0);
+  check('stub 源码里的 FOOTER_MAGIC 可解析且为 8 字节', magicChars.length === 8,
+    `解析到 magic="${magicChars}"（8 是 C 侧 memcmp 的硬编码长度，必须一致）`);
+  check('stub 的 FOOTER_SIZE = magic + 两个 uint64(16)', footerSize === magicChars.length + 16,
+    `FOOTER_SIZE=${footerSize}，magic=${magicChars.length}，期望 ${magicChars.length + 16}`);
+  const mkSfx = readText('make_sfx.ps1');
+  check('make_sfx.ps1 从 stub 源码读取 footer 契约（不自带第二份副本）',
+    mkSfx.includes('FOOTER_MAGIC') && mkSfx.includes('FOOTER_SIZE'),
+    '自带副本时，改一边就能产出打不开的自解压包，且四道门禁全绿');
+  check('stub 源码保持纯 ASCII（中文 UI 必须是 \\uXXXX 转义）',
+    !/[^\x00-\x7F]/.test(sfxC),
+    '非 ASCII 字节会让编译结果依赖编译机的输入字符集，换个工具链就变乱码');
+  check('.gitignore 忽略 tools/sfx/build/（编译产物入库会白占远端体积）',
+    readText('.gitignore').includes('tools/sfx/build/'));
+  // 无人值守开关：这是能对自解压包做端到端验证的前提（否则 MessageBox 会挡住自动化）。
+  check('stub 支持 --extract-only 无人值守分支', sfxC.includes('--extract-only'),
+    '没有它就只能靠人手点对话框来验收，等于没验收');
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`

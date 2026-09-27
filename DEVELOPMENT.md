@@ -107,6 +107,41 @@ $env:CARGO_TARGET_DIR='D:\_ow_b10'
 后端探活 / 窗口关闭与销毁 / 退出请求 / panic。**出问题先看它。**
 WebView2 侧的崩溃转储在 `%LOCALAPPDATA%\com.offerwhere.desktop\EBWebView\Crashpad\reports`。
 
+### 自解压安装包（OfferWhere-Setup.exe）
+
+「下载**一个文件**、双击就能用」的入口，给不想碰命令行的人。文件布局：
+
+```
+[ stub.exe（PE） ][ payload: job-apply-agent-portable.zip ][ footer 24 字节 ]
+footer = "OFWSFX01"(8) + uint64 payload 偏移 + uint64 payload 长度   ← 就在文件最后 24 字节
+```
+
+stub 用 `seek(EOF-24)` 找到 payload；zip 前面挂了 stub 后 `tar` 读不了，所以它先把 payload 复制到 `%TEMP%` 再解压。
+安装目标是 `%LOCALAPPDATA%\OfferWhere`（**每用户、不需要管理员权限、不写注册表**）；装过再运行则直接启动，不重复解压。
+
+- **外壳源码** `tools/sfx/offerwhere_sfx.c`：**纯 ASCII**，中文 UI 全部写成 `\uXXXX` 转义 —— 免得编译结果依赖编译机的输入字符集。
+  它是**生成物**：改文案要改 `_tools/gen_sfx.mjs`（不随包分发），再 `node _tools/gen_sfx.mjs tools/sfx/offerwhere_sfx.c`。
+- **编译**（本机 MinGW 配方，与 `build_app.ps1` 共用 `D:\_mingw`）：
+  ```bash
+  TMP=D:\_tmp TEMP=D:\_tmp /d/_mingw/mingw64/bin/gcc.exe -O2 -mwindows -municode -Wall \
+      -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32
+  ```
+  两个实测坑：`TMP`/`TEMP` 指向含中文的路径时 gcc 报 `can't create ...ccXXXX.o: No such file or directory`；
+  少了 `-municode` 会报 `undefined reference to 'WinMain'`（`UNICODE` + `-mwindows` 的组合要求它）。
+- **拼接 + 验收**：`./make_sfx.ps1 -Zip <便携包.zip> -SelfTest`
+  - 结构校验（秒级）：尺寸 = stub + zip + footer、footer 各字段、偏移处是 zip 签名 `PK\x03\x04`、
+    内嵌 payload 的 sha256 **与原 zip 逐字节一致**、payload 内含安装链路文件。
+  - `-SelfTest`（约 3 分钟）：用 `--extract-only` **真跑一次安装器** —— 解压整包、断言 `dist-app\offer-where.exe`
+    与 `install_first_run.bat` 落位、读回步骤日志、确认没有误启动程序、最后回收解压树。
+    **这是唯一能证明「双击就能用」的检查**；纯结构校验证明不了 copy_payload / tar 解压 / 落位判断这三段代码。
+  - footer 的 magic 与尺寸**只在 C 源码里定义一次**，`make_sfx.ps1` 是读它再写。合约测试同时钉住
+    「构建脚本不许自带第二份副本」（自带副本时改一边就能产出打不开的 exe，且四道门禁全绿）。
+- **无人值守**：`OfferWhere-Setup.exe --extract-only` 不弹任何窗、不启动任何程序，退出码即结果；
+  `OFFERWHERE_SFX_DEST=<目录>` 换安装位置、`OFFERWHERE_SFX_LOG=<文件>` 追加一份 ASCII 步骤日志。
+- **发布**：`release.yml` 每次发布都从 C 源码**现编译** stub（`tools/sfx/build/` 被 gitignore，不入库），
+  把 `OfferWhere-Setup.exe` 与 zip 一起挂到 Release。**不依赖预编译产物 ⇒ 不存在「改了 C 忘了重编译」的漂移。**
+- **已知取舍**：没有代码签名证书 ⇒ 用户首次运行必然看到 SmartScreen「未知发布者」，得点「更多信息 → 仍要运行」。
+
 ---
 
 ## 核心功能

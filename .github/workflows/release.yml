@@ -101,21 +101,62 @@ jobs:
           # 若嫌慢可移除本步（ci.yml 每次推 main 都会跑它）。
           ./scripts/pack_smoke.ps1
 
+      # 自解压外壳是**编译产物**（tools/sfx/build/ 被 gitignore），所以每次发布都从
+      # tools/sfx/offerwhere_sfx.c 现编译 —— 这样 stub 永远与源码一致，不会出现
+      # 「改了 C 忘了重编译，发出去的 exe 还是旧行为」这种只有用户才会撞上的漂移。
+      # gcc 是本 job 唯一的工具链依赖；找不到就直接失败，而不是悄悄只发 zip。
+      - name: 编译自解压外壳
+        shell: pwsh
+        run: |
+          $gcc = Get-Command gcc -ErrorAction SilentlyContinue
+          if (-not $gcc) { $gcc = Get-Command x86_64-w64-mingw32-gcc -ErrorAction SilentlyContinue }
+          if (-not $gcc -and (Test-Path 'C:\mingw64\bin\gcc.exe')) { $gcc = Get-Item 'C:\mingw64\bin\gcc.exe' }
+          if (-not $gcc) { throw "no MinGW gcc on this runner; cannot build tools/sfx/build/stub.exe" }
+          Write-Host ("      gcc: " + $gcc.Source)
+          New-Item -ItemType Directory -Force -Path tools/sfx/build | Out-Null
+          & $gcc.Source -O2 -mwindows -municode -Wall -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32
+          if ($LASTEXITCODE -ne 0) { throw "stub build failed with $LASTEXITCODE" }
+          Write-Host ("      stub.exe " + (Get-Item tools/sfx/build/stub.exe).Length + " bytes")
+
+      # -SelfTest 会在无人值守模式下真跑一次安装器（解压整包 + 校验外壳落位 + 比对步骤日志），
+      # 这是唯一能证明「下载一个文件、双击就能用」的检查；纯结构校验证明不了。
+      - name: 构建自解压安装包并端到端自测
+        shell: pwsh
+        env:
+          PACK_ZIP_DIR: ${{ runner.temp }}
+        run: |
+          $setup = Join-Path $env:PACK_ZIP_DIR 'OfferWhere-Setup.exe'
+          ./make_sfx.ps1 -Zip (Join-Path $env:PACK_ZIP_DIR 'job-apply-agent-portable.zip') -Out $setup -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "make_sfx.ps1 failed with $LASTEXITCODE" }
+          Write-Host ("      " + $setup + "  " + [math]::Round((Get-Item $setup).Length / 1MB, 1) + " MB")
+          "SETUP_PATH=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: 上传到 Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:RELEASE_TAG
-          # Release 说明就是使用者下载时看到的第一段字，务必包含「怎么解压、怎么启、下一步看哪」。
-          $notes = "Windows 便携包（约 455MB）`n`n"
-          $notes += "1) 解压到纯英文路径（如 D:\offer-where）。建议用系统自带 tar 或 7-Zip；别用资源管理器双击解压（包内 18.1 万个小文件，会非常慢）：`n"
+          $setupMB = [math]::Round((Get-Item $env:SETUP_PATH).Length / 1MB, 0)
+          $zipMB = [math]::Round((Get-Item $env:ZIP_PATH).Length / 1MB, 0)
+          # 说明就是使用者下载时看到的第一段字：主推**一个文件**的自解压安装包，zip 作为备用。
+          $notes = "## 推荐：双击一个文件就能用`n`n"
+          $notes += "下载 **OfferWhere-Setup.exe**（约 $setupMB MB），双击它：`n`n"
+          $notes += "1) 弹窗点「确定」，它会自动解压到自己选的位置（默认 %LOCALAPPDATA%\OfferWhere，不需要管理员权限）`n"
+          $notes += "2) 解压完成后自动启动 OfferWhere，第一次启动会弹出「安装」对话框 —— 点「安装」`n"
+          $notes += "3) 桌面上出现 OfferWhere 图标，以后双击该图标即可使用`n`n"
+          $notes += "解压约需 1.2GB 可用空间（约 12.5 万个文件）。若已装过一次，再双击这个 exe 会直接启动，不会重复解压。`n"
+          $notes += "免打扰安装（不弹任何对话框、不启动程序，只解压）：`n"
+          $notes += "    OfferWhere-Setup.exe --extract-only`n`n"
+          $notes += "## 备用：便携 zip（约 $zipMB MB）`n`n"
+          $notes += "1) 解压到纯英文路径（如 D:\offer-where）。建议用系统自带 tar 或 7-Zip；别用资源管理器双击解压（包内 13 万个小文件，会非常慢）：`n"
           $notes += "    mkdir D:\offer-where`n"
-          $notes += "    tar -xf job-apply-agent-portable.zip -C D:\offer-where`n`n"
-          $notes += "2) 双击 offer-where.exe（原生外壳：自动起后端 + 5 个平台调试窗口；包内自带 Node 运行时，无需另装；需已安装 Google Chrome）`n"
-          $notes += "   包内没有 offer-where.exe 时（旧包）改双击 start_all.bat，效果等价。`n"
-          $notes += "3) 打开控制台窗口（或 http://127.0.0.1:4400/ ），按首页「开箱自检」卡片逐项补齐（上传简历、登录各平台窗口）`n`n"
+          $notes += "    tar -xf job-apply-agent-portable.zip -C D:\offer-where`n"
+          $notes += "2) 双击 dist-app\offer-where.exe（原生外壳：自动起后端 + 平台调试窗口；包内自带 Node 运行时，无需另装；需已安装 Google Chrome）`n"
+          $notes += "   包内没有 dist-app\offer-where.exe 时（旧包）改双击 start_all.bat，效果等价。`n`n"
+          $notes += "## 共同步骤`n`n"
+          $notes += "打开控制台窗口（或 http://127.0.0.1:4400/ ），按首页「开箱自检」卡片逐项补齐（上传简历、登录各平台窗口）。`n`n"
           $notes += "首次使用默认只做预览 —— 真实投递会不可撤销地向 HR 发出消息。`n"
           $notes += "包内 version.json 记录了该包对应的提交号与构建时间，可随时核对版本。"
-          gh release create $tag "$env:ZIP_PATH" --title $tag --notes $notes
+          gh release create $tag "$env:SETUP_PATH" "$env:ZIP_PATH" --title $tag --notes $notes
           Write-Host "release $tag created -> https://github.com/${{ github.repository }}/releases/tag/$tag"

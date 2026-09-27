@@ -99,5 +99,8 @@ Thumbs.db
 # ── 自带 Node 运行时（打包进 zip 分发用，不入库以免膨胀远端）──
 node/
 
+# ── 自解压外壳的编译产物（tools/sfx/offerwhere_sfx.c 是源，入库；产物不入库）──
+tools/sfx/build/
+
 # ── 临时校验脚本 ──────────────────────────────────────
 test_env.bat
