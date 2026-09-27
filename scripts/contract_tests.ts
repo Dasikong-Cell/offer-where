@@ -1335,16 +1335,35 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     return out;
   };
   const dangling: string[] = [];
+  const pinnedByPack: string[] = [];
   let payloadsSeen = 0;
+  // 与 pack.ps1 的守卫用**同一套**规则：注释行先剥离。注释永不执行，不该被当成引用 ——
+  // 一份「记录历史缺陷」的注释会让两侧给出不同结论。实测差距：pack.ps1 的守卫曾因此报
+  // offer-where.exe 而这里侥幸通过（那个路径后面跟着一个反引号，正则截断后不匹配文件后缀）。
+  // 同一规则两种行为，迟早有一个在骗人。
+  const stripComments = (t: string, ext: string) => {
+    if (!/^(bat|cmd|ps1|sh)$/.test(ext)) return t;
+    const pat = /^(bat|cmd)$/.test(ext) ? /^\s*(?:@?rem\b|::)/i : /^\s*#/;
+    return t.split(/\r?\n/).filter((l) => !pat.test(l)).join('\n');
+  };
   for (const ln of rootLaunchers) {
-    const text = readText(ln);
-    const payloads = decodePayloads(text);
+    const ext = ln.split('.').pop()!.toLowerCase();
+    const text = stripComments(readText(ln), ext);
+    const payloads = decodePayloads(readText(ln)).map((p) => stripComments(p, 'ps1'));
     payloadsSeen += payloads.length;
     for (const body of [text, ...payloads]) {
       for (const m of body.matchAll(rootRefRe)) {
         const norm = m[1].replace(/\\/g, '/').replace(/\/+$/, '');
         if (!FILE_EXT.test(norm)) continue;                     // 目录引用（%~dp0data）跳过
-        if (!fs.existsSync(path.join(ROOT, norm))) dangling.push(`${ln} -> ${norm}`);
+        if (fs.existsSync(path.join(ROOT, norm))) continue;
+        // ⚠️「源码树里没有」≠「包里没有」。node/ 被 gitignore —— CI 上是到打包前那一步
+        // 「准备自带 Node 运行时」才用 runner 的 node 顶上，而那一步在 `npm test` **之后**；
+        // node_modules/ 由 npm ci 生成。第一版在这里只判存在性 ⇒ CI 报
+        // `setenv.bat -> node/node.exe` 而本机全绿（同一个判据在两种环境给出相反结论）。
+        // 真正要问的是「打包会不会带上它」，而这个问题由 pack.ps1 的 $must 回答 —— 用它，
+        // 本机与 CI 才会得到同一个结论。
+        if (mustBlock.includes(`"${norm}"`)) { pinnedByPack.push(norm); continue; }
+        dangling.push(`${ln} -> ${norm}`);
       }
       // 引号里的裸文件名只在**解码后的载荷**里生效（纯文本里 echo 的说明文字会误报）
       if (body !== text) {
@@ -1355,7 +1374,15 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     }
   }
   check('根启动器引用的文件全部实际存在（含 base64 载荷内）', dangling.length === 0,
-    dangling.length ? dangling.join(', ') : `${rootLaunchers.length} 个启动器、${payloadsSeen} 个编码载荷，0 处悬空`);
+    dangling.length ? dangling.join(', ') : `${rootLaunchers.length} 个启动器、${payloadsSeen} 个编码载荷，0 处悬空`
+      + (pinnedByPack.length
+        ? `（其中 ${new Set(pinnedByPack).size} 处靠 $must 兜底：${[...new Set(pinnedByPack)].join(', ')} —— 它们不在源码树里但一定在包里）`
+        : '（源码树齐全，0 处需要 $must 兜底）'));
+  // 靠 $must 兜底只应该是「生成目录」那一类。若某个**随源码树分发**的文件也走到这条路，
+  // 说明本机源码树缺文件而打包靠 pin 掩盖了它 —— 那才是该报的错。
+  check('靠 $must 兜底的引用只出现在生成目录（node/ node_modules/）内',
+    pinnedByPack.every((p) => /^(node|node_modules)\//.test(p)),
+    pinnedByPack.length ? `${new Set(pinnedByPack).size} 处：${[...new Set(pinnedByPack)].join(', ')}` : '0 处');
   check('install_first_run.bat 的 -EncodedCommand 载荷可解码（守卫不能只是"看起来在扫"）',
     decodePayloads(readText('install_first_run.bat')).length === 1);
 
