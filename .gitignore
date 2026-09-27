@@ -5,10 +5,23 @@ node_modules/
 
 # ── 构建产物 ──────────────────────────────────────────
 dist/
-dist-app/
 build/
 *.tsbuildinfo
 tsconfig.node.tsbuildinfo
+
+# ── 原生外壳产物（Tauri）──────────────────────────────
+# 这里**故意只放行三个文件**，其余（尤其 offer-where.log / .prev 运行日志）继续忽略。
+# 注意写法：必须先写 `dist-app/*` 再用 `!` 放行单个文件。
+# 若写成 `dist-app/`（排除目录本身），Git 规则「父目录被排除时无法重新包含其下文件」
+# 会让下面三条 `!` 全部失效 —— 这是个静默失败，所以别"简化"它。
+# 为什么二进制要入库：便携包与桌面入口都指向它，而 `.gitignore` 掉它会让
+# CI（release.yml 在 windows-latest 上跑 pack.ps1）拿不到产物。
+# 源码与二进制的对应关系由 build_app.ps1 写进 BUILD_INFO.json，
+# 并由 pack.ps1 的 provenance 断言强制校验（不一致直接 fail-closed）。
+dist-app/*
+!dist-app/offer-where.exe
+!dist-app/WebView2Loader.dll
+!dist-app/BUILD_INFO.json
 
 # vite.config.ts 的编译产物（源文件是 vite.config.ts）
 vite.config.js

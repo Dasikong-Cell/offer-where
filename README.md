@@ -21,8 +21,10 @@
    > mkdir D:\offer-where
    > tar -xf "%USERPROFILE%\Downloads\job-apply-agent-portable.zip" -C D:\offer-where
    > ```
-3. 双击 **`start_all.bat`**：拉起本地后端（默认端口 `4400`）并自动打开控制台 `http://127.0.0.1:4400/`。
-   > 首次运行若弹出 SmartScreen「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」即可（脚本来自网络下载时的常规提示）。
+3. 双击 **`offer-where.exe`**（原生外壳，推荐）：拉起本地后端（默认端口 `4400`）与 5 个核心平台调试窗口，就绪后弹出控制台窗口。
+   - 关窗 = **收进系统托盘**（后端继续跑，正在进行的投递不被打断）；托盘右键「退出」才真正停服。
+   - 包里没有 `offer-where.exe` 时（旧包 / 源码树），双击 **`start_all.bat`** 效果等价 —— 区别只是控制台用 Chrome `--app=` 独立窗口打开，且会多一个黑框控制台。
+   - 首次运行若弹出 SmartScreen「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」即可（脚本来自网络下载时的常规提示）。
 4. 看控制台首页的 **「开箱自检」** 卡片，按它逐项补齐即可：
 
    | 自检项 | 你要做什么 |
@@ -30,7 +32,7 @@
    | Node 运行时 | 包内自带，**无需操作** |
    | Google Chrome | 没装就装一个（调试窗口依赖它） |
    | 平台端口表 | 内置默认端口，**无需手工配置**（`data/browser/cdp.json` 只在要改端口时才需要） |
-   | 平台调试窗口 | `start_all.bat` 会自动开 **5 个核心平台**（BOSS / 猎聘 / 51job / 智联 / 官网）窗口；其余平台双击 `start_platforms.bat`（默认再开 9 个，`start_platforms.bat all` 全开），或在控制台该平台的卡片上点「打开窗口」。窗口起来后**在各自窗口里扫码登录**（各平台登录态互相隔离） |
+   | 平台调试窗口 | `offer-where.exe`（或 `start_all.bat`）会自动开 **5 个核心平台**（BOSS / 猎聘 / 51job / 智联 / 官网）窗口；其余平台双击 `start_platforms.bat`（默认再开 9 个，`start_platforms.bat all` 全开），或在控制台该平台的卡片上点「打开窗口」。窗口起来后**在各自窗口里扫码登录**（各平台登录态互相隔离） |
    | 简历 | 左侧「**简历 → 简历中心**」→「上传简历」选 PDF / Word（≤8MB） |
    | AI 能力（可选） | 想用 AI 语义匹配 / AI 文案就复制 `.env.example` 为 `.env` 填 LLM 配置；**不填则回退「规则匹配 + 模板文案」，功能完整可用**，仅质量略降 |
 
@@ -157,9 +159,11 @@ offer-where/
 > **便携包**：`job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装 Node 环境
 > （约 353MB，解压后约 1.07GB / 12.4 万个文件；文件多，建议用 `tar` 或 7-Zip 解压）。
 
-1. 双击 `start_all.bat`：自动启动 CDP Chrome + 后端(4400) + 用 Chrome `--app=` 打开**独立控制台窗口**（无地址栏/标签栏，任务栏显示本应用图标）。
-   - 想让桌面有个入口，先双击一次 `create_desktop_shortcut.bat`，之后即可双击桌面「OfferWhere」。
-   - `start_all.bat` 默认**只**启动 **BOSS / 猎聘 / 51job / 智联 / 官网** 5 个平台窗口 —— 刻意不默认开满 15 个（多开 Chrome 很吃内存）。
+1. 双击 `offer-where.exe`（原生外壳）：自动启动 CDP Chrome + 后端(4400)，然后用**原生窗口**加载控制台（无地址栏/标签栏，任务栏显示本应用图标）。
+   - 关窗 = 收进系统托盘（后端继续跑）；托盘「退出」才停服。
+   - 想让桌面有个入口，双击一次 `create_desktop_shortcut.bat` —— 它会优先把桌面「OfferWhere」指向 `offer-where.exe`，没有该文件时才回退 `start_all.bat`。
+   - 包里没有 `offer-where.exe` 时（旧包 / 源码树），改双击 `start_all.bat`：它用 Chrome `--app=` 打开独立控制台窗口，效果等价。
+   - 两者都默认**只**启动 **BOSS / 猎聘 / 51job / 智联 / 官网** 5 个平台窗口 —— 刻意不默认开满 15 个（多开 Chrome 很吃内存）。
    - **其余平台按需开**：在控制台首页对应的平台卡片上点「打开窗口」，即可拉起该平台窗口并置顶（先登录再投递）。也可以跑 `start_platforms.bat`（无参再开 9 个，加 `all` 开满 15 个）。
 2. **看控制台首页的「开箱自检」面板**：它会把「还差什么」列清楚（Chrome / 调试窗口 / 简历 / AI）。
 3. 在控制台勾选平台、设置数量/间隔，**先点「仅预览」**确认链路，再点「开始投递」。
@@ -444,7 +448,7 @@ npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「
 `npm run hooks:install` 会设置 `core.hooksPath=.githooks`（配置随 `.githooks/` 一起入库）。
 紧急时可 `git push --no-verify` 跳过。
 
-> 生产一键启动：双击桌面「OfferWhere」（= `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 用 Chrome `--app=` 打开独立控制台窗口（console.html）。
+> 生产一键启动：双击桌面「OfferWhere」（= `offer-where.exe`，无该文件时回退 `start_all.bat`）→ 起 CDP Chrome + 后端(`PORT=4400`) + 打开控制台窗口（console.html）。
 
 ## 部署与安全（分发 / 多人共用）
 

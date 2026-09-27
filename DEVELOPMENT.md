@@ -65,6 +65,48 @@ web-agent/
 └── vite.config.ts
 ```
 
+### 原生外壳（Tauri，可选）
+
+`dist-app/` 下是**已构建好、并已入库**的原生外壳，也是便携包与桌面入口的首选入口：
+
+| 文件 | 作用 |
+|---|---|
+| `offer-where.exe` | 外壳本体（Tauri v2 + WebView2）。拉起后端与 5 个核心平台调试窗口，用原生窗口加载控制台 |
+| `WebView2Loader.dll` | **必须与 exe 同目录**。读 PE 导入表可知这是它唯一的非系统 DLL，缺了直接起不来 |
+| `BUILD_INFO.json` | 源码哈希戳，见下 |
+
+外壳的边界（刻意为之，**别扩大**）：它只接管 ①控制台窗口 ②Node 后端进程生命周期 ③系统托盘 / 退出清理。
+**投递核心一行不改** —— 仍然是用户本机的真实 Google Chrome + 持久化 profile 走 CDP，反检测与登录态照旧。
+
+启动流程等价于 `start_all.bat`，多了一步「首跑安装引导」：`data/.installed` 不存在时调 `install_first_run.bat`
+弹「安装」对话框（建桌面入口 + 写标记）。`data/` 不进包，所以每个收件人解压后首跑必走一次。
+
+#### 改了 `src-tauri/` 之后必须重建
+
+二进制是入库的 —— 不这样 CI（`release.yml` 跑在 `windows-latest` 上）就取不到它。代价是「改了源码忘了重编」
+成了**静默故障**：tsc / selftest / 合约 / 冒烟四道门**全绿也看不见**，因为这条断言要同时跨越「磁盘上的源码」
+与「exe 里的字节」，没有任何编译器或测试运行器会替你做这件事。
+
+因此仓库根目录的 `build_app.ps1`（**仅源码树提供，不随便携包分发** —— 收件人不构建程序）会把
+`src-tauri/` 下每个源文件的 SHA256 与两个产物的哈希写进 `dist-app/BUILD_INFO.json`；
+`pack.ps1` 打包前重算并比对，**不一致直接 fail-closed**（并列出具体是哪个文件新增/修改/删除）。
+
+```powershell
+# 本机没有 MSVC，只能走 x86_64-pc-windows-gnu（完整工具链配方见 build_app.ps1 头部注释）
+$env:RUSTUP_TOOLCHAIN='stable-x86_64-pc-windows-gnu'
+$env:CARGO_TARGET_DIR='D:\_ow_b10'
+.\build_app.ps1
+```
+
+**然后把 `dist-app/` 三个文件与 `src-tauri/` 的改动放进同一个提交** —— 分开提交必然产生一个
+「源码与二进制对不上」的历史点，而日后 checkout 到那个提交的人无从判断。
+
+#### 排障
+
+外壳把全链路日志追加写到 **exe 同级 `offer-where.log`**：启动参数 / 窗口创建 / 生效的 WebView2 参数及其来源 /
+后端探活 / 窗口关闭与销毁 / 退出请求 / panic。**出问题先看它。**
+WebView2 侧的崩溃转储在 `%LOCALAPPDATA%\com.offerwhere.desktop\EBWebView\Crashpad\reports`。
+
 ---
 
 ## 核心功能

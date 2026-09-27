@@ -100,10 +100,24 @@ webview2: additional_browser_args（来源=内置默认值）= --disable-feature
 - **`dist-app/` 已被 `.gitignore`**（3.5MB 二进制不入库），source of truth 是 `src-tauri/`。
 - 本机 `curl` 默认走代理 ⇒ 测 localhost 必须 `--noproxy '*'`；node 内置 `fetch` 不读代理。
 
-## 5. 仍未完成（不阻塞本次修复成立）
+## 5. 后续（2026-09-27 当日已补完）
 
-- `pack.ps1` **尚未包含** `dist-app/` ⇒ 便携包里还没有原生外壳，「双击即用」仍走 `.bat`。
-  若要入库需先决策：**随包提交二进制** / **CI 里编 Rust**（CI 加 Rust+GNU 工具链成本高）。
+- ~~`pack.ps1` 尚未包含 `dist-app/`~~ → **已纳入**。二进制入库（否则 CI 在 `windows-latest` 上跑 `pack.ps1` 取不到它），
+  并新增 `build_app.ps1` + `dist-app/BUILD_INFO.json` 源码哈希戳，`pack.ps1` 打包前重算比对、不一致 fail-closed。
+  详见 `DEVELOPMENT.md` 的「原生外壳（Tauri）」一节。
+- ~~桌面入口仍指向 `.bat`~~ → `create_desktop_shortcut.bat` 现优先指向 `offer-where.exe`（不存在才回退 `start_all.bat`），
+  且 `.lnk` 与 `.bat` 兜底两条分支烘焙的是**同一个**已解析目标。
+- ~~首跑会跳过安装引导~~ → `lib.rs` 新增 `ensure_first_run_install()`，缺 `data/.installed` 时同步调用
+  `install_first_run.bat`，与 `start_all.bat` 语义一致。
+
+## 6. 仍未完成（不阻塞已完成的修复）
+
+- **github 推送 + 把含 PII 的公开 Release 改 draft**：仍卡在缺 PAT。
+  相关外部事实：**Gitee 发行版单附件上限 100MB**（GVP 才 200MB），而包是 456MB
+  —— 所以「能否下载」这一关实际只能走 GitHub Releases。
 - `--remote-debugging-port` 不可用 ⇒ CDP 视觉截图取证缺失，需另找路径。
 - 冷启动首跑（后端未运行时）端到端验收未做（本机后端常驻，只验到了「复用」分支）。
+  首跑安装引导（`data/.installed` 缺失分支）同理**尚未实机验证** —— 需要临时把标记文件挪走才能造出该状态。
 - NSIS 安装包与代码签名，留发布阶段。
+- `使用说明.txt` 未随包分发（不在 `pack.ps1` 的 `$files` 里），且内容与 README 重复、已部分过时，
+  建议择机删除或改为指向 README，避免又多一份会烂掉的副本。

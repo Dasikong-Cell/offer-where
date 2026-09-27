@@ -1,0 +1,64 @@
+{
+    "schema":  1,
+    "product":  "OfferWhere",
+    "arch":  "x86_64-pc-windows-gnu",
+    "builtAt":  "2026-09-27T21:52:16+08:00",
+    "hashRule":  "sha256 of the UTF-8 text formed by, for every source file in path order: relative path + LF + lowercase hex sha256 + LF",
+    "excludeDirNames":  [
+                            "target",
+                            ".git",
+                            "gen"
+                        ],
+    "sourceHash":  "f057d715a8177939e51bd80f128ca27ec7b92d316276ce0020a593f054c192e8",
+    "sourceCount":  9,
+    "sourceFiles":  [
+                        {
+                            "path":  "src-tauri/.gitignore",
+                            "sha256":  "298172e50e4d08ed0476a23df466241bb04d8251941699e65e94547fa03fc86a"
+                        },
+                        {
+                            "path":  "src-tauri/build.rs",
+                            "sha256":  "487059eaf8a947b80f20a9aacac038a5047b2ad69d2401b827376c67d6fe847f"
+                        },
+                        {
+                            "path":  "src-tauri/capabilities/default.json",
+                            "sha256":  "ea365a32915af911dd3f5ca5001bdeb9b6b2b9011b0e300871af1abfa2662c48"
+                        },
+                        {
+                            "path":  "src-tauri/Cargo.lock",
+                            "sha256":  "cc479ebecfdcf6c45609e7d9e6e7a35069b10c63223049d51ddec810a2862543"
+                        },
+                        {
+                            "path":  "src-tauri/Cargo.toml",
+                            "sha256":  "d7dfa03a8e6da441439881a538c92093a53a412d9deea225bbdb2761395492e4"
+                        },
+                        {
+                            "path":  "src-tauri/icons/icon.ico",
+                            "sha256":  "1b3762c5afae8f06874caa97e1c68d9992b1971bfa58a810d51d3f642b517d5d"
+                        },
+                        {
+                            "path":  "src-tauri/src/lib.rs",
+                            "sha256":  "20b051f019d4dbc5968d428fbca1f852014cdacc244e994c19cc9c682a060faf"
+                        },
+                        {
+                            "path":  "src-tauri/src/main.rs",
+                            "sha256":  "a3c5fa5c1cd129b2f01fa87f8533a06a46c6316fc125ca41a6b5bb617a857420"
+                        },
+                        {
+                            "path":  "src-tauri/tauri.conf.json",
+                            "sha256":  "147fb0a2545a7da1bc9c0f896922cd5daf742ee16813f3656d88da7116ebb1cf"
+                        }
+                    ],
+    "artifacts":  [
+                      {
+                          "path":  "dist-app/offer-where.exe",
+                          "size":  3537920,
+                          "sha256":  "770b605db948aa9fb05f07229632ad9b3256235aa75bc02a452e29d50a18700b"
+                      },
+                      {
+                          "path":  "dist-app/WebView2Loader.dll",
+                          "size":  160880,
+                          "sha256":  "86545b66cdb0603bc26b626fb9ad610cb6e71f28d468f5ea66df23b03dda96d5"
+                      }
+                  ]
+}

@@ -71,8 +71,105 @@ $stamp = @{
 Set-Content -Path (Join-Path $root 'version.json') -Value $stamp -Encoding ascii
 Write-Host "[0/2] build stamp: $stamp"
 
+# -- PROVENANCE GUARD, native shell vs source (2026-09-27) ----------------------
+# dist-app/ ships a COMMITTED binary (offer-where.exe + WebView2Loader.dll). Nothing
+# in tsc / selftest / contract / smoke can tell whether that binary still corresponds
+# to src-tauri/, because the assertion has to span "source on disk" and "bytes inside
+# the exe" -- two things no compiler or test runner here compares.
+# build_app.ps1 records the recipe and the hashes into dist-app/BUILD_INFO.json; this
+# recomputes them. Three failure modes, all of them real and all silent otherwise:
+#   (a) a .rs / Cargo.toml changed, or a source file was added or deleted, after the
+#       last build -- the package then ships a binary that predates its own source
+#   (b) the exe or dll was swapped without re-stamping
+#   (c) the stamp was hand-edited to make a mismatch go away
+# The recipe (which directories to skip) is read FROM the stamp, so this file does not
+# carry a second copy of the rule that could rot out of sync with build_app.ps1.
+# ~0.3s over ~10 files, so it runs BEFORE tar: a stale binary costs one second here
+# instead of a 5-minute pack plus a wrong artifact on the release page.
+$appDir   = Join-Path $root 'dist-app'
+$appInfoP = Join-Path $appDir 'BUILD_INFO.json'
+$appExeP  = Join-Path $appDir 'offer-where.exe'
+$appDllP  = Join-Path $appDir 'WebView2Loader.dll'
+$appSrcP  = Join-Path $root 'src-tauri'
+$missingApp = @($appInfoP, $appExeP, $appDllP) | Where-Object { -not (Test-Path -LiteralPath $_) }
+if ($missingApp) {
+  Write-Host ("::error::native shell artifact missing: " + (($missingApp | ForEach-Object { Split-Path $_ -Leaf }) -join ', '))
+  Write-Host "[error] dist-app/ must contain offer-where.exe, WebView2Loader.dll and BUILD_INFO.json."
+  Write-Host "        Run build_app.ps1, then commit all three together with the src-tauri change."
+  exit 1
+}
+$appInfo = Get-Content -LiteralPath $appInfoP -Raw | ConvertFrom-Json
+
+$curSrc = New-Object System.Collections.Generic.List[object]
+foreach ($f in (Get-ChildItem -LiteralPath $appSrcP -Recurse -File -Force)) {
+  $rel = $f.FullName.Substring($root.Length + 1).Replace('\', '/')
+  $parts = $rel.Split('/')
+  $skip = $false
+  for ($i = 1; $i -lt ($parts.Length - 1); $i++) {
+    if ($appInfo.excludeDirNames -contains $parts[$i]) { $skip = $true; break }
+  }
+  if ($skip) { continue }
+  $curSrc.Add([pscustomobject]@{
+    path   = $rel
+    sha256 = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLower()
+  })
+}
+$curSrc = @($curSrc | Sort-Object path)
+
+$sb = New-Object System.Text.StringBuilder
+foreach ($e in $curSrc) { [void]$sb.Append($e.path).Append("`n").Append($e.sha256).Append("`n") }
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$curHash = ([System.BitConverter]::ToString(
+  $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sb.ToString()))) -replace '-', '').ToLower()
+$stampHash = ([string]$appInfo.sourceHash).ToLower()
+
+$drift = New-Object System.Collections.Generic.List[string]
+$stampMap = @{}
+foreach ($e in $appInfo.sourceFiles) { $stampMap[[string]$e.path] = ([string]$e.sha256).ToLower() }
+$curPaths = @($curSrc | ForEach-Object { $_.path })
+foreach ($e in $curSrc) {
+  if (-not $stampMap.ContainsKey($e.path)) { $drift.Add('added since build: ' + $e.path) }
+  elseif ($stampMap[$e.path] -ne $e.sha256) { $drift.Add('modified since build: ' + $e.path) }
+}
+foreach ($e in $appInfo.sourceFiles) {
+  if ($curPaths -notcontains [string]$e.path) { $drift.Add('deleted since build: ' + [string]$e.path) }
+}
+if ($drift.Count -gt 0 -or $curHash -ne $stampHash) {
+  Write-Host ("::error::native shell is stale: src-tauri/ no longer matches dist-app/BUILD_INFO.json")
+  Write-Host "[error] the committed exe does not correspond to the committed source:"
+  $drift | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+  Write-Host ("   stamped sourceHash = " + $stampHash.Substring(0, [Math]::Min(12, $stampHash.Length)) + "...")
+  Write-Host ("   current sourceHash = " + $curHash.Substring(0, [Math]::Min(12, $curHash.Length)) + "...")
+  Write-Host "   Fix: run build_app.ps1, then commit dist-app/ and src-tauri/ in the same commit."
+  exit 1
+}
+foreach ($a in $appInfo.artifacts) {
+  $ap = Join-Path $root ([string]$a.path).Replace('/', '\')
+  if (-not (Test-Path -LiteralPath $ap)) {
+    Write-Host ("::error::stamped artifact is missing: " + [string]$a.path)
+    exit 1
+  }
+  $ah = (Get-FileHash -LiteralPath $ap -Algorithm SHA256).Hash.ToLower()
+  if ($ah -ne ([string]$a.sha256).ToLower()) {
+    Write-Host ("::error::artifact bytes differ from the stamp: " + [string]$a.path)
+    Write-Host ("   stamped = " + ([string]$a.sha256).ToLower())
+    Write-Host ("   on disk = " + $ah)
+    Write-Host "   Fix: run build_app.ps1 to re-stamp, then commit both."
+    exit 1
+  }
+}
+Write-Host ("      provenance: " + $curSrc.Count + " src-tauri files and " + @($appInfo.artifacts).Count + " artifact(s) match the stamp")
+
 $files = @("package.json", "package-lock.json", "tsconfig.json", ".env.example",
-           "README.md", "DEVELOPMENT.md", "LOGIN_GUIDE.md", "LICENSE", "version.json")
+           "README.md", "DEVELOPMENT.md", "LOGIN_GUIDE.md", "LICENSE", "version.json",
+           # Native shell (2026-09-27). Listed FILE BY FILE, not as the directory:
+           # dist-app/ also holds runtime logs (offer-where.log / .prev) that must never
+           # ship, and `tar -c dist-app` would recurse into them. Passing the three file
+           # paths makes tar create the dist-app parent entry implicitly.
+           # Their contents are checked by the provenance guard above; their presence is
+           # pinned in $must below.
+           "dist-app/offer-where.exe", "dist-app/WebView2Loader.dll",
+           "dist-app/BUILD_INFO.json")
 
 # Only END-USER launchers ship. Repack helpers, CLI one-shots, bash collectors and
 # CDP debug launchers stay in the repo: a recipient facing 20 root entries cannot
@@ -100,7 +197,10 @@ $dropScripts = @(
   'collect_all.sh', 'offerbiu_auto.sh',
   'wait_liepin.sh', 'wait_offerbiu.sh', 'wait_zhilian.sh',
   # the packer itself -- recipients do not build packages
-  'pack.ps1'
+  'pack.ps1',
+  # the native-shell builder: same reason (recipients do not build the app), plus it
+  # would expose the author's toolchain layout in a package that ships a built exe.
+  'build_app.ps1'
 )
 $scripts = Get-ChildItem $root -File -Force |
   Where-Object { @('.bat', '.sh', '.ps1') -contains $_.Extension -and $dropScripts -notcontains $_.Name } |
@@ -502,6 +602,12 @@ $must = @(
   # codepage, so a CJK-named entry could not be compared reliably (see the note above
   # the $shippedDev check). Renaming it closed that blind spot.
   "create_desktop_shortcut.bat",
+  # Native shell (2026-09-27). The exe and its WebView2Loader.dll are the entry the
+  # desktop shortcut prefers; BUILD_INFO.json carries the provenance stamp the guard
+  # above verifies. All three must be in the zip or "double-click and run" is dead.
+  "dist-app/offer-where.exe",
+  "dist-app/WebView2Loader.dll",
+  "dist-app/BUILD_INFO.json",
   # scripts/ is now file-enumerated (see $scriptDrop), so pin the ones that must always
   # be there: the single script the server spawns at runtime, the shared CDP helper, and
   # a representative collector. Without these the app starts but one core feature is dead.

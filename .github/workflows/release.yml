@@ -112,8 +112,9 @@ jobs:
           $notes += "1) 解压到纯英文路径（如 D:\offer-where）。建议用系统自带 tar 或 7-Zip；别用资源管理器双击解压（包内 18.1 万个小文件，会非常慢）：`n"
           $notes += "    mkdir D:\offer-where`n"
           $notes += "    tar -xf job-apply-agent-portable.zip -C D:\offer-where`n`n"
-          $notes += "2) 双击 start_all.bat（包内自带 Node 运行时，无需另装；需已安装 Google Chrome）`n"
-          $notes += "3) 打开控制台 http://127.0.0.1:4400/ ，按首页「开箱自检」卡片逐项补齐（上传简历、登录各平台窗口）`n`n"
+          $notes += "2) 双击 offer-where.exe（原生外壳：自动起后端 + 5 个平台调试窗口；包内自带 Node 运行时，无需另装；需已安装 Google Chrome）`n"
+          $notes += "   包内没有 offer-where.exe 时（旧包）改双击 start_all.bat，效果等价。`n"
+          $notes += "3) 打开控制台窗口（或 http://127.0.0.1:4400/ ），按首页「开箱自检」卡片逐项补齐（上传简历、登录各平台窗口）`n`n"
           $notes += "首次使用默认只做预览 —— 真实投递会不可撤销地向 HR 发出消息。`n"
           $notes += "包内 version.json 记录了该包对应的提交号与构建时间，可随时核对版本。"
           gh release create $tag "$env:ZIP_PATH" --title $tag --notes $notes

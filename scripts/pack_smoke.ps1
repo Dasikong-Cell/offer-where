@@ -38,11 +38,21 @@ foreach ($f in @(
   "shared/agentPrompt.ts",
   "public/console.html",
   ".env.example",
-  "package.json"
+  "package.json",
+  # Native shell (2026-09-27). pack.ps1 pins these in $must against the ARCHIVE
+  # LISTING; here we assert them on the EXTRACTED tree, which is the state a
+  # recipient actually gets. The exe without its WebView2Loader.dll next to it
+  # cannot start at all, so they are asserted together.
+  "dist-app/offer-where.exe",
+  "dist-app/WebView2Loader.dll",
+  "dist-app/BUILD_INFO.json"
 )) {
   if (-not (Test-Path (Join-Path $tmp $f))) { throw "missing required file in package: $f" }
 }
-foreach ($bad in @(".env", "data", "src", ".git")) {
+# dist-app/ ships only those three files. Runtime logs live in the same directory and
+# must never ride along (they hold absolute local paths and WebView2 diagnostics).
+foreach ($bad in @(".env", "data", "src", ".git",
+                   "dist-app/offer-where.log", "dist-app/offer-where.log.prev")) {
   if (Test-Path (Join-Path $tmp $bad)) { throw "file that must never ship is present: $bad" }
 }
 $srvJs = Get-ChildItem (Join-Path $tmp 'server') -Recurse -File -Filter *.js -ErrorAction SilentlyContinue

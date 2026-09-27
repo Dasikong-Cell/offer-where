@@ -16,9 +16,12 @@
 【快速开始】
 1. 解压到任意位置。
 2. （可选）双击「create_desktop_shortcut.bat」→ 桌面只会出现一个「OfferWhere」图标。
-3. 双击「OfferWhere」（或直接双击 start_all.bat）：
-   - 自动打开独立的 Chrome 调试窗口
-   - 自动启动后端服务并打开控制台页面 http://127.0.0.1:4400
+   （该入口优先指向 offer-where.exe；包内没有它时才回退 start_all.bat）
+3. 双击「offer-where.exe」（原生外壳，推荐）或「OfferWhere」（桌面入口）：
+   - 自动打开 5 个核心平台的独立 Chrome 调试窗口
+   - 自动启动后端服务，就绪后弹出控制台窗口（http://127.0.0.1:4400）
+   - 关窗 = 收进系统托盘（后端继续跑）；托盘「退出」才停服
+   包内没有 offer-where.exe 时（旧包）改双击 start_all.bat，效果等价。
 4. 在弹出的 Chrome 调试窗口里登录你要投的平台账号。
 5. 回到控制台页面：
    ① 勾选平台（可多选）  ② 填每平台投递数量与间隔  ③ 点「开始投递」
@@ -26,7 +29,9 @@
 
 【目录与文件说明】
   OfferWhere（桌面唯一入口）  启动服务并打开控制台
-  start_all.bat              一键启动 CDP Chrome + 后端服务 + 打开控制台
+  offer-where.exe            原生外壳（Tauri）：起后端 + 5 个平台窗口 + 原生控制台窗口，关窗进托盘
+  WebView2Loader.dll         必须与 offer-where.exe 同目录，缺了外壳起不来
+  start_all.bat              一键启动 CDP Chrome + 后端服务 + 打开控制台（shell 版，等价）
   start_server.bat           仅启动后端服务（被 start_all 调用，已做幂等：服务在跑就跳过）
   setenv.bat                 公共环境初始化（自动找 Node / Chrome / profile）
   create_desktop_shortcut.bat 在桌面创建唯一入口「OfferWhere」（原名「创建桌面快捷方式.bat」，改 ASCII 治英文 Windows 乱码）

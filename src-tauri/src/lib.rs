@@ -7,6 +7,7 @@
 //!   反检测与登录态完全沿用 start_all.bat 的那套参数。
 //!
 //! 启动流程（等价于双击 start_all.bat，只是把「黑框 + Chrome --app 标签页」换成原生窗口）：
+//!   0. 首跑引导：缺 `data/.installed` 就调 `install_first_run.bat`（建桌面入口 + 写标记）
 //!   1. 定位负载根目录 ROOT（server/index.ts 所在的那一层）
 //!   2. 起后端：`node/node.exe node_modules/tsx/dist/cli.mjs server/index.ts`，PORT=4400（已在跑则跳过）
 //!   3. 开 5 个 CDP Chrome 窗口（boss/liepin/job51/zhilian/official，端口 9223-9227，已在跑则跳过）
@@ -279,6 +280,52 @@ fn launch_core_platforms(chrome: &Path, root: &Path) {
     log_line(&format!("chrome: 本轮新开 {opened} 个窗口"));
 }
 
+// ───────────────────────────── 首跑安装引导 ─────────────────────────────
+
+/// 首跑安装引导 —— 等价于 `start_all.bat` 开头那一段。
+///
+/// `data/.installed` 不存在 ⇒ 调 `install_first_run.bat`（Python 无关：它是 PowerShell
+/// WinForms 对话框），用户点「安装」后由它建桌面入口并写下这个标记；之后每次启动都跳过。
+///
+/// **为什么外壳必须自己补这一环**：`data/` 不进包 ⇒ 每个收件人解压后首跑必然缺这个标记。
+/// `start_all.bat` 有这段而外壳没有，所以一旦把 exe 当门户，首跑就会**静默跳过安装引导**
+/// —— 用户既没有桌面入口，也不知道自己该先做什么。
+///
+/// 刻意**同步阻塞**：与 `start_all.bat` 语义一致（先安装、再拉服务），也顺带保证对话框
+/// 不会被随后创建的主窗口压在后面。调用前后都写日志，万一对话框没弹出来也查得到。
+fn ensure_first_run_install(root: &Path) {
+    let marker = root.join("data").join(".installed");
+    if marker.exists() {
+        log_line("first-run: 已安装（data/.installed 存在），跳过引导");
+        return;
+    }
+    let script = root.join("install_first_run.bat");
+    if !script.exists() {
+        // 兼容旧包 / 开发树：脚本不在就只记一笔，绝不因此起不来。
+        log_line("first-run: 缺 data/.installed，但 install_first_run.bat 不存在 ⇒ 跳过（旧包兼容）");
+        return;
+    }
+    log_line("first-run: 缺 data/.installed → 调用 install_first_run.bat（等用户点「安装」）");
+    let t0 = Instant::now();
+    let res = Command::new("cmd")
+        .arg("/c")
+        .arg(&script)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match res {
+        Ok(st) => log_line(&format!(
+            "first-run: 引导结束 code={:?} 用时 {}ms；marker_exists={}",
+            st.code(),
+            t0.elapsed().as_millis(),
+            marker.exists()
+        )),
+        Err(e) => log_line(&format!("first-run: 调用 install_first_run.bat 失败: {e}")),
+    }
+}
+
 // ───────────────────────────── 主窗口 ─────────────────────────────
 
 /// 解析本次要用的 WebView2 浏览器参数，并返回**来源**（写进日志便于排障）。
@@ -377,6 +424,9 @@ pub fn run() {
             let handle = app.handle().clone();
             let root = resolve_root();
             log_line(&format!("root={root:?}"));
+
+            // ⓪ 首跑安装引导（对齐 start_all.bat；详见 ensure_first_run_install 的注释）
+            ensure_first_run_install(&root);
 
             // ① 起后端
             let child = spawn_backend(&root);
