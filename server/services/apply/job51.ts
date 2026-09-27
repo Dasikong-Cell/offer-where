@@ -7,6 +7,7 @@
  * 状态驱动、可重复执行；滑块返回 need_captcha。
  */
 import { ApplyLogger, bexec, pageText, pageUrl, tryScreenshot, sleep, loginViaEmailCode, resolveResumePath } from './common.js';
+import { parseResumeFile } from '../resume.js';
 import { getPlatform } from './platforms.js';
 import type { ApplyInput, ApplyResult } from './types.js';
 
@@ -44,18 +45,42 @@ async function detectCaptcha(platform: string): Promise<boolean> {
  * 弹窗结构：.el-dialog.attachment_resume_dialog（或普通 .el-dialog），内含 .attachment_item 简历项，
  * 每项带 .radio 单选；底部确认键文案为 发送/确定/立即申请/提交。
  * 注意：必须用 eval 点选 radio，不能靠文本点「附件简历」（文本点不中 radio，导致弹窗未确认）。
+ *
+ * 2026-09-27：**不再把某一份简历的姓名硬编码进这段注入脚本**（那是某个人的身份信息，且写进
+ * 分发包里对别的使用者毫无意义）。姓名改为运行时从**已解析的简历**取一次并进程内缓存；
+ * 取不到就传空串 —— 空提示时的行为与原兜底**完全一致**：取第一项。
  */
-const PICK_RESUME = `(() => {
+let resumeNameCache: string | null = null;
+
+/** 取「简历本人姓名」用作弹窗里的匹配提示；解析失败/无简历 → 空串（不影响主流程）。 */
+async function resumeNameHint(): Promise<string> {
+  if (resumeNameCache !== null) return resumeNameCache;
+  try {
+    const p = resolveResumePath();
+    if (!p) { resumeNameCache = ''; return resumeNameCache; }
+    const struct = await parseResumeFile(p);
+    resumeNameCache = (struct?.name || '').trim();
+  } catch {
+    resumeNameCache = '';
+  }
+  return resumeNameCache;
+}
+
+async function pickResumeScript(): Promise<string> {
+  const hint = await resumeNameHint();
+  return `(() => {
   const vis = e => e && e.offsetParent !== null;
   const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
          || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
   if (!d) return { ok: false, why: 'no-dialog' };
   const items = [...d.querySelectorAll('.attachment_item')];
   if (!items.length) return { ok: true, picked: null };
-  const it = items.find(x => /杨欣宇/.test(x.innerText || '')) || items[0];
+  const hint = ${JSON.stringify(hint)};
+  const it = (hint && items.find(x => (x.innerText || '').includes(hint))) || items[0];
   (it.querySelector('.radio') || it.querySelector('input[type=radio]') || it).click();
   return { ok: true, picked: (it.innerText || '').replace(/\\s+/g, ' ').trim() };
 })()`;
+}
 
 const SEND = `(() => {
   const vis = e => e && e.offsetParent !== null;
@@ -82,7 +107,7 @@ const WAIT_DLG = (waitMs: number) => `(() => {
     const vis = e => e && e.offsetParent !== null;
     const d = [...document.querySelectorAll('.el-dialog.attachment_resume_dialog')].pop()
            || [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
-    if (d && /(附件简历|我的简历|选择需要同步发送|选择简历|杨欣宇|\\.pdf)/.test(d.innerText || '')) return true;
+    if (d && /(附件简历|我的简历|选择需要同步发送|选择简历|\\.pdf)/.test(d.innerText || '')) return true;
     if (Date.now() > deadline) return 'timeout';
     return new Promise(r => setTimeout(r, 300)).then(tick);
   };
@@ -125,7 +150,7 @@ export async function runJob51List(input: ApplyInput, keyword: string, maxApply:
   return { ok: /已申请|已投递/.test(label), label, title: txt.slice(0, 40) };
 })()`;
 
-  // 勾选附件简历 / 发送 / 关闭弹窗 均复用模块级 PICK_RESUME / SEND / CLOSE_DLG
+  // 勾选附件简历 / 发送 / 关闭弹窗 均复用模块级 pickResumeScript() / SEND / CLOSE_DLG
 
   try {
     const searchUrl = cfg ? cfg.searchUrl(keyword) : `https://we.51job.com/pc/search?keyword=${encodeURIComponent(keyword)}&partner=`;
@@ -170,7 +195,7 @@ export async function runJob51List(input: ApplyInput, keyword: string, maxApply:
       }
       await sleep(1800);
 
-      const pick = await bexec(platform, 'eval', { script: PICK_RESUME }, logs, '勾选附件简历');
+      const pick = await bexec(platform, 'eval', { script: await pickResumeScript() }, logs, '勾选附件简历');
       const pd = (pick.data || {}) as any;
       if (pd.picked) logs.step('附件简历', true, pd.picked);
       await sleep(800);
@@ -370,12 +395,12 @@ export async function runJob51(input: ApplyInput): Promise<ApplyResult> {
       }
 
       // —— 简历选择弹窗（51job 要求选附件简历时弹出）——
-      // 用模块级 PICK_RESUME/SEND（eval 点 radio，比文本点可靠），最多重试 3 次。
+      // 用模块级 pickResumeScript()/SEND（eval 点 radio，比文本点可靠），最多重试 3 次。
       // 无弹窗（默认用在线简历直接投递）的岗位，点完即成功，下面校验会命中。
       let confirmed = false;
       for (let attempt = 0; attempt < 3 && !confirmed; attempt++) {
         await bexec(platform, 'eval', { script: WAIT_DLG(4000) }, logs, '等待简历弹窗');
-        const pick = await bexec(platform, 'eval', { script: PICK_RESUME }, logs, '勾选附件简历');
+        const pick = await bexec(platform, 'eval', { script: await pickResumeScript() }, logs, '勾选附件简历');
         const pd = (pick.data || {}) as any;
         if (pd.picked) logs.step('附件简历', true, pd.picked);
         else if (pd.why === 'no-dialog') logs.step('简历弹窗', false, '未出现（可能已用默认在线简历直接投递）');

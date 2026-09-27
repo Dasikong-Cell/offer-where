@@ -21,7 +21,7 @@ const cut = (s: string, n = 60) => (s || '').replace(/\s+/g, ' ').slice(0, n);
   // 全局查含简历关键词的可点击元素（含父链）
   const r = await ex('eval', { script: `(()=>{
     const all=[].slice.call(document.querySelectorAll('*'));
-    const hits=all.filter(e=>{const t=(e.innerText||'').replace(/\\s+/g,' ');return /杨欣宇简历|附件简历|在线简历|发送简历|简历\\.pdf/.test(t)&&t.length<60;});
+    const hits=all.filter(e=>{const t=(e.innerText||'').replace(/\\s+/g,' ');return /张三简历|附件简历|在线简历|发送简历|简历\\.pdf/.test(t)&&t.length<60;});
     const out=hits.slice(0,15).map(e=>{
       let p=e.parentElement, depth=0, btn=null;
       while(p&&depth<5){if(p.tagName==='BUTTON'||(p.getAttribute&&p.getAttribute('role')==='button')||/btn/.test(p.className||'')){btn={tag:p.tagName,cls:cut(p.className,40),txt:cut(p.innerText,16)};break;}p=p.parentElement;depth++;}

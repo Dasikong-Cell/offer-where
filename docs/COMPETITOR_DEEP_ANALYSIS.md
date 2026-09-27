@@ -1,6 +1,6 @@
-# 职得鸭（GaGaJob）全功能实现深度解析
+# 同类商业产品全功能实现深度解析
 
-> **取证对象**：`D:\新建文件夹\gagajob\`（安装体）+ `C:\Users\吉学静\AppData\Roaming\gagajob\`（用户数据）+ `product.gagajob.cn`（Web 端前端包）
+> **取证对象**：`D:\新建文件夹\<product>\`（安装体）+ `%APPDATA%\<product>\`（用户数据）+ `product.<vendor>.cn`（Web 端前端包）
 > **方法**：解包 `resources/app.asar`（52MB）→ 全量源码静态分析（32 个 JS、16,377 行）+ 前端 bundle 反查（2.27MB）+ CDP/JS 沙箱动态观察
 > **产物**：`zhideya_analysis/app/`（完整解包源码）、`zhideya_analysis/asar_tool.mjs`（自研 asar 解析器）
 > **日期**：2026-09-19
@@ -9,14 +9,14 @@
 
 ## 0. ⚠️ 对上一版取证结论的重要更正
 
-上一版 `ZHIDEYA_FORENSICS.md` 只看了 `AppData\Roaming\gagajob\`（用户数据目录，里面确实"只有 token、没有平台凭证"），据此得出：
+上一版 `COMPETITOR_FORENSICS.md` 只看了 `AppData\Roaming\<product>\`（用户数据目录，里面确实"只有 token、没有平台凭证"），据此得出：
 
-> ❌ **上一版结论（错误）**：「职得鸭 = 云端 SaaS + 轻壳；搜岗/匹配/代投全部运行在厂商服务器；用户不登录平台账号；验证码由服务端消化」
+> ❌ **上一版结论（错误）**：「对标产品 = 云端 SaaS + 轻壳；搜岗/匹配/代投全部运行在厂商服务器；用户不登录平台账号；验证码由服务端消化」
 
 本次解包**安装体**后推翻了它。真实情况是：
 
 > ✅ **真实架构**：**云端 AI 编排 + 本地真实 Chrome 自动化**的混合架构。
-> 职得鸭在**用户自己电脑上启动真实 Google Chrome**（`headless:false`，**窗口可见**），
+> 对标产品在**用户自己电脑上启动真实 Google Chrome**（`headless:false`，**窗口可见**），
 > 用 Puppeteer 打开 BOSS/猎聘/51job/智联，**用户必须在这个窗口里自己登录平台账号**，
 > 验证码/滑块也由**用户在这个可见窗口里手动过**。
 
@@ -27,14 +27,14 @@
 | 依赖 `puppeteer-real-browser` / `rebrowser-puppeteer-core` / `chrome-finder` | `app/package.json` |
 | `connect({ headless: false, executablePath: findChrome(), customConfig:{ userDataDir } })` | 所有 `puppeteer/*.js` |
 | 日志字符串「**检测到未登录，请在浏览器中完成登录操作**」 | `job51Hello.js:227`、`liepinHello.js:54` |
-| 前端明确提示「**请确保已经安装了谷歌浏览器**，且职得鸭为客户端最新版，还需保证账号有足够金币以及在「个人中心」已上传简历和配置岗位要求」 | `product.gagajob.cn` bundle |
+| 前端明确提示「**请确保已经安装了谷歌浏览器**，且对标产品为客户端最新版，还需保证账号有足够金币以及在「个人中心」已上传简历和配置岗位要求」 | `product.<vendor>.cn` bundle |
 | FAQ 里有「**没有谷歌浏览器怎么办？**」 | 同上 |
 
-**结论**：职得鸭与我们的 `job-apply-agent` **本质是同一条技术路线**（本地浏览器自动化平台操作）。
-你之前问的「为什么职得鸭不像我们总弹验证」——真实答案不是"它没有风控"，
+**结论**：对标产品与我们的 `job-apply-agent` **本质是同一条技术路线**（本地浏览器自动化平台操作）。
+你之前问的「为什么对标产品不像我们总弹验证」——真实答案不是"它没有风控"，
 而是下面 §7 讲的三件事叠加：**真实 Chrome（非 Chromium）+ 用 `rebrowser` 补丁消除 CDP 泄漏 + 持久化 profile 长期养熟**。
 它的验证码也不是免的，只是**首次登录/触发风控时同样要用户手动过**——只是窗口标题是 Chrome，
-你没意识到那个窗口是职得鸭开的。
+你没意识到那个窗口是对标产品开的。
 
 ---
 
@@ -52,9 +52,9 @@
                              │ HTTPS + Bearer JWT
                   自动更新源：public.century-cloud.com/aijob/
 ┌────────────────────────────┴─────────────────────────────────┐
-│  Electron 桌面壳（职得鸭.exe，version 1.0.39）                  │
+│  Electron 桌面壳（<product>.exe，version 1.0.39）                  │
 │  main.js = 纯 IPC 路由器（20KB，零业务逻辑）                     │
-│  win.loadURL('https://product.gagajob.cn')  ← UI 全是远程网页   │
+│  win.loadURL('https://product.<vendor>.cn')  ← UI 全是远程网页   │
 │  preload.cjs → contextBridge 暴露 ipcRenderer（薄）             │
 │  唯一本地持久化：userData/token.txt（JWT）                      │
 │  ── IPC 契约：open-bossAuto / open-liepinLetter / ... ──        │
@@ -103,7 +103,7 @@
 
 ## 3. 完整功能矩阵
 
-前端源码里功能是**按平台硬编码**的（`product.gagajob.cn` bundle）：
+前端源码里功能是**按平台硬编码**的（`product.<vendor>.cn` bundle）：
 
 ```js
 const ne = platformId === '51job'
@@ -410,7 +410,7 @@ rebrowser-puppeteer-core@23.10.3
 它修的是 CDP 的**运行时泄漏**：现代风控（Cloudflare、DataDome、以及国内平台的加固）会检测
 `Runtime.enable` 造成的副作用（如函数 `toString()` 被改写、`console.debug` 时序异常）来判定"这是自动化"。
 我们项目的做法是**绕开**——注释里写着"绝不 `Runtime.enable`，只用 `navigate`/`eval`"，
-这是有效的**手工规避**；而职得鸭是**打补丁后正常使用完整 puppeteer API**。
+这是有效的**手工规避**；而对标产品是**打补丁后正常使用完整 puppeteer API**。
 差别在于我们能用的 CDP 能力被自我阉割了，他们可以全用。
 
 ### 层 3：持久化 profile 长期养熟
@@ -470,7 +470,7 @@ Cookie/LocalStorage/设备指纹长期累积 → 平台侧"这是个老用户"�
 
 ## 7. 与 job-apply-agent 的逐项对照
 
-| 维度 | 职得鸭 | job-apply-agent（我们） | 判定 |
+| 维度 | 对标产品 | job-apply-agent（我们） | 判定 |
 |---|---|---|---|
 | 浏览器 | 本机真实 Chrome，Puppeteer 驱动 | 本机真实 Chrome，裸 CDP 驱动 | 同路线 |
 | 反检测 | rebrowser 补丁（可全用 CDP）+ 默认 flags + 持久 profile | `--disable-blink-features=AutomationControlled` + 自我限制 CDP | **我们更弱** |
@@ -493,7 +493,7 @@ Cookie/LocalStorage/设备指纹长期累积 → 平台侧"这是个老用户"�
 | 部署形态 | Electron 桌面客户端 | Node 服务 + 本地控制台 | 各有取舍 |
 
 **关于「一岗一简历」两种路线的结论**：
-- 职得鸭走 **PNG 聊天图**：通用（四平台一套代码）、绕开附件系统、HR 在聊天里必看到；但**不可被 ATS 解析**。
+- 对标产品走 **PNG 聊天图**：通用（四平台一套代码）、绕开附件系统、HR 在聊天里必看到；但**不可被 ATS 解析**。
 - 我们走 **PDF 邮件附件**：可解析、可留档、专业；但**只覆盖有招聘邮箱的岗位**（实测 858 个岗位只扫出 26 个邮箱）。
 - **两者不冲突，应该都保留**：有邮箱 → PDF 邮件；无邮箱但在平台内聊天 → 走 PNG 聊天图通道。
   这是本次分析给出的最直接的产品结论。
@@ -555,7 +555,7 @@ Cookie/LocalStorage/设备指纹长期累积 → 平台侧"这是个老用户"�
 
 ## 10. 一句话总结
 
-职得鸭不是"云端黑箱中介"，而是**「Electron 薄壳 + 本机真实 Chrome + Puppeteer(rebrowser 反检测补丁) + 云端 AI 编排」**的混合体，
+对标产品不是"云端黑箱中介"，而是**「Electron 薄壳 + 本机真实 Chrome + Puppeteer(rebrowser 反检测补丁) + 云端 AI 编排」**的混合体，
 与 `job-apply-agent` 同源同路，**它的护城河只有两块**：① `rebrowser` 那层 CDP 泄漏补丁（让反检测比我们干净），
 ② 云端 AI + 计费/分销的**产品化包装**（求职信、时间片调度、职位记录、金币体系）。
 而它的技术债同样明显：`fingerprint`/`ghost-cursor`/`turnstile`/`setWebdriverFalse` **四项反检测能力全部误配或未接线**，

@@ -425,6 +425,51 @@ if ($identityLeaks.Count -gt 0) {
 }
 Write-Host ("      portability: " + $scanSet.Count + " shipped text files scanned, 0 author-identity leaks")
 
+# -- PII GUARD, resume owner name / phone (2026-09-27) -------------------------
+# Bug class: the resume owner's REAL name and mobile number had leaked into 17 tracked
+# files, including shipped runtime code -- server/services/apply/job51.ts used the name
+# as the resume-picker key inside a page-injected script. Every recipient of the
+# portable zip therefore received a stranger's name and phone number, and the public
+# repo published them. Nothing in tsc / selftest / contract / smoke noticed, because a
+# person's name in a comment or an injected string is syntactically perfect.
+# The tokens are read from data/.pii_denylist.txt: data/ is gitignored AND excluded from
+# the package, so this guard never bakes the very strings it looks for into the repo.
+# Present => fail closed. Absent (CI, or a machine that never held the resume) => skip,
+# same posture as the scripts/-tracking check above.
+# Kept pure ASCII on purpose: a contract test asserts this file has 0 non-ASCII bytes.
+$piiFile = Join-Path $root 'data/.pii_denylist.txt'
+if (-not (Test-Path -LiteralPath $piiFile -PathType Leaf)) {
+  Write-Host "      PII check: SKIPPED (data/.pii_denylist.txt not present)"
+} else {
+  $piiTokens = @()
+  foreach ($line in [System.IO.File]::ReadAllLines($piiFile)) {
+    $t = $line.Trim()
+    if (-not $t) { continue }
+    if ($t.StartsWith('#')) { continue }
+    $piiTokens += $t
+  }
+  $piiHits = New-Object System.Collections.Generic.List[string]
+  foreach ($rel in $scanSet) {
+    $full = Join-Path $root $rel
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($full) } catch { continue }
+    foreach ($t in $piiTokens) {
+      if ($txt.IndexOf($t, [System.StringComparison]::Ordinal) -ge 0) {
+        $piiHits.Add($rel + '  <- contains a deny token')
+        break
+      }
+    }
+  }
+  if ($piiHits.Count -gt 0) {
+    Write-Host ("::error::shipped files contain personal data listed in data/.pii_denylist.txt: " + (($piiHits | Select-Object -First 10) -join ' | '))
+    Write-Host "[error] replace it with a placeholder (e.g. 'Zhang San' / '13800138000'):"
+    $piiHits | Select-Object -First 10 | ForEach-Object { Write-Host "   - $_" }
+    exit 1
+  }
+  Write-Host ("      PII check: " + $scanSet.Count + " shipped text files scanned against " + $piiTokens.Count + " deny token(s), 0 hits")
+}
+
 # All validations passed -- now (and only now) it is safe to replace the previous zip.
 if (Test-Path $zip) {
   try { Remove-Item $zip -Force -ErrorAction Stop }

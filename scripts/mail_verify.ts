@@ -15,7 +15,7 @@ const client = new ImapFlow({
   logger: false,
 });
 
-const SENT_SUBJECT = /杨欣宇-13095328850/;          // 我们发出的邮件主题指纹
+const SENT_SUBJECT = /张三-13912345678/;          // 我们发出的邮件主题指纹
 const BOUNCE = /(mailer-daemon|postmaster|退信|delivery status|undelivered|delivery has failed|无法投递|发送失败|mail delivery)/i;
 
 (async () => {

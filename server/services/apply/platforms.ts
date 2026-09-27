@@ -1,6 +1,6 @@
 /**
  * 各招聘平台「官网一键投递」配置
- * 选择器/脚本直接对齐职得鸭(gagajob) 解析出的真实实现：
+ * 选择器/脚本直接对齐同类产品 解析出的真实实现：
  *   - 智联  zhilianHello.js  → .summary-planes__action button.a-button（立即投递）
  *   - BOSS   bossHello.js     → .op-btn-chat（立即沟通）
  *   - 51job  job51Hello.js    → #app_ck（申请职位）

@@ -1,7 +1,7 @@
 /**
- * 打招呼决策 + 跳过原因留痕（对标职得鸭 `POST /api/ai/checkAutoChat`）
+ * 打招呼决策 + 跳过原因留痕（对标同类产品 `POST /api/ai/checkAutoChat`）
  * ─────────────────────────────────────────────────────────────
- * 职得鸭的契约：AI 返回 `是 | 否 | 否-已写过 | 否-HR已回复`（只有分类，没有可读理由）。
+ * 同类产品的契约：AI 返回 `是 | 否 | 否-已写过 | 否-HR已回复`（只有分类，没有可读理由）。
  * 我们的改进：**每一次"不打招呼"都产出一句人类可读的 `skip_reason` 并落库**，
  * 于是「哪些规则在误杀」可以从漏斗数据里直接看出来 —— 这是它没有的能力。
  *
@@ -248,7 +248,7 @@ export async function decideGreet(ctx: GreetContext): Promise<GreetDecision> {
       if (mr.missing.length) evidence.push(`规则缺失项：${mr.missing.slice(0, 5).join('/')}`);
     }
 
-    // ── 9. AI 判定（职得鸭的 checkAutoChat 对位能力）
+    // ── 9. AI 判定（同类产品的 checkAutoChat 对位能力）
     if (ctx.useAi !== false && ctx.profile && (ctx.jd || ctx.position)) {
       const blob = buildResumeBlob(ctx.profile).slice(0, 3000);
       const prompt = `请判断：这位求职者是否值得主动向该岗位打招呼。

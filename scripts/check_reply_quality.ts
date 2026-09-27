@@ -16,7 +16,7 @@ import '../server/env.js';
 import { composeReplyWithAi } from '../server/services/apply/autoReply.js';
 
 const profile = {
-  name: '杨欣宇',
+  name: '张三',
   phone: '130****8850',
   education: '本科',
   major: '软件工程',
@@ -33,7 +33,7 @@ const cases: Case[] = [
     company: '北京时空体科技',
     position: 'java软件工程师',
     hist: [
-      { side: 'me', text: 'BOSS您好，我叫杨欣宇，看到您的岗位觉得我非常匹配…可以给您发一份简历看看吗？' },
+      { side: 'me', text: 'BOSS您好，我叫张三，看到您的岗位觉得我非常匹配…可以给您发一份简历看看吗？' },
       { side: 'hr', text: '方便发一份简历过来吗？' },
       { side: 'hr', text: '我想要一份您的附件简历，您是否同意 拒绝 同意' },
       { side: 'hr', text: '这个职位在辽宁朝阳，你家里是哪里？' },

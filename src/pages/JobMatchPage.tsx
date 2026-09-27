@@ -376,7 +376,7 @@ export function JobMatchPage() {
     setBatchLog([]);
     setBatchProgress({ index: 0, total: 0, current: '' });
 
-    // 职得鸭全套：选择了「动作模式」(auto/keyword/search/again/letter) → 走统一引擎（直接投不过滤）
+    // 全量投递：选择了「动作模式」(auto/keyword/search/again/letter) → 走统一引擎（直接投不过滤）
     if (batchForm.action) {
       try {
         if (!batchForm.platform) throw new Error('请选择投递平台');
@@ -568,7 +568,7 @@ export function JobMatchPage() {
                     {job.apply_url && (
                       <Button size="small" theme="warning" variant="text" loading={applying === `${job.id}:offerbiu:email`} onClick={() => applyOnPlatform(job, 'offerbiu', 'hello', 'email')}>邮箱投递</Button>
                     )}
-                    {/* 职得鸭全套：求职信 / 复聊（沟通型平台 boss·liepin 效果最佳） */}
+                    {/* 全量投递：求职信 / 复聊（沟通型平台 boss·liepin 效果最佳） */}
                     <Button size="small" theme="default" variant="outline" loading={applying === `${job.id}:${jobPlatformOf(job)}:letter`} onClick={() => applyOnPlatform(job, jobPlatformOf(job), 'letter')}>求职信</Button>
                     {(['boss', 'liepin'].includes(jobPlatformOf(job)) || job.apply_url) && (
                       <Button size="small" theme="default" variant="outline" loading={applying === `${job.id}:${jobPlatformOf(job)}:again`} onClick={() => applyOnPlatform(job, jobPlatformOf(job), 'again')}>复聊</Button>

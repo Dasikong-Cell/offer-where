@@ -715,7 +715,7 @@ export async function execCdpAction(
         if (args.delay) await new Promise(r => setTimeout(r, args.delay));
         return await okResult(s);
       }
-      /** 拟人输入（技术债 D2，对标职得鸭 `typeSlowly`）。
+      /** 拟人输入（技术债 D2，对标同类产品 `typeSlowly`）。
        *  区别：`type` 是 JS 原生 setter 一次性赋值（`event.isTrusted === false`，
        *  且没有逐键节奏）；`typeHuman` 走 CDP Input 域派发**真实键盘事件**，
        *  `isTrusted === true`，且每字符间有随机延迟 —— 更接近真人打字。
@@ -1106,7 +1106,7 @@ export async function execCdpAction(
           sessions.delete(`${platform}__pdf`);
         }
       }
-      /** HTML → PNG 长图（对标职得鸭「简历 HTML → 截图 → 聊天框发图」）。
+      /** HTML → PNG 长图（对标同类产品「简历 HTML → 截图 → 聊天框发图」）。
        *  与 htmlToPdf 同样是**临时标签页**，绝不占用平台主标签。
        *  参数：{ fileUrl, outPath, width=1000, scale=2, maxHeight=16000, timeout } */
       case 'htmlToImage': {

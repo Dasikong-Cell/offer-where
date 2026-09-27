@@ -1,7 +1,7 @@
 /**
  * 智联招聘（Zhaopin）专用投递脚本 —— 委托统一引擎
  *
- * 对齐职得鸭 zhilianHello.js 的一键投递思路：打开 JD → 点「立即投递」(.summary-planes__action
+ * 对齐同类产品 zhilianHello.js 的一键投递思路：打开 JD → 点「立即投递」(.summary-planes__action
  * button.a-button) → 一键完成，依赖账号已填好的在线简历，**不碰任何表单/级联**（校招向导的籍贯
  * 级联商业工具也跳过）。用户选择「直接投不过滤」，故不做 AI 匹配门槛。
  *

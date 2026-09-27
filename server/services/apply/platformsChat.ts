@@ -101,7 +101,7 @@ export const yupaoChatDriver: ChatDriver = buildChatDriver(cfg({
   disabledReason: '鱼泡为蓝领直聘平台，HR 沟通走 App 而非 Web IM，Web 侧无会话列表可驱动',
 }));
 
-// ── 中华英才网 ──（2026-09-24 校准阻塞：profile 已登录，但点开「杨欣宇」下拉仅 我的简历/退出，全站无「消息」入口，
+// ── 中华英才网 ──（2026-09-24 校准阻塞：profile 已登录，但点开顶部账号下拉仅 我的简历/退出，全站无「消息」入口，
 //   新华英才（58 系）求职侧无独立 Web HR 聊天收件箱。
 //   ★ 架构判定：无独立 Web HR 聊天收件箱 → 自动回复在本平台**架构上不可用**，引擎直接跳过。
 export const chinahrChatDriver: ChatDriver = buildChatDriver(cfg({

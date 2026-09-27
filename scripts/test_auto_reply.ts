@@ -43,7 +43,7 @@ console.log('\n=== 回复文案样例 ===');
 const ctx = {
   company: '某某科技',
   position: 'Java开发',
-  profile: { name: '杨欣宇', education: '本科', major: '软件工程', phone: null },
+  profile: { name: '张三', education: '本科', major: '软件工程', phone: null },
 };
 for (const msg of ['你好', '方便发一份简历吗', '明天方便面试吗', '面试时间定在明天下午3点', '我们觉得你不太合适']) {
   const d = decide(msg, { ...ctx, round: 1 });

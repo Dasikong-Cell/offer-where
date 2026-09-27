@@ -7,7 +7,7 @@
 cd "$(cd "$(dirname "$0")" && pwd)"
 for i in $(seq 1 240); do
   sleep 15
-  RES=$(curl -s --max-time 20 -X POST http://127.0.0.1:4400/api/browser/exec -H "Content-Type: application/json" -d "{\"platform\":\"liepin\",\"action\":\"eval\",\"script\":\"(()=>{const t=(document.body?document.body.innerText:'').trim();const ok=(t.indexOf('你好')>=0||t.indexOf('杨先生')>=0||t.indexOf('杨欣宇')>=0);const need=(t.indexOf('登录/注册')>=0&&t.indexOf('密码登录')>=0);return ok?'LOGGED':(need?'NEED_LOGIN':'UNKNOWN')})()\"}")
+  RES=$(curl -s --max-time 20 -X POST http://127.0.0.1:4400/api/browser/exec -H "Content-Type: application/json" -d "{\"platform\":\"liepin\",\"action\":\"eval\",\"script\":\"(()=>{const t=(document.body?document.body.innerText:'').trim();const ok=(t.indexOf('你好')>=0||t.indexOf('我的求职')>=0||t.indexOf('在线简历')>=0);const need=(t.indexOf('登录/注册')>=0&&t.indexOf('密码登录')>=0);return ok?'LOGGED':(need?'NEED_LOGIN':'UNKNOWN')})()\"}")
   echo "[poll $i] $(date +%H:%M:%S) $RES"
   if echo "$RES" | grep -q "LOGGED"; then
     echo "== LIEPIN LOGGED IN at $(date) =="

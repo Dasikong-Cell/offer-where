@@ -42,7 +42,7 @@ const DUMP = `(() => {
   const d = [...document.querySelectorAll('.el-dialog')].filter(vis).pop();
   if (!d) return null;
   const items = [...d.querySelectorAll('.attachment_item, li, label, [class*=resume], [class*=item]')]
-    .filter(e => /(附件简历|我的简历|上传的简历|杨欣宇|\\.pdf|简历)/.test(e.innerText||'') && (e.innerText||'').trim().length < 120)
+    .filter(e => /(附件简历|我的简历|上传的简历|张三|\\.pdf|简历)/.test(e.innerText||'') && (e.innerText||'').trim().length < 120)
     .map(e => (e.tagName||'') + '.' + (e.className||'') + ' | ' + (e.innerText||'').replace(/\\s+/g,' ').trim());
   const buttons = [...d.querySelectorAll('button, a.btn, [class*=btn]')].map(b => (b.innerText||'').trim() + ' /cls=' + (b.className||''));
   return JSON.stringify({ dlgClass: d.className, dlgHTMLhead: d.outerHTML.slice(0, 1600), resumeItems: items.slice(0,12), buttons: buttons.slice(0,14), dlgText: (d.innerText||'').replace(/\\s+/g,' ').slice(0,500) }, null, 2);

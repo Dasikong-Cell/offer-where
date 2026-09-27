@@ -59,7 +59,7 @@ status 取值：pending（待投递）/ applied（已投递）/ failed（失败�
 POST /api/apply
 Body: { "platform": "boss" | "zhilian" | "job51" | "liepin" | "nowcoder" | "offerbiu", "action"?: "hello" | "auto" | "keyword" | "search" | "again" | "letter", "jobId"?: "岗位池ID", "jobUrl"?: "岗位详情链接", "keyword"?: "搜索关键词", "maxPages"?: 5, "hrGroupId"?: "HR会话ID", "chatHistory"?: "聊天记录", "jdText"?: "JD文本", "sinceMinutes"?: 10 }
 - 该接口封装了「检测登录态 →（未登录）邮箱验证码登录（自动读 QQ 邮箱验证码）→ 打开岗位 → 点击投递/沟通 → 上传简历 → 校验成功」的完整脚本，成功后自动写投递记录 + 更新岗位状态。
-- action 取值（对齐职得鸭全套投递能力）：
+- action 取值（对齐全套投递能力）：
   - hello（默认）：单岗位一键投递（点「立即投递 / 立即沟通 / 聊一聊」，依赖已填好的在线简历，不碰表单/级联）。
   - auto：按默认列表或关键词批量自动翻页投递（maxPages 控制翻页数）。
   - keyword：等同 auto，但强制用关键词搜索后批量投递。

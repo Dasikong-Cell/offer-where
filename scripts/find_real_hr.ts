@@ -7,7 +7,7 @@ import { openChat, listConversations } from '../server/services/apply/bossChat';
 async function main() {
   await openChat();
   const convs = await listConversations();
-  const GREET = /BOSS您好|我叫杨欣宇/;
+  const GREET = /BOSS您好|我叫张三/;
   const SYS = /你与该职位竞争者PK情况|查看详细分析|职位推荐|牛人竞争力/;
   const candidates = [];
   const systemOnly = [];

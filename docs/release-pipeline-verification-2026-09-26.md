@@ -25,7 +25,7 @@ archive contains developer-only scripts: start.bat
 装了 pwsh 7 便携版（不污染系统 PATH、不改 `PATH`、可整个目录删掉）：
 
 ```
-C:\Users\吉学静\WorkBuddy\2026-09-02-09-33-33\_tools\pwsh7\pwsh.exe   # 7.6.6, Core
+C:\tools\pwsh7\pwsh.exe   # 7.6.6, Core
 ```
 
 | | PS 5.1.26100.9444 (Desktop) | pwsh **7.6.6** (Core) |
@@ -48,9 +48,9 @@ C:\Users\吉学静\WorkBuddy\2026-09-02-09-33-33\_tools\pwsh7\pwsh.exe   # 7.6.6
 复现时必须显式指向临时目录：
 
 ```powershell
-$tools = "C:\Users\吉学静\WorkBuddy\2026-09-02-09-33-33\_tools"
+$tools = "C:\dev\_tools"
 $pwsh  = "$tools\pwsh7\pwsh.exe"
-$repo  = "C:\Users\吉学静\WorkBuddy\2026-09-02-09-33-33\job-apply-agent"
+$repo  = "C:\dev\job-apply-agent"
 
 # ① 复现 runner 的打包步（release.yml「打包」步的等价物）
 $env:PACK_ZIP_DIR = "$tools\packout_final"

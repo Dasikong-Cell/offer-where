@@ -1,7 +1,7 @@
 const PORT = 4400;
 const PLATFORM = process.env.CHAT_PLATFORM || 'boss';
 const BASE = `http://127.0.0.1:${PORT}/api/browser/exec`;
-const FILE = 'D:/Desktop/杨欣宇简历.pdf';
+const FILE = 'D:/Desktop/张三简历.pdf';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function ex(action: string, extra: any = {}) {
   const r: any = await fetch(BASE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform: PLATFORM, action, ...extra }) });
@@ -36,6 +36,6 @@ async function ex(action: string, extra: any = {}) {
   await sleep(9000);
 
   // 查对话框状态
-  const r5 = await ex('eval', { script: `(()=>{const dlg=document.querySelector('.upload-select-dialog');const t=(dlg?dlg.innerText:document.body.innerText).replace(/\\s+/g,' ');const o={hasName:/杨欣宇简历/.test(t),hasPdf:/简历\\.pdf/.test(t),noAttached:/没有附件简历/.test(t),sendBtn:!!([].slice.call(document.querySelectorAll('button,[class*=btn]')).find(b=>/发送/.test(b.innerText||''))),snip:(t.match(/.{0,45}简历\\.pdf.{0,15}/g)||[]).slice(0,3)};return JSON.stringify(o)})()` });
+  const r5 = await ex('eval', { script: `(()=>{const dlg=document.querySelector('.upload-select-dialog');const t=(dlg?dlg.innerText:document.body.innerText).replace(/\\s+/g,' ');const o={hasName:/张三简历/.test(t),hasPdf:/简历\\.pdf/.test(t),noAttached:/没有附件简历/.test(t),sendBtn:!!([].slice.call(document.querySelectorAll('button,[class*=btn]')).find(b=>/发送/.test(b.innerText||''))),snip:(t.match(/.{0,45}简历\\.pdf.{0,15}/g)||[]).slice(0,3)};return JSON.stringify(o)})()` });
   console.log('dialog after upload:', JSON.stringify(r5.data).slice(0, 600));
 })().catch((e) => console.error('FATAL', e));

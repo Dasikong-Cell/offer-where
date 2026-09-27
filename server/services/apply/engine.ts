@@ -1,5 +1,5 @@
 /**
- * 统一「官网一键投递」引擎 —— 覆盖职得鸭全套投递功能
+ * 统一「官网一键投递」引擎 —— 覆盖全量投递投递功能
  *   hello   : 单岗位一键投递（打开 JD → 点 立即投递/立即沟通/聊一聊 → 确认）
  *   auto    : 按关键词(或默认列表)批量自动翻页投递
  *   keyword : 同 auto，但强制使用关键词搜索
@@ -7,7 +7,7 @@
  *   again   : 对 HR 会话复聊（发送回复）
  *   letter  : 打开岗位 → 发起沟通 → 发送求职信/招呼语
  *
- * 核心原则（对齐职得鸭）：一键完成，依赖账号已填好的在线简历，不碰表单/级联；
+ * 核心原则（对齐同类产品）：一键完成，依赖账号已填好的在线简历，不碰表单/级联；
  * 用户选择「直接投不过滤」，故不做 AI 匹配门槛，凡是能点到的都一键投。
  */
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, loginViaEmailCode } from './common.js';
@@ -580,7 +580,7 @@ async function runLetter(input: ApplyInput): Promise<ApplyResult> {
     }
 
     // 求职信：三重去重（台账已写过 / HR已回复 / 岗位记录已标记）命中则直接跳过，
-    // 不发送、不消耗 AI 调用 —— 对应职得鸭的「否-已写过」「否-HR已回复」但**理由可读且落库**。
+    // 不发送、不消耗 AI 调用 —— 对应同类产品的「否-已写过」「否-HR已回复」但**理由可读且落库**。
     const composed = await composeCoverLetter({
       platform: cfg.key,
       kind: 'letter',

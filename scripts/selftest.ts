@@ -54,7 +54,7 @@ if (!fs.existsSync(resumePath)) {
 
 console.log('\n══════ A2. 手机号抽取（多种常见写法） ══════');
 const phoneCases: Array<[string, string]> = [
-  ['电话：130-9532-8850', '13095328850'],   // 分段（本次修复）
+  ['电话：139-1234-5678', '13912345678'],   // 分段（本次修复）
   ['手机 138 0013 8000', '13800138000'],     // 空格分段
   ['联系方式：15912345678', '15912345678'],  // 连续
   ['+86 187 0000 0001', '18700000001'],      // 带国际区号
@@ -68,7 +68,7 @@ for (const [input, expect] of phoneCases) {
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ B. 匹配引擎（纯本地规则，可复现） ══════');
 const SKILLS_FIX = ['Java', 'Spring Boot', 'MySQL', 'Redis'];
-const RESUME_BLOB = '杨欣宇 软件工程 本科 Java Spring Boot MySQL Redis Docker';
+const RESUME_BLOB = '张三 软件工程 本科 Java Spring Boot MySQL Redis Docker';
 
 const t1 = matchResumeToJob(RESUME_BLOB, SKILLS_FIX, '招聘Java开发，要求熟悉Java、Spring Boot、MySQL、Redis，有Docker经验优先');
 check('高相关 JD → 高分', t1.score >= 60, `score=${t1.score} matched=${t1.matched.length} missing=${t1.missing.length}`);

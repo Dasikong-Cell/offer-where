@@ -1,8 +1,8 @@
-# offer-where · AI 求职管家（对标「职得鸭」）
+# offer-where · AI 求职管家
 
-一个**完全对标「职得鸭」AI 求职管家**的本地化、开源、可自托管的求职自动化引擎。
+一个**本地化、开源、可自托管**的 AI 求职自动化引擎。
 
-> 职得鸭对外承诺的五大能力：**智能匹配 → 文案撰写 → 自动投递 → 跟进(HR复聊) → 全程 AI 托管，求职者只需准备面试**。
+> 全流程五大能力：**智能匹配 → 文案撰写 → 自动投递 → 跟进(HR复聊) → 全程 AI 托管，求职者只需准备面试**。
 > 本项目把这套能力在自己的机器上跑起来：数据、简历、账号全在本机，AI 可选接入，不依赖任何商业 SaaS。
 
 ---
@@ -11,11 +11,11 @@
 
 > 本节是给**使用者**的入口；只想读代码的可以直接跳到下面的「功能对标矩阵」。
 
-1. 打开 **[Releases](https://github.com/Dasikong-Cell/offer-where/releases)**，下载最新一版的 `job-apply-agent-portable.zip`（约 **455MB**）。
+1. 打开 **[Releases](https://github.com/Dasikong-Cell/offer-where/releases)**，下载最新一版的 `job-apply-agent-portable.zip`（约 **353MB**）。
    仓库没有 Release 时，可在 GitHub 的 **Actions → Release → Run workflow** 手动触发一次（版本号留空会自动生成 `v<日期>-<短提交号>`）。
 2. 解压到**纯英文路径**（如 `D:\offer-where`）。
-   实测：解压后约 **1.4GB / 18.1 万个文件**，耗时约 5 分钟 —— 文件数多是因为**包内自带 Node 运行时**，好处是**使用者无需安装 Node**。
-   > ⚠️ **别用资源管理器双击 zip 解压**：包内共 18.1 万个小文件，「全部解压缩」会非常慢（可能十几分钟以上）。
+   实测：解压后约 **1.07GB / 12.4 万个文件** —— 文件数多是因为**包内自带 Node 运行时**，好处是**使用者无需安装 Node**。
+   > ⚠️ **别用资源管理器双击 zip 解压**：包内 12.4 万个小文件，「全部解压缩」会非常慢（可能十几分钟以上）。
    > 用系统自带的 `tar`（Win10 1803+）或 7-Zip 快得多：
    > ```bat
    > mkdir D:\offer-where
@@ -43,7 +43,7 @@
 
 ## 功能对标矩阵
 
-| 职得鸭能力 | offer-where 实现 | 说明 |
+| 能力 | offer-where 实现 | 说明 |
 |---|---|---|
 | 🔍 **智能匹配** | `/api/jobs/match` + `matchResumeToJobAi` | 接 LLM 时对「简历 vs JD」做语义打分(0-100)+命中/缺失/建议；无 LLM 自动回退本地规则匹配，**离线可跑** |
 | ✍️ **文案撰写** | `letterWriter` + `aiClient` | 按 JD/公司/岗位生成个性化招呼语与 HR 复聊回复；接 LLM 时 AI 生成，否则模板兜底 |
@@ -155,7 +155,7 @@ offer-where/
 > **前置要求**：① Windows 10 1803+（需系统自带 `tar.exe`）；② 已安装 **Google Chrome**（未装时启动器会明确提示并给出下载链接）。
 >
 > **便携包**：`job-apply-agent-portable.zip` 含自带 Node 与各启动器，解压到任意机器双击即用，无需安装 Node 环境
-> （约 455MB / 18 万文件，**解压约 5 分钟**，视磁盘而定）。
+> （约 353MB，解压后约 1.07GB / 12.4 万个文件；文件多，建议用 `tar` 或 7-Zip 解压）。
 
 1. 双击 `start_all.bat`：自动启动 CDP Chrome + 后端(4400) + 用 Chrome `--app=` 打开**独立控制台窗口**（无地址栏/标签栏，任务栏显示本应用图标）。
    - 想让桌面有个入口，先双击一次 `create_desktop_shortcut.bat`，之后即可双击桌面「OfferWhere」。
@@ -172,7 +172,7 @@ offer-where/
 
 ---
 
-## 接入 AI（可选，对标职得鸭的 AI 内核）
+## 接入 AI（可选）
 
 未配置 AI 时，项目以**「规则匹配 + 模板文案」**模式完整运行。配置任意 OpenAI 兼容网关后，自动切换为**「AI 语义匹配 + AI 文案 + AI 自动复聊」**。
 
@@ -372,7 +372,7 @@ curl -s -X POST http://127.0.0.1:4400/api/browser/exec -H 'Content-Type: applica
 
 ## 一岗一简历（按 JD 定制）
 
-对标职得鸭核心卖点。`server/services/apply/resumeTailor.ts` → `tailorResume(profile, job)`：
+按 JD 逐岗定制（核心能力之一）。`server/services/apply/resumeTailor.ts` → `tailorResume(profile, job)`：
 
 - **输出**：技能按岗位相关度重排（JD 命中项前置）+ 定制「核心优势/亮点」+ 命中/待补（gap）分析 + 匹配分 + 可直接渲染的 Markdown。
 - **策略**：LLM 优先（`chatJSON`），未配置或失败**自动回退本地规则** —— 与 `matchAi` 同款降级，离线可跑、绝不影响投递链路。
@@ -413,7 +413,7 @@ curl -X POST http://127.0.0.1:4400/api/jobs/tailor-resume -H 'Content-Type: appl
 
 实测（2026-09-18）：BOSS `wt2 / __zp_stoken__ / bst`、猎聘 `__gc_id / XSRF-TOKEN` 均读取成功 —— 此前只能靠截图肉眼判断登录态。
 
-**核心结论**（详见 [`docs/BOSS_OPENAPI_PLAN.md`](./docs/BOSS_OPENAPI_PLAN.md)）：BOSS/猎聘的「开放平台」**都是 B 端（招聘方/服务商）能力**（企业 IM、简历库、薪资元数据），需企业实名 + IP 白名单，**求职者个人无法用它投递简历**。因此「彻底消验证码」的正解不是找官方 API，而是**把平台登录会话搬出用户本机（云端执行）**——这正是职得鸭验证码无感的真正原因。
+**核心结论**（详见 [`docs/BOSS_OPENAPI_PLAN.md`](./docs/BOSS_OPENAPI_PLAN.md)）：BOSS/猎聘的「开放平台」**都是 B 端（招聘方/服务商）能力**（企业 IM、简历库、薪资元数据），需企业实名 + IP 白名单，**求职者个人无法用它投递简历**。因此「彻底消验证码」的正解不是找官方 API，而是**把平台登录会话搬出用户本机（云端执行）**——这正是同类云端产品验证码无感的真正原因。
 本仓库当前策略：**CDP 整页链路负责投递**（签名由页面自算，最稳），**JSON 通道只负责检索提速与登录态诊断**，不做签名对抗军备竞赛。
 
 ---
@@ -492,3 +492,4 @@ npm run hooks:install # 装 git pre-push：推送前自动跑 verify，杜绝「
 ## License
 
 MIT
+

@@ -520,7 +520,7 @@ export async function runBatchApply(
       }
     }
 
-    // 运行时间段闸门：到点即停（对标职得鸭 TimeManager，但**不在服务端长 sleep**）。
+    // 运行时间段闸门：到点即停（对标同类产品 TimeManager，但**不在服务端长 sleep**）。
     // 每处理一个岗位检查一次，用户可随时中断；cursor 已落库，下次启动继续剩余时间段。
     if (input.useSchedule) {
       const gate = checkAndAdvance(platform);
@@ -540,7 +540,7 @@ export async function runBatchApply(
       } as any);
     }
 
-    // 打招呼决策（对标职得鸭 checkAutoChat）：命中硬规则或 AI 判否 → 跳过并留痕 skip_reason。
+    // 打招呼决策（对标同类产品 checkAutoChat）：命中硬规则或 AI 判否 → 跳过并留痕 skip_reason。
     // 这是「规则误杀可见」的数据来源：每一次不投都能回答"为什么不投"。
     if (input.criteria?.greetDecision !== false) {
       const decision = await decideGreet({
@@ -629,7 +629,7 @@ export async function runBatchApply(
         sinceMinutes: input.sinceMinutes ? Number(input.sinceMinutes) : 10,
       });
     } catch (e: any) {
-      // 标签/会话被关闭属于「正常收尾噪声」（对标职得鸭 isClosingRelatedError）：
+      // 标签/会话被关闭属于「正常收尾噪声」（对标同类产品 isClosingRelatedError）：
       // 用户手关窗口、超时回收、页面 detach 都会抛 Target closed / detached Frame。
       // 这类不算投递失败，计入 skipped 并写明原因，否则会污染失败率、把排查带偏到「平台风控」。
       if (isClosingRelatedError(e)) {
@@ -684,7 +684,7 @@ export async function runBatchApply(
         db.updateJob(job.id, { status: 'applied' });
       } catch { /* 记录失败不阻断主流程 */ }
 
-      // ── 投递成功后的「追加动作」（对标职得鸭 AI写求职信 / 交换联系方式 / 发简历图）
+      // ── 投递成功后的「追加动作」（对标同类产品 AI写求职信 / 交换联系方式 / 发简历图）
       // 全部为可选，且**任何一步失败都不影响"已投递"这个既成事实**，只记日志。
       const extras: string[] = [];
       // 是否真正发出求职信（用于 A/B 策略打标，见下方 strategy 计算）

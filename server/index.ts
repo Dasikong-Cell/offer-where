@@ -373,7 +373,7 @@ app.get("/api/selfcheck", async (_req, res) => {
   res.json({ ok: todo === 0, todo, items, checkedAt: new Date().toISOString() });
 });
 
-// 投递漏斗 + 匹配度看板（对照职得鸭「数据洞察」补齐的可视化数据层）
+// 投递漏斗 + 匹配度看板（对照同类产品「数据洞察」补齐的可视化数据层）
 app.get("/api/stats/funnel", (_req, res) => {
   try {
     const rows = db.query<{ source: string; status: string; c: number }>(
@@ -402,7 +402,7 @@ app.get("/api/stats/funnel", (_req, res) => {
     const highWithJd = (db.query<{ c: number }>(
       "SELECT COUNT(*) c FROM jobs WHERE match_score>=70 AND jd IS NOT NULL AND TRIM(jd)<>''"
     )[0] || { c: 0 }).c;
-    // 跳过原因分布（我们比职得鸭多的一层）：每条被跳过的岗位都有可读理由，
+    // 跳过原因分布（我们比同类产品多的一层）：每条被跳过的岗位都有可读理由，
     // 按「原因前缀」归并后，能直接看出是哪条规则在大量误杀。
     const skipRows = db.query<{ reason: string; c: number }>(
       `SELECT skip_reason reason, COUNT(*) c FROM jobs
@@ -1320,7 +1320,7 @@ app.post("/api/jobs/tailor-resume", async (req, res) => {
   }
 });
 
-/** 打招呼决策（对标职得鸭 /api/ai/checkAutoChat，但我们返回可读理由）
+/** 打招呼决策（对标同类产品 /api/ai/checkAutoChat，但我们返回可读理由）
  *  入参：{ jobId } 或 { jobIds: [] }；apply=true 时把 skip_reason 落到 jobs 表。
  *  决策顺序：硬规则（已回复/已写过/已投过/不可投/隔离/排除词/城市/匹配度）→ AI → 兜底。 */
 app.post("/api/jobs/greet-decision", async (req, res) => {
@@ -1359,7 +1359,7 @@ app.post("/api/jobs/greet-decision", async (req, res) => {
   }
 });
 
-/** 生成/预览求职信（对标职得鸭 type2「AI写求职信」）
+/** 生成/预览求职信（对标同类产品 type2「AI写求职信」）
  *  入参：{ jobId, kind: 'hello'|'letter'|'reply', mode: 'ai'|'custom', chatHistory?, hrGroupId?, save? }
  *  save=true 时写入 cover_letters 台账（后续三重去重会挡住重复发送）。 */
 app.post("/api/jobs/cover-letter", async (req, res) => {
@@ -1549,7 +1549,7 @@ app.post("/api/cover-letter/render", (req, res) => {
   res.json({ rendered: renderLetterTemplate(tpl, vars) });
 });
 
-/** 面试攻略（对标职得鸭「面试鸭攻略」）。GET 读缓存，POST 生成（force 重算）。 */
+/** 面试攻略（对标同类产品「面试鸭攻略」）。GET 读缓存，POST 生成（force 重算）。 */
 app.get("/api/jobs/interview-prep", (req, res) => {
   const jobId = String(req.query.jobId || '');
   if (!jobId) return res.status(400).json({ error: '请提供 jobId' });
@@ -1572,7 +1572,7 @@ app.post("/api/jobs/interview-prep", async (req, res) => {
   }
 });
 
-/** 简历版本（original / optimized / tailored）——对标职得鸭 resumeType 开关 */
+/** 简历版本（original / optimized / tailored）——对标同类产品 resumeType 开关 */
 app.get("/api/resume/version", (_req, res) => {
   res.json(resumeVersionStatus());
 });
@@ -1659,7 +1659,7 @@ app.get("/api/resume/file", (req, res) => {
   fs.createReadStream(target).pipe(res);
 });
 
-/** 运行时间段调度（对标职得鸭 TimeManager）。GET 全平台，POST 设置单平台。 */
+/** 运行时间段调度（对标同类产品 TimeManager）。GET 全平台，POST 设置单平台。 */
 app.get("/api/schedule", (_req, res) => {
   res.json({
     schedules: listSchedules().map((s) => ({ ...s, description: describeSchedule(s.platform), status: evaluateSchedule(s.platform) })),
@@ -1738,7 +1738,7 @@ app.post("/api/resume/channel", (req, res) => {
   res.json({ ...decideResumeChannel({ hasEmail, platform }), chatImagePlatforms: Object.keys(CHAT_IMAGE_INPUTS) });
 });
 
-/** 岗位定位 / 公司背调（对标职得鸭 bossSearch.js，即前端所谓「AI公司背调」）
+/** 岗位定位 / 公司背调（对标同类产品 bossSearch.js，即前端所谓「AI公司背调」）
  *  入参 { jobId, platform? } —— BOSS 走「公司 → 在招职位 → 职位」两级定位，其他平台直达详情页。 */
 app.post("/api/jobs/locate", async (req, res) => {
   try {

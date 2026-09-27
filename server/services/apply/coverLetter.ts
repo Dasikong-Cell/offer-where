@@ -1,12 +1,12 @@
 /**
- * 求职信（对标职得鸭 type2「AI写求职信」）
+ * 求职信（对标同类产品 type2「AI写求职信」）
  * ─────────────────────────────────────────────────────────────
  * 三种模式：
  *   · ai       —— LLM 按 JD + 简历生成个性化求职信（默认）
  *   · custom   —— 用用户自定义模板，支持变量替换（{职位名称} / {公司名称} …）
  *   · letter   —— 招呼语（短，首轮开口用）
  *
- * **三重去重**（比职得鸭更严，且本地可查）：
+ * **三重去重**（比同类产品更严，且本地可查）：
  *   ① 台账去重：`cover_letters` 里同一「平台+HR/公司+岗位」已写过 → 跳过
  *   ② 会话去重：HR 已回复 → 不再发模板信（不插播机器人话术）
  *   ③ 岗位去重：该岗位 jobs.skip_reason 已标"已写过求职信" → 跳过
@@ -30,7 +30,7 @@ export interface LetterTemplate {
 
 const TEMPLATE_KV = 'letter:template';
 
-/** 自定义求职信模板（全局一份，与职得鸭一致：「配置自定义求职信」） */
+/** 自定义求职信模板（全局一份，与同类产品一致：「配置自定义求职信」） */
 export function getLetterTemplate(): LetterTemplate | null {
   const raw = kvGet(TEMPLATE_KV);
   if (!raw) return null;
@@ -53,7 +53,7 @@ export function clearLetterTemplate(): void {
   kvSet(TEMPLATE_KV, JSON.stringify({ name: '', content: '', updatedAt: new Date().toISOString() }));
 }
 
-/** 模板支持的变量（与职得鸭文案一致：「可以使用 {职位名称}、{公司名称} 等变量」） */
+/** 模板支持的变量（与同类产品文案一致：「可以使用 {职位名称}、{公司名称} 等变量」） */
 export const TEMPLATE_VARIABLES: ReadonlyArray<{ key: string; desc: string }> = [
   { key: '{职位名称}', desc: '目标岗位名称' },
   { key: '{公司名称}', desc: '目标公司名称' },

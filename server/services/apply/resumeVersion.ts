@@ -1,7 +1,7 @@
 /**
- * 简历版本切换（对标职得鸭 `resumeType: original | optimized`）
+ * 简历版本切换（对标同类产品 `resumeType: original | optimized`）
  * ─────────────────────────────────────────────────────────────
- * 职得鸭的两种底稿：原始简历 / AI 优化后的简历，且**每个 AI 接口都带上这个参数**。
+ * 同类产品的两种底稿：原始简历 / AI 优化后的简历，且**每个 AI 接口都带上这个参数**。
  * 我们多一档：
  *   · original  —— 用户上传的原始简历（profile.resume_path）
  *   · optimized —— 用户确认过的一份优化稿（profile.optimized_resume_path）

@@ -2,7 +2,7 @@
  * 各平台登录态 / 页面可达性诊断
  *
  * 判定策略（按可靠性排序）：
- *   1) 页面出现档案姓名（如「杨欣宇」）→ 100% 已登录
+ *   1) 页面出现档案姓名（如「张三」）→ 100% 已登录
  *   2) 导航到「必须登录才能看」的受保护页，若被重定向到登录域 → 未登录
  *   3) 页面同时含登录浮层关键词（发送验证码/密码登录/登录或注册）→ 未登录
  *
@@ -11,7 +11,7 @@
  *   tsx scripts/diag_login.ts boss       # 只测某个平台
  */
 const API = process.env.API_BASE || 'http://127.0.0.1:4400';
-const NAME = process.env.DIAG_NAME || '杨欣宇';
+const NAME = process.env.DIAG_NAME || '张三';
 
 const PLATFORMS: Array<{
   key: string; label: string; home: string; protectedUrl: string; loginHint: RegExp;

@@ -114,7 +114,7 @@ tsx scripts/contract_tests.ts        # 期望 170/170
 - [ ] **nowcoder** — 阻塞：profile **未登录**（`/im` 返回 404「页面找不到了」）。→ 先登录牛客再跑探针。`calibrated:false`
 - [ ] **iguopin** — 阻塞：profile **未登录**（页显「登录/注册」）。仅见 `/chat/?a=kefu`（客服）非 HR 聊天。→ 先登录国聘再跑探针。`calibrated:false`
 - [ ] **yupao** — 阻塞：profile 已登录，但全站**无「消息/沟通」入口**（鱼泡为蓝领直聘，HR 沟通走 APP 而非 Web IM）。→ 建议本平台暂不启用自动回复（保持 `calibrated:false`，引擎不误发）。`calibrated:false`
-- [ ] **chinahr** — 阻塞：profile 已登录，点开「杨欣宇」下拉仅 我的简历/退出，**全站无「消息」入口**（新华英才 58 系求职侧无独立 Web HR 收件箱）。→ 确认是否真有 Web IM，否则同鱼泡处理。`calibrated:false`
+- [ ] **chinahr** — 阻塞：profile 已登录，点开顶部账号下拉仅 我的简历/退出，**全站无「消息」入口**（新华英才 58 系求职侧无独立 Web HR 收件箱）。→ 确认是否真有 Web IM，否则同鱼泡处理。`calibrated:false`
 - [ ] **yingjiesheng** — 阻塞：profile **未登录**（页显「登录/注册」）。→ 先登录应届生再跑探针。`calibrated:false`
 
 > 说明：7 平台里当前仅 zhilian 具备校准条件。其余 6 个的阻塞分两类：① **未登录**（nowcoder/iguopin/yingjiesheng，3 个）——用户先在各 profile 登录即可解除；② **已登录但无可用 Web IM**（job51 403 / chinahr 无入口 / yupao 蓝领无 Web IM，3 个）——需确认平台是否提供 Web 侧 HR 聊天，否则该平台自动回复维持关闭。

@@ -24,7 +24,7 @@ function J(o: any) { return JSON.stringify(o); }
   await sleep(3500);
 
   console.log('4) 查发简历浮层（聊天区内）');
-  const r = await ex('eval', { script: `(()=>{const cut=(s,n)=>(s||'').replace(/\\s+/g,' ').slice(0,n||60);const conv=document.querySelector('.chat-conversation');if(!conv)return JSON.stringify({conv:false});const all=[].slice.call(conv.querySelectorAll('*'));const items=all.filter(e=>{const t=(e.innerText||'').replace(/\\s+/g,' ');return /在线简历|附件简历|杨欣宇简历|发送简历|选择简历/.test(t)&&t.length<50;});const sendBtns=[].slice.call(conv.querySelectorAll('button,.btn-sure,.btn-send,[class*=btn]')).filter(b=>(b.innerText||'').trim()&&/发送|确定|选这份|使用/.test(b.innerText));return JSON.stringify({conv:true,resumeItems:items.slice(0,12).map(e=>({cls:cut(e.className,40),txt:cut(e.innerText,30)})),sendBtns:sendBtns.slice(0,8).map(b=>({cls:cut(b.className,40),txt:cut(b.innerText,18)}))});})()` });
+  const r = await ex('eval', { script: `(()=>{const cut=(s,n)=>(s||'').replace(/\\s+/g,' ').slice(0,n||60);const conv=document.querySelector('.chat-conversation');if(!conv)return JSON.stringify({conv:false});const all=[].slice.call(conv.querySelectorAll('*'));const items=all.filter(e=>{const t=(e.innerText||'').replace(/\\s+/g,' ');return /在线简历|附件简历|张三简历|发送简历|选择简历/.test(t)&&t.length<50;});const sendBtns=[].slice.call(conv.querySelectorAll('button,.btn-sure,.btn-send,[class*=btn]')).filter(b=>(b.innerText||'').trim()&&/发送|确定|选这份|使用/.test(b.innerText));return JSON.stringify({conv:true,resumeItems:items.slice(0,12).map(e=>({cls:cut(e.className,40),txt:cut(e.innerText,30)})),sendBtns:sendBtns.slice(0,8).map(b=>({cls:cut(b.className,40),txt:cut(b.innerText,18)}))});})()` });
   console.log('  ', J(r.data).slice(0, 1500));
 
   console.log('5) 找附件简历项（只查不点）');

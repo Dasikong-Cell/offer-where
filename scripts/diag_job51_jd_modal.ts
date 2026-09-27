@@ -28,7 +28,7 @@ const DUMP = `(() => {
     return JSON.stringify({ found:false, anyText: any ? (any.innerText||'').replace(/\\s+/g,' ').slice(0,200) : null, bodyAround: body.slice(0,500) });
   }
   const items = [...d.querySelectorAll('.attachment_item, li, label, [class*=resume], [class*=item], [class*=radio], input[type=radio]')]
-    .filter(e => /(附件简历|我的简历|上传的简历|杨欣宇|\\.pdf|简历|radio)/.test(e.innerText||'') && (e.innerText||'').trim().length < 140)
+    .filter(e => /(附件简历|我的简历|上传的简历|张三|\\.pdf|简历|radio)/.test(e.innerText||'') && (e.innerText||'').trim().length < 140)
     .map(e => (e.tagName||'') + '.' + (e.className||'').toString().slice(0,40) + ' | ' + (e.innerText||'').replace(/\\s+/g,' ').trim().slice(0,60));
   const buttons = [...d.querySelectorAll('button, a.btn, [class*=btn]')].map(b => (b.innerText||'').trim() + ' /cls=' + (b.className||'').toString().slice(0,40));
   return JSON.stringify({ found:true, dlgClass:(d.className||'').toString(), items:items.slice(0,14), buttons:buttons.slice(0,14), text:(d.innerText||'').replace(/\\s+/g,' ').slice(0,500) }, null, 2);

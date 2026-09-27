@@ -20,7 +20,7 @@ function needsLogin(url: string, text: string): boolean {
 export async function runNowcoder(input: ApplyInput): Promise<ApplyResult> {
   const logs = new ApplyLogger();
   const platform = 'nowcoder';
-  // 牛客「立即申请」后的弹窗会预选平台在线简历（如「杨欣宇简历_优化版」），
+  // 牛客「立即申请」后的弹窗会预选平台在线简历（如「在线简历_优化版」），
   // 直接用它在平台内投递；**不**上传本地 PDF（批量传的是源码简历，会覆盖/劣化在线优化版）。
   const jobUrl = input.jobUrl || input.job?.apply_url || undefined;
   const company = input.job?.company ?? null;
