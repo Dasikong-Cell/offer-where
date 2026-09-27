@@ -61,6 +61,19 @@ function check(name: string, ok: boolean, detail = '') {
   console.log(`${ok ? '✅' : '❌'} ${name}${detail ? '  — ' + detail : ''}`);
 }
 
+// ── 「因环境缺失而整段跳过」的断言必须**计数并在汇总行写明** ────────────────────
+// 背景（2026-09-27）：CI 上没有 data/browser/cdp.json（data/ 不入库），有 16 条端口断言
+// 被跳过，而汇总行只印「通过 295 / 共 295」—— 看日志的人会以为覆盖了 295 条，
+// 实则是「295 条可跑的全过 + 16 条没跑」。**绿得比实际更绿**是本项目反复踩的坑，
+// 所以跳过的条数必须出现在汇总行里，谁看日志都能立刻知道分母是完整的还是缩水的。
+let skipped = 0;
+const skipReasons = new Map<string, number>();
+function skip(n: number, reason: string) {
+  if (n <= 0) return;
+  skipped += n;
+  skipReasons.set(reason, (skipReasons.get(reason) || 0) + n);
+}
+
 const RUN_TAG = 'ct-' + Date.now().toString(36);
 
 // ═══════════════════════════════════════════════════════════
@@ -401,7 +414,7 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
   let cdp: Record<string, string> = {};
   let hasCdp = false;
   try { cdp = JSON.parse(fs.readFileSync(cdpPath, 'utf8')) as Record<string, string>; hasCdp = true; } catch { hasCdp = false; }
-  if (!hasCdp) console.log('  ⏭️  无 data/browser/cdp.json（仅本地运行才有）：跳过 cdp 端口表校验，其余同步点照常校验');
+  if (!hasCdp) console.log('  ⏭️  无 data/browser/cdp.json（仅本地运行才有）：跳过 cdp 端口表校验（含启动脚本端口比对），其余同步点照常校验');
   const consoleHtml = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
   const launcher = fs.readFileSync(path.join(ROOT, 'start_platforms.bat'), 'utf8');
 
@@ -429,7 +442,7 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
       if (hasCdp) {
         const cdpPort = String(cdp[p] || '').split(':').pop() || '';
         check(`内置端口与 cdp.json 一致：${p}`, cdpPort === String(def), `cdp.json=${cdpPort} default=${def}`);
-      }
+      } else skip(1, '无 data/browser/cdp.json');
     }
   }
 
@@ -451,7 +464,7 @@ console.log('\n══════ E. 平台注册完整性（新增平台必须�
   if (hasCdp) {
     const ports = REGISTERED_PLATFORMS.map((p) => cdp[p]).filter(Boolean);
     check('各平台 CDP 端口互不冲突', new Set(ports).size === ports.length, `${ports.length} 个端口 / ${new Set(ports).size} 个唯一值`);
-  }
+  } else skip(1, '无 data/browser/cdp.json');
 
   // ── 兜底拉起表必须覆盖每一个已登记端口（2026-09-25 开箱 N7 的回归防线）──────────
   // 分发包不含 data/ ⇒ 接收方首跑时 `browserLaunch.json` 不存在 ⇒ 走 FALLBACK_PORT_PROFILES。
@@ -1259,7 +1272,9 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
-console.log(`通过 ${pass} / 共 ${pass + fail}`);
+console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
+  ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`
+  : ''}`);
 
 // 清理：删除本次测试写入的会话行（conv_key 以 RUN_TAG 开头），避免污染真实库
 // 注意必须用 exec（DELETE 不返回结果集，用 query 会抛错导致清理静默失效）
