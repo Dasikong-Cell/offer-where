@@ -53,6 +53,46 @@
 - **前置要求**：Windows 10 1803+（打包/运行用到系统自带 `tar.exe`）与 Google Chrome。各平台登录方式见 `LOGIN_GUIDE.md`。
 - 包内 `version.json` 记录了该包对应的**提交号与构建时间**，可随时核对自己在用哪一版。
 
+### 校验下载完整性（发给别人时强烈建议一起给）
+
+包是 380 MB 的单文件，中途断流可能下到残缺文件（双击会报「损坏」或直接装到一半）。**校验值由 GitHub 在上传时计算，不是我们自己写死的**：
+
+```bat
+certutil -hashfile OfferWhere-Setup.exe SHA256
+```
+
+对照 Release 页每个附件下方 GitHub 给出的 `digest`（形如 `sha256:xxxx`），或用接口直接读：
+
+```bat
+curl -s https://api.github.com/repos/Dasikong-Cell/offer-where/releases/latest | findstr /i "digest"
+```
+
+当前版本（`v2026.09.29-93cb9ea`）的实测值：
+
+| 文件 | 大小（字节） | SHA-256 |
+|---|---|---|
+| `OfferWhere-Setup.exe` | 379,946,024 | `e1cdfa24e8b98cbd0b3b2badc15949308a53acbc8467899e4836e8fe27c79f65` |
+| `job-apply-agent-portable.zip` | 379,644,378 | `7b8bb9f6d4b16f52e656f7b4827d18611bf279998c1371aa10058a2a1d635232` |
+
+> 换版本后这两个值一定变 —— **以 Release 页的 `digest` 为准**，表里只是留档。
+
+### 下载慢 / 拉不动（中国大陆）
+
+GitHub Release 在国内经常只有几百 KB/s 甚至中断，三种可靠兜底（**任选其一，下完都要比对上面的 SHA-256**）：
+
+1. **换网络 / 挂代理**再试，或用支持断点续传的下载器（迅雷、IDM、Motrix）——380 MB 单文件断点续传很有用。
+2. **第三方加速镜像**：把 Release 直链前面拼上镜像前缀（如 `https://ghfast.top/https://github.com/...`）。
+   镜像是**第三方服务**，只用来加速，**下完必须比对哈希**；镜像挂了就换下一个或直接走原链。
+3. **由发布者直接给文件**：网盘 / 微信 / U 盘都行 —— 本质是同一个 `OfferWhere-Setup.exe`，收方比对哈希即可。
+
+> gitee 镜像仓库**放不了**这个包：gitee 单个 Release 附件上限 100 MB，而包是 380 MB。仓库代码同步在 gitee，但**发布只走 GitHub Release**。
+
+> ⚠️ **已知缺口：安装程序不检测也不安装 WebView2 运行时**（详见 `DEVELOPMENT.md`「已知缺口」一节）。
+> 正常 Windows 10/11 都**已预装**，可直接用；但 **LTSC / Windows Server / 精简版**系统可能没有，
+> 装完双击 `offer-where.exe` 会是**空白窗口**（表象很像崩溃，其实是缺运行时）。
+> 遇到就先装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（Evergreen Bootstrapper 约 1.8 MB，需联网一次）；
+> **不想折腾就改双击 `start_all.bat`** —— 它用 Chrome `--app=` 打开控制台，绕开 WebView2，功能等价。
+
 > ⚠️ **首次使用默认只做「预览」**：真实投递会**不可撤销地**向 HR 发出消息。建议先预览、确认无误、把简历与各平台登录态准备好，再切到真实投递。
 
 ---
