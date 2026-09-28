@@ -1,9 +1,18 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 call "%~dp0setenv.bat"
 if errorlevel 1 exit /b 1
+
+REM !! KEEP THIS FILE PURE ASCII (no BOM, no non-ASCII bytes) !!
+REM Reason: cmd.exe re-reads a .bat by byte offset. With chcp 65001 active,
+REM multi-byte characters desynchronise that offset, so cmd starts executing
+REM fragments of comment lines AND SILENTLY SKIPS real command lines.
+REM Observed 2026-09-29: the four "call :launch_platform ..." lines below were
+REM skipped entirely (only BOSS came up), while Chinese REM text was executed
+REM as bogus commands ("'ebdriver' is not recognized", "'EM' is not...").
+REM Same class of bug as the "PS 5.1 reads .ps1 as ANSI" rule: keep launchers ASCII.
 
 REM Reuse CHROME path detected by setenv.bat. If it is still blank, show a clear error.
 if not defined CHROME (
@@ -46,28 +55,34 @@ echo   Official: %OFFICIAL_PORT%  (%OFFICIAL_PROFILE%)
 echo ============================================
 echo.
 
-REM 2026-09-12 反检测加固：--disable-blink-features=AutomationControlled 让 navigator.webdriver 返回 false，
-REM 抹掉 CDP 自动化特征，避免 BOSS/猎聘/51job 检测到调试器后强制重新登录或弹风控。
-REM （--disable-infobars 在 Chrome151 已近似空操作，保留无害）
+REM 2026-09-12 anti-detection hardening: --disable-blink-features=AutomationControlled
+REM makes navigator.webdriver return false, wiping the CDP automation fingerprint,
+REM so BOSS / Liepin / 51job do not force a re-login or raise a risk-control prompt
+REM after detecting the debugger.  (--disable-infobars is a no-op on Chrome 151;
+REM kept because it is harmless.)
 REM ============================================================================
-REM Chrome 启动参数（2026-09-19 依据竞品取证结论复核）
+REM Chrome launch flags (re-verified 2026-09-19 against competitor findings)
 REM
-REM 核心一条：--disable-blink-features=AutomationControlled
-REM   等价于同类产品（puppeteer-real-browser）往 --disable-features 里追加 AutomationControlled，
-REM   作用是让 navigator.webdriver 返回 false，抹掉 CDP 自动化标志。
+REM The one that matters: --disable-blink-features=AutomationControlled
+REM   Equivalent to appending AutomationControlled to --disable-features, the way
+REM   puppeteer-real-browser does it. Makes navigator.webdriver return false and
+REM   wipes the CDP automation marker.
 REM
-REM 刻意【不】做的两件事（否则会主动扩大指纹差异面）：
-REM   · 不批量禁用 Chrome 自带特性（Translate / MediaRouter / BackForwardCache …）——
-REM     chrome-launcher 的默认 flags 会禁掉这些，而**正常用户的 Chrome 是开着的**，
-REM     禁用它们反而让浏览器更容易被识别。同类产品照抄了这套默认 flags，是它的一处技术债。
-REM   · 不启用 --disable-component-update —— 保持组件更新通道正常，贴近真实安装。
+REM Two things we deliberately do NOT do (they would widen the fingerprint gap):
+REM   - Do not mass-disable built-in Chrome features (Translate / MediaRouter /
+REM     BackForwardCache ...). chrome-launcher's default flags disable these, but
+REM     a normal user's Chrome HAS them on, so disabling them makes the browser
+REM     easier to fingerprint. Competitors copied those defaults; that is a debt.
+REM   - Do not enable --disable-component-update: keep the component update
+REM     channel normal, closer to a real install.
 REM
-REM 已知仍落后竞品的一点（记录在案，勿忘）：
-REM   同类产品用 rebrowser-puppeteer-core，消除了 CDP `Runtime.enable` 的运行时泄漏，
-REM   因此它可以正常使用**完整** puppeteer API；我们目前只能靠"绝不调用 Runtime.enable"
-REM   手工规避（见 server/services/cdpDriver.ts 注释），CDP 能力被自我限制。
-REM   这是架构级改动，需单独 PoC 验证后再替换，不在本次范围内。
-REM   自检：scripts/check_stealth.ts 可实测当前窗口到底泄露了哪些指纹。
+REM Known gap vs competitors (recorded so we do not forget):
+REM   Competitors use rebrowser-puppeteer-core, which removes the CDP
+REM   Runtime.enable leak, so they can use the FULL puppeteer API. We can only
+REM   avoid it by hand ("never call Runtime.enable"; see the comments in
+REM   server/services/cdpDriver.ts), which self-limits our CDP capability.
+REM   That is an architectural change needing its own PoC; out of scope here.
+REM   Self-check: scripts/check_stealth.ts reports which fingerprints leak.
 REM ============================================================================
 set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-blink-features=AutomationControlled --disable-infobars"
 
@@ -121,12 +136,31 @@ goto :eof
 echo Waiting for debug ports...
 timeout /t 4 >nul
 
+REM Tally the ports instead of just listing them. On 2026-09-29 this script printed
+REM "Done. Each platform is now in its own Chrome window." while only 1 of 5 ports
+REM was actually up -- a confident closing line that was simply false, because the
+REM parser had eaten the launch calls. Never assert success that was not measured.
+set /a READY=0
 for %%P in (9223 9224 9225 9226 9227) do (
   curl -s -m 3 http://127.0.0.1:%%P/json/version >nul 2>nul
-  if !errorlevel!==0 ( echo [OK] port %%P ready ) else ( echo [WARN] port %%P not ready )
+  if !errorlevel!==0 (
+    set /a READY+=1
+    echo [OK] port %%P ready
+  ) else (
+    echo [WARN] port %%P NOT ready
+  )
 )
 
 echo.
-echo Done. Each platform is now in its own Chrome window.
+if not !READY!==5 (
+  echo [WARN] Only !READY! of 5 debug ports are up.
+  echo        Re-run this file. If the SAME port keeps failing, that platform's
+  echo        Chrome profile is probably locked by a leftover chrome.exe using it.
+  echo        Do not trust a "Done" line -- the port tally above is the measurement.
+) else (
+  echo Done. All 5 platforms are up, each in its own Chrome window.
+)
 echo Open console: http://127.0.0.1:4400/
+echo.
+echo Next: log in inside each window (BOSS is the one the real-delivery check uses).
 pause

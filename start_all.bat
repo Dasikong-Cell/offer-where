@@ -1,11 +1,20 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
+REM Needed for the !var! port tally at the end of this script.
+setlocal enabledelayedexpansion
 call "%~dp0setenv.bat"
 if errorlevel 1 exit /b 1
 
-REM 首次运行安装引导：未安装（data/.installed 不存在）则弹出「安装」对话框，
-REM 在桌面建入口并写标记；之后每次运行都跳过，不再打扰。
-REM data/ 不进包，故每个收件人解压后首次双击必弹一次。
+REM !! KEEP THIS FILE PURE ASCII (no BOM, no non-ASCII bytes) !!
+REM cmd.exe re-reads a .bat by byte offset; with chcp 65001 active, multi-byte
+REM characters desynchronise that offset and cmd starts skipping real command
+REM lines. See the header comment in start_cdp.bat for the 2026-09-29 incident.
+
+REM First-run install guidance: when not installed yet (data/.installed missing),
+REM show the "Install" dialog, create a desktop entry and write the marker; every
+REM later run skips it and does not bother the user again.
+REM data/ is not shipped, so the first double-click after extracting always shows
+REM it once per recipient.
 if not exist "%~dp0data\.installed" (
   call "%~dp0install_first_run.bat"
 )
@@ -51,7 +60,8 @@ set "OFFICIAL_POS=660,720"
 REM 1) Start one isolated Chrome window per platform (Zhideya-style)
 REM    Pre-check each debug port: if already listening, reuse it instead of
 REM    starting a second instance (which would silently fail on port conflict).
-REM 2026-09-12 反检测加固：--disable-blink-features=AutomationControlled 抹掉 navigator.webdriver 自动化特征
+REM 2026-09-12 anti-detection hardening: --disable-blink-features=AutomationControlled
+REM    wipes the navigator.webdriver automation fingerprint.
 set "ARGS=--no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-blink-features=AutomationControlled --disable-infobars"
 
 REM BOSS: prefer the shared profile (keeps login state); if it fails to start
@@ -98,10 +108,10 @@ curl -s -m 3 http://127.0.0.1:4400/api/health >nul 2>nul
 if errorlevel 1 (
   start "JobApply-Server" cmd /k call "%~dp0start_server.bat"
 ) else (
-  echo 后端服务已在运行，跳过启动。
+  echo Backend already running, skipping start.
 )
 
-echo 打开投递控制台...
+echo Opening the delivery console...
 REM Wait until backend is ready (cold start is ~6s). Poll /api/ping instead of a fixed sleep,
 REM otherwise the console opens too early and shows a connection error.
 set /a _try=0
@@ -113,27 +123,48 @@ if %_try% GEQ 40 goto :ready
 timeout /t 1 >nul
 goto :wait_ready
 :ready
-REM 2026-09-26 改：控制台不再塞进用户日常浏览器的某个标签，而是用 Chrome 的 --app=
-REM   打开**独立窗口**（无地址栏/标签栏，任务栏显示本应用图标，更像个桌面程序）。
-REM   想恢复旧行为（默认浏览器新标签），删掉下面整个 if 块换成一行：
+REM 2026-09-26 change: the console is no longer stuffed into a tab of the user's
+REM   everyday browser. Chrome's --app= opens a SEPARATE window (no address bar,
+REM   no tab strip, the app icon shows in the taskbar, closer to a desktop app).
+REM   To restore the old behaviour (a new tab in the default browser), delete the
+REM   whole if block below and replace it with one line:
 REM     start "" http://127.0.0.1:4400/
-REM else 分支实际上不可达 —— 脚本开头已强校验 CHROME（未定义/文件不存在都 exit /b 1）。
-REM   留着属于纵深防御：万一将来有人挪掉那道前置校验，这里还能退化成「至少能打开」。
+REM The else branch is effectively unreachable -- this script already hard-checks
+REM CHROME at the top (undefined or missing both exit /b 1). It stays as
+REM defence in depth: if that precondition is ever removed, this still degrades to
+REM "at least it opens".
 if defined CHROME (
   start "" "%CHROME%" --app=http://127.0.0.1:4400/ --no-first-run --no-default-browser-check
 ) else (
-  echo [warn] CHROME 未定义，回退为默认浏览器打开控制台。
+  echo [warn] CHROME undefined, falling back to the default browser for the console.
   start "" http://127.0.0.1:4400/
 )
 echo.
-echo 已为每个平台打开独立 Chrome 窗口（并排排列）。
-echo 在控制台选择平台与数量后点「开始投递」即可，各平台互不干扰。
-echo 关闭时关掉标题为「JobApply-Server」的窗口即可停服。
+REM Tally the ports instead of asserting success. On 2026-09-29 the sibling script
+REM (start_cdp.bat) printed "each platform is now in its own Chrome window" while
+REM only 1 of 5 ports was up -- the parser had silently skipped the launch calls.
+REM Never close with a claim that was not measured.
+set /a _cdpReady=0
+for %%P in (9223 9224 9225 9226 9227) do (
+  curl -s -m 2 http://127.0.0.1:%%P/json/version >nul 2>nul
+  if !errorlevel!==0 set /a _cdpReady+=1
+)
+if not !_cdpReady!==5 (
+  echo [WARN] Only !_cdpReady! of 5 platform debug ports are up ^(9223-9227^).
+  echo        Re-run start_cdp.bat; if the same port keeps failing, its Chrome
+  echo        profile is probably locked by a leftover chrome.exe.
+) else (
+  echo Opened a separate Chrome window per platform ^(arranged side by side^).
+)
+echo In the console pick a platform and a count, then click "Start delivery".
+echo To stop the backend, close the window titled "JobApply-Server".
 echo.
-REM 2026-09-25 开箱实测补充：本脚本只开 5 个核心平台窗口，而项目已登记 15 个平台。
-REM 此前没有任何提示，首跑用户会看到控制台里其余平台卡片显示「离线」而无从下手。
-echo 提示：本次打开了 5 个核心平台窗口（BOSS / 猎聘 / 51job / 智联 / 官网）。
-echo       其余平台（中华英才 / 鱼泡 / 脉脉 / 国聘 / 应届生 / 牛客 等）需要窗口时，二选一：
-echo         - 双击 start_platforms.bat（默认再开 9 个；加 all 则全部打开）
-echo         - 或在控制台对应平台卡片上点「打开窗口」
+REM 2026-09-25 first-run finding: this script only opens the 5 core platform
+REM windows, while 15 platforms are registered. Previously there was no hint at
+REM all, so a first-time user saw the remaining platform cards as "offline" with
+REM no idea what to do.
+echo Note: this run opened the 5 core platform windows (BOSS / Liepin / 51job / Zhilian / Official).
+echo       For the other platforms (chinahr / yupao / maimai / iguopin / yingjiesheng / nowcoder ...), two options:
+echo         - double-click start_platforms.bat (opens 9 more by default; add "all" for every platform)
+echo         - or click "Open window" on the platform card in the console
 pause

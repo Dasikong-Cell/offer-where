@@ -12,6 +12,8 @@
     "setup:browser": "playwright install chromium",
     "typecheck": "tsc -b",
     "console:check": "tsx scripts/check_console_syntax.ts",
+    "bat:check": "tsx scripts/bat_encoding.ts check",
+    "bat:fix": "tsx scripts/bat_encoding.ts fix",
     "pii:check": "git -c core.quotePath=false ls-files | tsx scripts/pii_guard.ts --stdin",
     "selftest": "tsx scripts/selftest.ts",
     "test:contract": "tsx scripts/contract_tests.ts",

@@ -1,22 +1,29 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 REM ============================================================
-REM 分发打包入口 —— 委托给 pack.ps1
+REM Release packaging entry point -- delegates to pack.ps1
 REM
-REM ⚠️ 2026-09-25 变更原因（安全）：
-REM   本脚本原先用 robocopy + Compress-Archive 打包，排除项只有
+REM !! 2026-09-25 change (security):
+REM   This script used to package with robocopy + Compress-Archive, with only
 REM     /XD .git chrome-cdp-profile data  /XF *.log
-REM   —— **不排除 `.env`**。也就是说跑它打出来的包会带上你的
-REM   API Key / 邮箱授权码等凭据，分发给别人即等于泄露。
-REM   而 pack.ps1 是白名单式打包（未列出的文件一律不进包）+ fail-closed 断言
-REM   （显式校验不存在 .env / data / src / .git 与 server 编译产物），
-REM   所以这里改为直接委托给它，只保留一个入口。
+REM   excluded -- it did NOT exclude `.env`. So running it produced a package
+REM   carrying your API keys / mailbox auth codes; handing that to someone else
+REM   is a credential leak.
+REM   pack.ps1 is whitelist-based (anything unlisted never enters the package)
+REM   plus fail-closed assertions (explicitly verifies .env / data / src / .git
+REM   and server build output are absent), so this script now delegates to it and
+REM   keeps a single entry point.
 REM
-REM 新包会额外带 version.json（提交号 + 构建时间），便于追溯是哪个版本。
+REM The new package also carries version.json (commit + build time) for traceability.
+REM
+REM !! KEEP THIS FILE PURE ASCII (no BOM, no non-ASCII bytes) !!
+REM cmd.exe re-reads a .bat by byte offset; with chcp 65001 active, multi-byte
+REM characters desynchronise that offset and cmd starts skipping real command
+REM lines. See the header comment in start_cdp.bat for the 2026-09-29 incident.
 REM ============================================================
 set "ROOT=%~dp0"
 if not exist "%ROOT%pack.ps1" (
-  echo [错误] 未找到 pack.ps1，无法打包。
+  echo [ERROR] pack.ps1 not found, cannot package.
   pause & exit /b 1
 )
 
@@ -25,13 +32,13 @@ set "RC=%ERRORLEVEL%"
 
 echo.
 if "%RC%"=="0" (
-  echo 打包完成。发送给别人后，对方解压步骤：
-  echo   1. 解压到任意目录（路径不含中文/空格最佳）
-  echo   2. 双击 start_all.bat 启动（首次让你在各平台登录）
-  echo   3. 看控制台首页「开箱自检」面板确认还差什么
-  echo   4. 先「仅预览」再真实投递
-  echo   （可选）双击 create_desktop_shortcut.bat 生成桌面入口
+  echo Packaging done. Steps for the recipient after downloading:
+  echo   1. Extract to any directory ^(a path without non-ASCII chars or spaces is best^)
+  echo   2. Double-click start_all.bat ^(first run asks you to log in on each platform^)
+  echo   3. Check the "first-run self-check" panel on the console home page to see what is missing
+  echo   4. Preview only first, then do a real delivery
+  echo   ^(optional^) double-click create_desktop_shortcut.bat to create a desktop entry
 ) else (
-  echo [失败] 打包未通过校验（退出码 %RC%），请查看上方 pack.ps1 的报错。
+  echo [FAILED] packaging did not pass validation ^(exit code %RC%^), see the pack.ps1 error above.
 )
 pause

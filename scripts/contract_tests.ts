@@ -52,6 +52,7 @@ import {
 } from '../server/services/apply/batch.js';
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
 import { parseDenyList, parseFileList, findDenyHits, maskToken } from './pii_guard.js';
+import { collectBatFiles, inspectBatFile } from './bat_encoding.js';
 
 let pass = 0, fail = 0;
 const fails: string[] = [];
@@ -1030,6 +1031,59 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     check(`${rel} 保持纯 ASCII`, bad === 0,
       `发现 ${bad} 个非 ASCII 字节；PS 5.1 会按 GBK 解码无 BOM 脚本，交付方可能解析失败`);
   }
+}
+
+// ── 启动器必须纯 ASCII 且无 BOM（2026-09-29）────────────────────────────────
+// 与上面 .ps1 那条同源，但触发机制完全不同，所以必须单独钉：
+// **cmd.exe 按字节偏移重读批处理文件**。chcp 65001 生效时，文件里任意一个多字节
+// 字符都会让这个偏移错位 —— 后果是 cmd **执行注释行的碎片**，并且**静默跳过真正的
+// 命令行**。注意「跳过」是安静的：脚本照样跑完、照样打 Done、退出码 0。
+//
+// 2026-09-29 实机事故（start_cdp.bat，中文全在 REM 注释里，约 1 KB）三连症：
+//   ① 中文注释碎片被当命令执行（`'ebdriver' is not recognized`、`'EM' ...` —— 正是 REM 的尾巴）
+//   ② if/else 两个**互斥**分支同时打印（`[OK] BOSS already running on 9223` 与
+//      `[OK] BOSS window ready on 9223`）—— 只有解析器错位才可能都执行
+//   ③ 四个 `call :launch_platform ...` 整行被跳过 ⇒ 只有 BOSS(9223) 起来，9224-9227 全空
+//      （用户看到 `[WARN] port 9224..9227 not ready`，而无从知道是脚本自己把它吃了）
+// 全仓同一时刻有 11 个启动器中招（apply_*.bat / 打包.bat / create_desktop_shortcut.bat /
+// setenv.bat / start_all.bat / start_server.bat / rerun_liepin.bat …）。
+// 注意 start_server.bat 只有**一行**中文 echo，且关键启动命令就在它下一行 —— 这次是
+// 侥幸跑通的，中文量越小越不容易撞上，所以「小量中文」不能当作安全的理由。
+//
+// UTF-8 BOM 等价致命：它是 `@echo off` 之前的 3 个额外字节，偏移从一开始就是错的。
+// 编辑器/写文件工具常会「顺手」加上，本仓库就真的被加过一轮（11 个文件全中）。
+//
+// 中文若确实要送达用户，走 install_first_run.bat 已验证的路子：
+// `powershell -EncodedCommand <base64(UTF-16LE)>` —— .bat 本体保持纯 ASCII，
+// 中文由 PowerShell 解码后显示（pre-push 的交叉引用守卫会解码该载荷）。
+//
+// 这里刻意写成**两条聚合断言**（而不是像 .ps1 那样每文件一条）：启动器有 13 个，
+// 每文件两条会把汇总分母抬到 430+ 并淹没其它断言；聚合后失败信息仍然点名到具体文件。
+//
+// 判定逻辑**不在这里重写**，而是 import scripts/bat_encoding.ts —— 同一份规则同时
+// 供 `bat:check` / `bat:fix` 命令行使用。否则「门禁认为安全」与「修理工认为安全」
+// 会各有一套，迟早漂移（本仓库已经栽过「同一份清单写两处」的跟头）。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const batTargets = collectBatFiles(ROOT);
+  // 分发包里启动器集合与源码树不同 ⇒ 前置自检只要求「枚举到东西」。
+  check('发现待检查的 .bat/.cmd 启动器', batTargets.length > 0,
+    '一个都没枚举到说明遍历写错了（本仓库根目录至少有 start_all.bat / start_server.bat）');
+
+  const rel = (p: string) => path.relative(ROOT, p).replace(/\\/g, '/');
+  const bomFiles: string[] = [];
+  const nonAscii: string[] = [];
+  for (const p of batTargets) {
+    const r = inspectBatFile(p);
+    if (r.bom) bomFiles.push(rel(p));
+    if (r.nonAscii > 0) nonAscii.push(`${rel(p)}(${r.nonAscii})`);
+  }
+  check(`.bat/.cmd 无 BOM（共 ${batTargets.length} 个）`, bomFiles.length === 0,
+    `BOM 是 @echo off 之前的 3 个额外字节，cmd 的字节偏移从一开始就错位。中招：${bomFiles.join(', ')}`);
+  check(`.bat/.cmd 保持纯 ASCII（共 ${batTargets.length} 个）`, nonAscii.length === 0,
+    `chcp 65001 下多字节字符会让 cmd 的字节偏移错位，既执行注释碎片又**静默跳过命令行**` +
+    `（2026-09-29 start_cdp.bat：四个 call :launch_platform 被吃掉，端口 9224-9227 全空）。` +
+    `中招：${nonAscii.join(', ')}。修法：中文改英文，或走 powershell -EncodedCommand`);
 }
 
 // ── C10 段：控制台发出的浏览器动作名必须在驱动里真实存在（2026-09-26）─────────

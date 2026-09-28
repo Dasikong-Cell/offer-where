@@ -1,5 +1,9 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
+REM !! KEEP THIS FILE PURE ASCII (no BOM, no non-ASCII bytes) !!
+REM cmd.exe re-reads a .bat by byte offset; with chcp 65001 active, multi-byte
+REM characters desynchronise that offset and cmd starts skipping real command
+REM lines. See the header comment in start_cdp.bat for the 2026-09-29 incident.
 REM ============================================================
 REM Create a single desktop entry - OfferWhere
 REM Double-click to start services and open the console page.
@@ -13,8 +17,8 @@ REM present next to this script, and only falls back to start_all.bat otherwise.
 REM Both branches (.lnk and .bat) bake the SAME resolved target, so they cannot
 REM disagree about what the entry launches.
 REM
-REM 2026-09-26 rename: this file used to be "创建桌面快捷方式.bat" and produced a
-REM desktop entry named "投递Agent". Both are ASCII now, deliberately: a CJK-named
+REM 2026-09-26 rename: this file used to carry a CJK name and produced a CJK-named
+REM desktop entry. Both are ASCII now, deliberately: a CJK-named
 REM entry inside the zip is stored as GBK bytes WITHOUT the UTF-8 flag
 REM (see docs/out-of-box-test-2026-09-25.md), so on an English Windows the extracted
 REM name is mojibake and the recipient cannot tell which file to double-click.
@@ -39,30 +43,38 @@ REM Single source of truth for the entry name: used by the .lnk, by the .bat fal
 REM and by every message below, so the three can never drift apart.
 set "ENTRY=OfferWhere"
 
-REM 入口目标：优先原生外壳（无黑框、带托盘、自带后端与 5 个窗口的本机生命周期），
-REM 不存在时回退 start_all.bat（开发树 / 未附外壳的包）。
-REM 用「存在性」而不是「是否打包」来判：同一份脚本在开发机与收件人机器上都对。
+REM Entry target: prefer the native shell (no console window, tray icon, owns the
+REM backend and the 5 Chrome windows). Fall back to start_all.bat when absent
+REM (development tree / packages shipped without the shell).
+REM Decide by EXISTENCE, not by "was it packaged", so one script is correct both
+REM on the dev machine and on a recipient machine.
 REM
-REM ⚠️ 2026-09-28 修（真实缺陷）：外壳在包里的位置是 **dist-app\offer-where.exe**
-REM   （pack.ps1 只发 dist-app 下那三个文件；DEVELOPMENT.md:70 也写明 dist-app/ 是
-REM   「便携包与桌面入口的首选入口」）。而此前这里判的是根目录 `%PKG%offer-where.exe`
-REM   —— 那个文件**在开发树和分发包里都不存在**，于是条件恒假、桌面入口永远回退到
-REM   start_all.bat：用户点完「安装」拿到的仍是黑框 + Chrome --app 标签页，原生外壳
-REM   一次都没被用上，而四道门禁全绿（$must 钉的是 dist-app 下的 exe，引用检查此前
-REM   也不覆盖根启动器之间的路径）。
-REM   现在只认一个落位（dist-app\），落位若再变，pack.ps1 的启动器交叉引用守卫与
-REM   合约测试会同时报错，不会再静默退化成 .bat。
+REM !! 2026-09-28 fix (real defect): the shell lives at **dist-app\offer-where.exe**
+REM   inside the package (pack.ps1 ships only the three files under dist-app;
+REM   DEVELOPMENT.md:70 also states dist-app/ is the preferred entry for both the
+REM   portable package and the desktop entry). The check here used to look at
+REM   `%PKG%offer-where.exe` in the ROOT -- a path that exists NEITHER in the dev
+REM   tree NOR in the distributed package -- so the condition was always false and
+REM   the desktop entry always fell back to start_all.bat: after clicking
+REM   "Install" the user still got a console window plus a Chrome --app tab, and
+REM   the native shell was never used once, while all four gates stayed green
+REM   ($must pinned the exe under dist-app, and the reference check did not cover
+REM   paths between root launchers). Now there is exactly one location (dist-app\);
+REM   if it moves again, pack.ps1's launcher cross-reference guard and the contract
+REM   tests fail together, so it can no longer degrade to .bat silently.
 set "TARGET=%PKG%start_all.bat"
 if exist "%PKG%dist-app\offer-where.exe" set "TARGET=%PKG%dist-app\offer-where.exe"
 
 if not defined SILENT (
-  echo 正在桌面创建唯一入口 "%ENTRY%" ...
-  echo 指向：%TARGET%
+  echo Creating the single desktop entry "%ENTRY%" ...
+  echo Target: %TARGET%
 )
 
-REM 图标：包内自带 public\app.ico（靛蓝渐变底 + 白对话气泡；
-REM   同一份文件还用作控制台 favicon 与控制台侧边栏品牌标记，改图标只需改这一处）。
-REM 不存在时留空 —— 没有图标顶多难看，不该因此建不出快捷方式。
+REM Icon: public\app.ico ships in the package (indigo gradient + white chat bubble;
+REM   the same file is also the console favicon and the sidebar brand mark, so
+REM   changing the icon means changing this one file only).
+REM Leave it blank if missing -- a missing icon is cosmetic, it must not block
+REM creating the shortcut.
 set "ICON=%PKG%public\app.ico"
 if not exist "%ICON%" set "ICON="
 
@@ -70,27 +82,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObjec
 
 if errorlevel 1 (
   REM Fallback: .lnk COM disabled. Write a desktop .bat that points at THIS package.
-  REM ⚠️ 2026-09-25 修：此前这里硬编码了开发机的绝对路径
-  REM   （%USERPROFILE%\WorkBuddy\2026-09-02-09-33-33\job-apply-agent\），
-  REM   在别人的机器上会生成一个指向不存在目录的快捷方式。改为烘焙当前实际路径（%PKG%）。
-  REM 2026-09-27：入口改为烘焙上面解析好的 %TARGET%（exe 优先），与 .lnk 分支保持一致。
-  REM   用 `start ""` 而不是 `call`：目标可能是 .exe（GUI 程序，call 会一直等到它退出）。
+  REM !! 2026-09-25 fix: this used to hard-code the dev machine's absolute path
+  REM   (%USERPROFILE%\WorkBuddy\2026-09-02-09-33-33\job-apply-agent\), which
+  REM   created a shortcut pointing at a non-existent directory on other machines.
+  REM   Now it bakes the actual current path (%PKG%).
+  REM 2026-09-27: the entry now bakes the resolved %TARGET% (exe first), matching
+  REM   the .lnk branch.
+  REM   Use `start ""` instead of `call`: the target may be an .exe (a GUI program,
+  REM   and `call` would block until it exits).
   ( echo @echo off
     echo chcp 65001 ^>nul
     echo set "TARGET=%TARGET%"
     echo if not exist "%%TARGET%%" ^( echo [ERR] OfferWhere entry not found ^& pause ^& exit /b 1 ^)
     echo start "" "%%TARGET%%"
   ) > "%DESKTOP%\%ENTRY%.bat"
-  if not defined SILENT echo 已创建：%DESKTOP%\%ENTRY%.bat（本机禁用了 .lnk COM，故用 .bat，双击效果相同）
+  if not defined SILENT echo Created: %DESKTOP%\%ENTRY%.bat (this machine has .lnk COM disabled, so a .bat is used; double-click works the same)
 ) else (
-  if not defined SILENT echo 已创建：%DESKTOP%\%ENTRY%.lnk
+  if not defined SILENT echo Created: %DESKTOP%\%ENTRY%.lnk
 )
 
 if not defined SILENT (
   echo.
-  echo 双击桌面「%ENTRY%」即可打开控制台：选择平台 → 设置数量 → 开始投递。
-  REM 旧的中文名入口不自动删除 —— 删桌面文件属于用户自己的决定，脚本不越权代劳。
-  if exist "%DESKTOP%\投递Agent.lnk" echo 提示：桌面旧入口「投递Agent.lnk」已停止更新，可自行删除。
-  if exist "%DESKTOP%\投递Agent.bat" echo 提示：桌面旧入口「投递Agent.bat」已停止更新，可自行删除。
+  echo Double-click "%ENTRY%" on the desktop to open the console: pick a platform, set the count, start delivery.
+  REM Legacy CJK-named entries are NOT deleted automatically -- removing files from
+  REM the user's desktop is the user's call, the script does not overstep.
+  REM The legacy names are built from code points inside PowerShell so this file
+  REM can stay pure ASCII (see the header rule).
+  powershell -NoProfile -Command "$d=[Environment]::GetFolderPath('Desktop'); $n=[string]::Concat([char]0x6295,[char]0x9012,'Agent'); foreach($e in @($n+'.lnk',$n+'.bat')){ if(Test-Path (Join-Path $d $e)){ Write-Host ('Note: legacy desktop entry '+$e+' is no longer updated; you may delete it yourself.') } }" 2>nul
   pause
 )

@@ -36,6 +36,7 @@ if not errorlevel 1 (
 )
 
 echo.
-echo 请在这个新窗口里打开 https://offerbiu.com/ 并登录，然后回控制台点「刷新连接状态」。
-echo 企业官网(offerbiu) 的岗位采集与投递都使用这个窗口。
+echo In this new window open https://offerbiu.com/ and log in, then go back to the
+echo console and click "refresh connection status".
+echo Both job collection and delivery for the company-site platform (offerbiu) use this window.
 pause
