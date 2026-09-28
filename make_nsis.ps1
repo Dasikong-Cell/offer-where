@@ -194,6 +194,13 @@ if ($m.Success) {
 # Never assume the runner image ships NSIS: the actions/runner-images Windows Server 2022
 # manifest lists `NSIS 3.10`, but the Server 2025 one has no NSIS at all (only InnoSetup/WiX).
 # `windows-latest` moves between images, so presence is probed, not assumed.
+#
+# !! The list below is duplicated on purpose-avoidance grounds: release.yml installs NSIS
+#    when it is missing and then has to *verify* it can be found. Two resolvers written
+#    independently drift, and on 2026-09-29 they did: release.yml verified with
+#    `Get-Command makensis` alone after `choco install`, which cannot see a PATH change in
+#    an already-running session, so it failed while NSIS was in fact installed. Keep the
+#    two lists identical in content; a contract assertion pins them together.
 if (-not $Makensis) {
   $c = Get-Command makensis -ErrorAction SilentlyContinue
   if ($c) { $Makensis = $c.Source }
@@ -203,7 +210,8 @@ if (-not $Makensis) {
     (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
     (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
     (Join-Path $env:LOCALAPPDATA 'Programs\NSIS\makensis.exe'),
-    'C:\ProgramData\chocolatey\bin\makensis.exe'
+    'C:\ProgramData\chocolatey\bin\makensis.exe',
+    'C:\ProgramData\chocolatey\lib\nsis\tools\makensis.exe'
   )
   foreach ($cand in $cands) {
     if ($cand -and (Test-Path -LiteralPath $cand)) { $Makensis = $cand; break }

@@ -153,28 +153,51 @@ jobs:
       #   Windows Server 2022 -> NSIS 3.10 预装；Windows Server 2025 -> **没有 NSIS**。
       # 而 `windows-latest` 在两者之间会随时间漂移，所以这里显式探测、缺了就装，
       # 而不是赌镜像 —— 赌输的代价是发布直接红，且原因藏在镜像里。
-      - name: 确保 makensis 可用
+      #
+      # 🔴 2026-09-29 事故（本步第一次上真流水线就红）：
+      #   choco **装成功了**（NSIS 3.13 -> C:\Program Files (x86)\NSIS），但装完只用
+      #   `Get-Command makensis` 复查 —— choco 改的是注册表里的 PATH，**不会刷新已在运行的
+      #   PowerShell 会话**（$env:PATH 是启动时的快照）⇒ 查不到 ⇒ 抛错。而当时抛的句子是
+      #   "no makensis on this runner"，把「PATH 里没有」说成了「机器上没有」，
+      #   排查方向直接跑偏（去怀疑镜像，其实东西早装好了）。
+      #   ⇒ 三条修正：① 装完**重新扫已知路径**，不只信 PATH；
+      #              ② 报错只说检查过什么，不替机器下结论；
+      #              ③ 候选路径清单与 make_nsis.ps1 **必须一致**（同一条列表在两个地方
+      #                 各写一份就会漂移 —— 那边那份是对的，这边这份就是漂移出来的），
+      #                 已加合约断言钉住两边一致，见 contract_tests「makensis 候选路径清单两边一致」。
+      - name: 确保 NSIS 已安装（缺失时才装）
         shell: pwsh
         run: |
-          $mk = Get-Command makensis -ErrorAction SilentlyContinue
-          if (-not $mk) {
+          # 路径清单必须与 make_nsis.ps1 的 locate makensis 段逐条一致。
+          # 抽成函数是为了「装之前」和「装之后」用同一把尺子 —— 两边口径不同，
+          # 就会出现「装成功了却复查不到」这种自相矛盾的状态。
+          function Find-Makensis {
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
             $cands = @(
               (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
               (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
               (Join-Path $env:LOCALAPPDATA 'Programs\NSIS\makensis.exe'),
-              'C:\ProgramData\chocolatey\bin\makensis.exe'
+              'C:\ProgramData\chocolatey\bin\makensis.exe',
+              'C:\ProgramData\chocolatey\lib\nsis\tools\makensis.exe'
             )
-            foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath $c)) { $mk = Get-Item -LiteralPath $c; break } }
+            foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
+            return $null
           }
+
+          $mk = Find-Makensis
           if (-not $mk) {
-            Write-Host '      makensis not present on this image; installing NSIS'
+            Write-Host '      makensis not found in PATH or the known install locations; installing NSIS'
             choco install nsis -y --no-progress
             if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed with $LASTEXITCODE" }
-            $mk = Get-Command makensis -ErrorAction SilentlyContinue
+            # 🔴 这里必须重新扫路径，不能只 Get-Command（原因见上面的 2026-09-29 事故）。
+            $mk = Find-Makensis
           }
-          if (-not $mk) { throw 'no makensis on this runner; cannot build the installer' }
-          Write-Host ('      makensis: ' + $mk.Source)
-          "MAKENSIS_PATH=$($mk.Source)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if (-not $mk) {
+            throw 'makensis still unavailable. Checked: PATH, ProgramFiles\NSIS, ProgramFiles(x86)\NSIS, LOCALAPPDATA\Programs\NSIS, C:\ProgramData\chocolatey\bin, C:\ProgramData\chocolatey\lib\nsis\tools'
+          }
+          Write-Host ('      makensis: ' + $mk)
+          "MAKENSIS_PATH=$mk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # -SelfTest 会真跑一次静默安装（/S /D=<temp>，解压整包）并核对：退出码 0、
       # 12.4 万个文件、入口与卸载器都在、静默安装没有启动 GUI、%TEMP% 没有残留暂存目录。

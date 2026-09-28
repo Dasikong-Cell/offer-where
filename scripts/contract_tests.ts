@@ -1757,6 +1757,28 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     relYml.includes('/S /D=D:\\OfferWhere'),
     'DS 的 /D= 必须末位且不带引号；写错则静默装到默认位置');
 
+  // ── ⑤-b makensis 候选路径清单：两处必须一致（2026-09-29 事故的机械护栏）────────
+  // 事故形状：release.yml 装完 NSIS 后**只用 `Get-Command makensis` 复查** —— choco 改的是
+  // 注册表里的 PATH，不会刷新已在运行的 PowerShell 会话（$env:PATH 是启动时快照）⇒ 查不到
+  // ⇒ 抛错。而 NSIS 其实已经装好了（`Deployed to 'C:\Program Files (x86)\NSIS'`），
+  // 抛出的句子却写成 "no makensis on this runner"，把「PATH 里没有」说成「机器上没有」，
+  // 排查方向直接跑偏。真正的病根是**同一条清单被写了两份，其中一份更弱**。
+  // 修法：两份取齐 + 本断言钉住 —— 否则下次谁再补一个安装位置而只改一边，
+  // 症状（构建红）完全指不到「清单漂移」这个原因上。
+  const makensisPaths = (src: string) => {
+    const hits = src.match(/'([^'\r\n]*makensis\.exe)'/gi) || [];
+    return [...new Set(hits.map((h) => h.slice(1, -1).replace(/\//g, '\\').toLowerCase()))].sort();
+  };
+  const mkPathsRel = makensisPaths(relYml);
+  const mkPathsNsis = makensisPaths(readText('make_nsis.ps1'));
+  check('makensis 候选路径清单在 release.yml 与 make_nsis.ps1 之间一致',
+    mkPathsRel.length >= 3 && JSON.stringify(mkPathsRel) === JSON.stringify(mkPathsNsis),
+    `两处清单漂移 ⇒ 一边装得到、另一边找不到：release.yml=[${mkPathsRel.join(' | ')}] make_nsis.ps1=[${mkPathsNsis.join(' | ')}]`);
+  check('release.yml 装完 NSIS 后重新扫路径（不靠 PATH 快照）',
+    /choco install nsis/.test(relYml) && /function Find-Makensis/.test(relYml) &&
+      /choco install nsis[\s\S]{0,400}?Find-Makensis/.test(relYml),
+    'choco 改的是注册表 PATH，已运行的会话看不到 ⇒ 装成功却复查不到');
+
   // ── ⑥ PII 护栏必须在「构建发布产物的那条流水线」上真的跑起来 ──────────
   // 事故形状（2026-09-27 读 runner 自己的日志才发现）：denylist 住在 data/ 下，
   // 而 data/ 被 gitignore ⇒ runner 上永远不存在 ⇒ pack.ps1 打印一行平静的
