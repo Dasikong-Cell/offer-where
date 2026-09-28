@@ -74,6 +74,34 @@ function skip(n: number, reason: string) {
   skipReasons.set(reason, (skipReasons.get(reason) || 0) + n);
 }
 
+// ── selftest.ts 自己的「跳过会计」也要诚实（2026-09-28）──────────────────────────
+// 实测缺陷（不是推测）：CI 上真有 7 条断言没执行，汇总行却只印「跳过 6 项」。
+//   · A 块把条数写死成一个常数 ⇒ 谁往块里加一条断言，分母就静默缩水；
+//   · 「LLM 未生效」分支只 console.log 不计入 skip ⇒ 连写死的数都对不上。
+// 查出来的办法：**同一棵树在两地跑**，本地 58 / CI「51 通过 + 6 跳过」= 57，差 1。
+// 与上面 cdp 那段是同一个坑（绿得比实际更绿），只是这次踩在 selftest.ts 里。
+{
+  const CT_ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const src = fs.readFileSync(path.join(CT_ROOT, 'scripts/selftest.ts'), 'utf8');
+  // 先剥注释再匹配：本块自己的说明文字里就带着这些字样，不剥会被「自己的注释」满足。
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const hardcoded = /skip\s*\+=\s*\d/.test(code);
+  check(
+    'selftest: 跳过条数由数组长度决定（不写死常数，加断言不会让分母静默缩水）',
+    /skipCheck\(\s*resumeChecks\.length\s*,/.test(code) && !hardcoded,
+    hardcoded ? '仍有写死的 skip += <数字>' : '按 resumeChecks.length 计数',
+  );
+  check(
+    'selftest: 「LLM 未生效」这类跳过也必须计数（不能只打印）',
+    /跳过防幻觉校验[^\n]*\n\s*skipCheck\(\s*1\s*,/.test(code),
+    '只 console.log 不计 skip ⇒ 汇总行的「跳过 N 项」必然少报',
+  );
+  check(
+    'selftest: 汇总行把每条跳过原因都列出来，而不是写死一句固定话术',
+    /跳过 \$\{skip\} 项：\$\{skipReasons\.join\(/.test(code),
+  );
+}
+
 const RUN_TAG = 'ct-' + Date.now().toString(36);
 
 // ═══════════════════════════════════════════════════════════

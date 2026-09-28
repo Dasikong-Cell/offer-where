@@ -22,6 +22,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
 let pass = 0, fail = 0, skip = 0;
+// 被跳过的断言必须**如实**计入汇总行 —— 否则「共 N」看着是全绿，实际有断言压根没跑。
+// 每条跳过都带原因，汇总行会把原因逐条列出来（与 contract_tests.ts 的 skipReasons 同一套做法）。
+const skipReasons: string[] = [];
+function skipCheck(n: number, reason: string) {
+  skip += n;
+  skipReasons.push(n === 1 ? reason : `${reason} × ${n}`);
+}
 const results: Array<{ name: string; ok: boolean; detail: string }> = [];
 
 function check(name: string, ok: boolean, detail = '') {
@@ -34,19 +41,25 @@ function check(name: string, ok: boolean, detail = '') {
 console.log('\n══════ A. 简历解析 ══════');
 const resumePath = path.join(ROOT, 'data', 'resume_source.pdf');
 let struct: any = null;
+// 🔴 断言清单集中成数组，**跳过时按 `resumeChecks.length` 计数，不写死数字**。
+// 写死的代价实测过：原本是 `skip += 6`，而汇总行又在别处漏算了一条 ⇒
+// CI 报「跳过 6 项」而实际 7 条没跑（2026-09-28 由「本地 58 / CI 51+6」的差额查出）。
+const resumeChecks = [
+  () => check('PDF 可解析', struct.rawText.length > 200, `${struct.rawText.length} 字符`),
+  () => check('抽取到姓名', !!struct.name, struct.name || '(空)'),
+  () => check('抽取到手机号', /^1\d{10}$/.test(String(struct.phone || '')), struct.phone || '(空)'),
+  () => check('抽取到邮箱', /@/.test(String(struct.email || '')), struct.email || '(空)'),
+  () => check('抽取到技能', struct.skills.length >= 5, `${struct.skills.length} 项`),
+  () => check('searchBlob 非空', Boolean(struct.searchBlob && struct.searchBlob.length > 50), `${(struct.searchBlob || '').length} 字符`),
+];
 if (!fs.existsSync(resumePath)) {
   // data/ 属个人数据、不入库；CI / 新机器上缺失属正常，跳过而非误报失败。
   console.log(`⏭️  跳过 A（未找到 ${path.relative(ROOT, resumePath)} —— 个人数据不入库，CI/新机器上正常缺失）`);
-  skip += 6;
+  skipCheck(resumeChecks.length, `无 ${path.relative(ROOT, resumePath)}（个人数据不入库，CI/新机器上正常缺失）`);
 } else {
   try {
     struct = await parseResumeFile(resumePath);
-    check('PDF 可解析', struct.rawText.length > 200, `${struct.rawText.length} 字符`);
-    check('抽取到姓名', !!struct.name, struct.name || '(空)');
-    check('抽取到手机号', /^1\d{10}$/.test(String(struct.phone || '')), struct.phone || '(空)');
-    check('抽取到邮箱', /@/.test(String(struct.email || '')), struct.email || '(空)');
-    check('抽取到技能', struct.skills.length >= 5, `${struct.skills.length} 项`);
-    check('searchBlob 非空', Boolean(struct.searchBlob && struct.searchBlob.length > 50), `${(struct.searchBlob || '').length} 字符`);
+    for (const f of resumeChecks) f();
   } catch (e: any) {
     check('简历解析整体', false, e?.message || String(e));
   }
@@ -134,6 +147,8 @@ if (tailored.source === 'llm') {
   check('防幻觉：未凭空新增技能', invented.length === 0, invented.join(',') || '(无)');
 } else {
   console.log('  ⏭️  LLM 未生效，跳过防幻觉校验（回退本地规则）');
+  // 这里原本只打印、不计入 skip ⇒ 汇总行少报一条。凡是「本该跑但没跑」的断言都要计数。
+  skipCheck(1, 'LLM 未生效（回退本地规则）⇒ 不做防幻觉校验');
 }
 
 // ─────────────────────────────────────────────────────────
@@ -210,7 +225,7 @@ check('HTML 自包含（无外链资源）', !/<(link|script|img)\b/i.test(html)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ 汇总 ══════');
-console.log(`通过 ${pass} / 共 ${pass + fail}${skip ? `（跳过 ${skip} 项：无本地简历文件）` : ''}${fail ? `，失败 ${fail}` : ''}`);
+console.log(`通过 ${pass} / 共 ${pass + fail}${skip ? `（跳过 ${skip} 项：${skipReasons.join('；')} —— 这些断言本次未执行，不在分母内）` : ''}${fail ? `，失败 ${fail}` : ''}`);
 if (fail) {
   console.log('\n失败明细：');
   for (const r of results.filter((x) => !x.ok)) console.log(`  ❌ ${r.name}  ${r.detail}`);
