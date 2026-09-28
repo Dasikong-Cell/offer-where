@@ -1503,6 +1503,260 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('DEVELOPMENT.md 的本地编译配方同样带 -lole32',
     readText('DEVELOPMENT.md').includes('-lshell32 -lole32'));
 
+  // ── ⑤b NSIS 安装器（2026-09-28 起取代自解压包成为唯一主推下载）──────────
+  // 不变量分三类，每一类都对应一个「换掉就会安静地坏」的东西：
+  //   架构   内嵌那一个已压好的 payload.zip（SetCompress off）+ 系统 tar 解压。
+  //          实测：内嵌 362MB 只要 3 秒（再压一遍要几分钟、收益约 0）；成本 +117KB。
+  //          Tauri 自带的 NSIS 打包器走不通 —— 它是逐文件生成 File 指令，12.45 万文件。
+  //   体验   安装位置必须由用户决定（MUI_PAGE_DIRECTORY）、按用户安装不弹 UAC、
+  //          有开始菜单/桌面入口与控制面板卸载项。这条是用户 2026-09-28 的明确要求。
+  //   陷阱   ① NSIS 的 File 只认反斜杠：正斜杠绝对路径会被当成一个文件名，报
+  //          "no files found"（两种斜杠都实测过）。
+  //          ② makensis 只打印版本然后退出（那是 /VERSION），构建时不能带 flag。
+  //          ③ SetAutoClose 只能写在 Section/Function 内，写顶层直接编译失败。
+  //          ④ MessageBox 的返回分支必须与文本同一行，否则 `Invalid command: "IDNO"`。
+  const readAscii = (rel: string) => fs.readFileSync(path.join(ROOT, rel));
+  const stripSemi = (s: string) => s.split(/\r?\n/).filter((l) => !/^\s*;/.test(l)).join('\n');
+
+  const nsiRaw = readText('installer/offerwhere.nsi');
+  const nsi = stripSemi(nsiRaw);
+  check('installer/offerwhere.nsi 存在', nsiRaw.length > 1000, '主推下载的构建脚本没有入库？');
+  // 中文界面走 NSIS 自带的 SimpChinese 语言文件，而不是把中文写进脚本 —— 一旦脚本里有
+  // 非 ASCII 字节，构建就开始取决于编译机的代码页（.ps1 取证脚本正是这样翻过车）。
+  const nsiBytes = readAscii('installer/offerwhere.nsi');
+  let nsiNonAscii = 0;
+  for (const b of nsiBytes) if (b > 127) nsiNonAscii++;
+  check('installer/offerwhere.nsi 是纯 ASCII（中文只在语言文件里）', nsiNonAscii === 0,
+    `${nsiNonAscii} 个非 ASCII 字节 ⇒ 构建结果取决于编译机代码页`);
+  check('安装器用 SimpChinese 语言文件提供中文界面',
+    nsi.includes('MUI_LANGUAGE "SimpChinese"'), '不引入语言文件，界面会退回英文');
+
+  const compressAt = nsi.indexOf('SetCompress off');
+  const fileAt = nsi.indexOf('File /oname=$PLUGINSDIR\\payload.zip');
+  check('payload 以「不压缩」方式内嵌（它本来就是 zip）',
+    compressAt > -1 && fileAt > compressAt,
+    'SetCompress off 必须在 File 之前；少了它会把已压好的 zip 再压一遍，几分钟换 ~0%');
+  check('解压交给系统自带的 tar.exe（与自解压包同一条已验证路径）',
+    nsi.includes('nsExec::ExecToStack') && nsi.includes('${TAR_EXE}" -xf "$PLUGINSDIR\\payload.zip" -C "$INSTDIR"'),
+    '自己实现 zip 解压 = 多一份要维护、要验证的代码');
+  check('解压后立刻删掉暂存的 362MB（别让它躺到进程退出）',
+    /Delete "\$PLUGINSDIR\\payload\.zip"/.test(nsi),
+    '不删则 %TEMP% 会同时存在 362MB 的 zip 与 1.3GB 的解压树');
+
+  check('安装位置由用户决定：有目录页', nsi.includes('MUI_PAGE_DIRECTORY'),
+    '没有目录页就等于替用户决定装在哪（2026-09-28 用户的明确要求）');
+  check('按用户安装、不需要管理员（RequestExecutionLevel user）',
+    nsi.includes('RequestExecutionLevel user'),
+    '改成 admin 会弹 UAC，而默认落点 %LOCALAPPDATA% 本来就不需要提权');
+  check('装了卸载器和「应用和功能」里的条目',
+    nsi.includes('WriteUninstaller') && nsi.includes('Uninstall\\OfferWhere'),
+    '没有卸载项就不是「真安装包」，只是把解压包装了个壳');
+  // 桌面入口的落位必须与 create_desktop_shortcut.bat 一致。判包根目录的
+  // `offer-where.exe` 是**已经发过一次**的缺陷（那个文件在哪都不存在 ⇒ 静默退化成 .bat）。
+  const icoShortcut = 'dist-app\\offer-where.exe';
+  check('快捷方式指向 dist-app 下的原生外壳，并回退到 start_all.bat',
+    nsi.includes(`!define ENTRY_EXE  "${icoShortcut}"`) && nsi.includes('!define ENTRY_BAT  "start_all.bat"'),
+    '落位写错 ⇒ 快捷方式指向不存在的文件');
+  check('快捷方式图标用包内 public\\app.ico（唯一真相源）',
+    nsi.includes('!define ICON_REL   "public\\app.ico"'), '写死别的图标 ⇒ 一个产品两套品牌标记');
+  // 安装器自己那一个文件是用户**最先**看到的东西（下载栏 / 资源管理器 / SmartScreen 提示），
+  // 而它此前带的是 NSIS 的默认图标 —— 产品第一印象是别人的 logo。
+  // 这条是拿一份「图标必须出现在所有位置」的发布清单逐条对出来的（2026-09-28）：
+  // exe / 窗口 / 托盘 / favicon / 页内都覆盖了，唯独 NSIS 向导漏了。
+  check('安装器自己带应用图标（Icon / UninstallIcon / MUI_ICON / MUI_UNICON 四处同源）',
+    nsi.includes('Icon          "${ICON_FILE}"') &&
+      nsi.includes('UninstallIcon "${ICON_FILE}"') &&
+      nsi.includes('!define MUI_ICON   "${ICON_FILE}"') &&
+      nsi.includes('!define MUI_UNICON "${ICON_FILE}"'),
+    '不设这些 ⇒ 向导标题栏与 setup.exe 文件图标都是 NSIS 默认的，而快捷方式用的是我们的');
+  // 卸载器图标的指令叫 `UninstallIcon`，**没有 `UnIcon` 这个东西**。
+  // 写错时 makensis 只说 `Invalid command: "UnIcon"` —— 读起来像手误，实际是名字根本不存在。
+  check('卸载器图标用 UninstallIcon 而不是不存在的 UnIcon',
+    !/^\s*UnIcon\b/m.test(nsi),
+    'UnIcon 不存在；报错长得像手误，会让人反复改同一个字');
+  // 默认路径从本文件推导，而不是从调用方的 cwd —— 否则在别的目录跑 makensis 就找不到图标。
+  check('ICON_FILE 默认从 ${__FILEDIR__} 推导（与调用方 cwd 无关）',
+    nsi.includes('!define ICON_FILE "${__FILEDIR__}\\..\\public\\app.ico"'),
+    '锚在 cwd ⇒ 换个目录构建就静默退回 NSIS 默认图标');
+  check('构建前先确认图标文件存在（否则 makensis 只会报一个难懂的图标错）',
+    readText('make_nsis.ps1').includes('the installer icon is missing'),
+    '把「图标被挪走」的报错留给编译器 ⇒ 现场看到的是 NSIS 的 icon 语法报错');
+  check('自测把 exe 里**实际嵌入**的图标与源 .ico 逐像素比对',
+    readText('make_nsis.ps1').includes('ExtractAssociatedIcon') &&
+      readText('make_nsis.ps1').includes('the setup exe icon does not match public\\app.ico'),
+    '只断言 .nsi 里写了 Icon ⇒ 写着但编译器用了默认图标也全绿，而那正是漏了这么久的形态');
+  check('System.Drawing 加载不到时算检查失败（不许静默跳过）',
+    readText('make_nsis.ps1').includes('System.Drawing could not be loaded, so the setup exe icon was NOT verified'),
+    '加载不到就当没这回事 ⇒ 这道门在部分机器上恒真，和 PII 那次「runner 上恒印 SKIPPED」同类');
+  check('卸载默认保留用户数据（data/ 不能被默认删掉）',
+    nsi.includes('MB_DEFBUTTON2') && nsi.includes('$KeepData "1"') &&
+      nsi.includes('IfFileExists "$INSTDIR\\data" 0 un_wipe'),
+    '默认删 data/ ⇒ 用户点一下卸载就丢掉简历与投递记录');
+  // 首跑那个「安装」对话框存在的原因是：旧自解压包**只解压、从不碰外壳**，所以首跑必须
+  // 补建桌面入口。它做的事只有两件 —— 跑 create_desktop_shortcut.bat /silent、写这个标记。
+  // 安装器已经把两件事都做完了（开始菜单 + 桌面 + 卸载项），不写标记就会让用户为同一件事
+  // 被问第二次：刚在向导里点过「安装」，首跑又被要求点一次「安装」。
+  check('安装器写 data\\.installed，不再重复弹首跑「安装」对话框',
+    /FileOpen \$\d+ "\$INSTDIR\\data\\\.installed" w/.test(nsi),
+    '不写这个标记 ⇒ NSIS 装完首跑仍弹「安装」，而那件事安装器刚刚才做完');
+  check('安装器写的标记与 start_all.bat / lib.rs 是同一个文件',
+    nsi.includes('$INSTDIR\\data\\.installed') && readText('start_all.bat').includes('.installed'),
+    '两个写入约定 ⇒ 首跑判定只认其中一个，另一个永远不生效');
+  check('自测会验证首跑标记落位（否则「不再弹窗」只是注释里的一句话）',
+    readText('make_nsis.ps1').includes('first-run mark') &&
+      readText('make_nsis.ps1').includes('data\\.installed is missing'),
+    '装完却缺标记是本改动唯一会安静坏掉的方式，必须在真跑一次安装后核对');
+  // 「Uninstall.exe 在磁盘上」只证明文件写出来了；「应用和功能」读的是注册表。
+  // 而且静默安装会写 HKCU —— 在**已经装过**的机器上跑 -SelfTest 会把那台机器的卸载项
+  // 改指向临时目录，在**没装过**的机器上会留下一个指向已删目录的新条目。两件事都是
+  // 2026-09-28 拍下真实向导界面时才发现的（目录页被预填成上一次自测的临时路径）。
+  check('自测核对注册表里的卸载项（「应用和功能」读的是它，不是文件是否存在）',
+    readText('make_nsis.ps1').includes('uninstall entry is not registered') &&
+      readText('make_nsis.ps1').includes('regUninstString'),
+    '只查 Uninstall.exe ⇒ 注册项写错也全绿，用户却在「应用和功能」里找不到它');
+  check('自测核对 InstallDir 被记住（下次安装的目录页靠它预填）',
+    readText('make_nsis.ps1').includes('InstallDir was not remembered'),
+    'InstallDirRegKey 写错 ⇒ 用户装第二遍时看到的是别人/上次的路径');
+  check('自测跑完把注册表还原（否则每跑一次就多一个假「已安装」条目）',
+    readText('make_nsis.ps1').includes('Restore-RegSnapshot $regApp $regAppBefore') &&
+      readText('make_nsis.ps1').includes('Restore-RegSnapshot $regUninst $regUninstBefore'),
+    '自测会损坏它测量的那台机器 ⇒ 人就不敢再跑它了');
+  // AddSize 与 File 会同向叠加：File 已经按「写入的文件大小」算过一笔（即暂存 zip ~370MB），
+  // 所以 AddSize 只能补**差额**。把「安装后占用」整个塞给 AddSize ⇒ 目录页显示 1.7GB 而
+  // 实际只要 1.1GB，足以把空间够用的用户吓退。
+  check('AddSize 只补差额，不与 File 重复计 payload',
+    nsi.includes('AddSize ${PAGE_KB}') && !nsi.includes('AddSize ${INSTALLED_KB}'),
+    'File 已经把暂存 zip 的大小算进所需空间 ⇒ AddSize 再算一遍全额 = 翻倍');
+  check('EstimatedSize 用的是安装后实际占用，不是差额',
+    /WriteRegDWORD HKCU "\$\{UNINST_KEY\}" "EstimatedSize" \$\{INSTALLED_KB\}/.test(nsi),
+    '两者混用 ⇒ 要么页面吓人，要么「应用和功能」把体积报小');
+  // 卸载器此前**一次都没被跑过**，而它是「真安装包」的另一半，也是能动用户简历的那一半。
+  // 发布说明里写着「卸载会默认保留你的 data\」—— 这句话必须有机器在核。
+  check('自测真跑一次静默卸载（不是只看 Uninstall.exe 在不在）',
+    readText('make_nsis.ps1').includes('silent uninstall (desktop shortcut before: '),
+    '只断言文件存在 ⇒ 卸载逻辑写错也全绿');
+  check('自测核对「静默卸载不许删 data\\」这条承诺',
+    readText('make_nsis.ps1').includes('a silent uninstall DELETED data\\'),
+    'MB_DEFBUTTON1 会让无人的那条路径开始删用户数据，而没人会看到');
+  check('自测核对卸载器注销了自己（否则卸载完还留在「应用和功能」里）',
+    readText('make_nsis.ps1').includes('the uninstaller left its registry entry'),
+    '卸载项不删 ⇒ 用户卸载后还看得见一个点不动的条目');
+  // 安装器在**安装目录之外**还动了两样东西：桌面快捷方式与开始菜单项。自测只看 $dest 的话
+  // 完全看不到它们 —— 事实上这台机器上就曾留下过两个指向已删临时目录的桌面快捷方式。
+  check('自测把桌面/开始菜单入口也纳入快照与还原',
+    readText('make_nsis.ps1').includes('$entryBefore') &&
+      readText('make_nsis.ps1').includes('cleaned up'),
+    '安装器建这些是功能；自测留下它们是污染，而在 $dest 里怎么找都找不到');
+  // NSIS 的 MessageBox 是**行终止**指令：返回分支写到下一行会被当成命令，
+  // 构建直接死在 `Invalid command: "IDNO"`（本次真踩，读那行错报完全看不出是换行问题）。
+  check('卸载确认框的返回分支与文本同一行（NSIS 指令以换行结束）',
+    /MessageBox MB_YESNO\|MB_DEFBUTTON2 "[^"\n]*"( \/SD IDNO)? IDNO [A-Za-z0-9_]+/.test(nsi),
+    '分支换行写 ⇒ Invalid command: "IDNO"，报错原文完全看不出是换行问题');
+  // 2026-09-28 用 A/B 探针隔离出来的约束（u3.nsi，6 组，120 s 观察窗口，各自只差一个变量）：
+  //   ① `IfSilent` 让无人值守卸载不再挂在没人看得见的模态框上。实测同一棵树：
+  //      有 IfSilent -> 进程 0.1 s 返回、树 0.5 s 内删净；没有 -> 7.3 s 返回、22.0 s 才落定。
+  //      **两种都删得掉** —— 这是「卡住」，不是「失败」。
+  //      （此处曾断言「un.onInit 里的 MessageBox 会让整个卸载器变空操作」，长窗口重跑**推翻**了它。）
+  //      `/SD IDNO` 则是给「非静默但无人应答」的默认应答；它在文本**之后**，放进 mode 段会
+  //      编译失败（Usage: MessageBox）。
+  //   ② 卸载器不许用 Rename 搬 data\ —— Rename **不能跨卷**。装机到 D:、$LOCALAPPDATA 在 C:
+  //      时它会失败并落到「全删」分支，于是「保留数据」静默变成「删光数据」。实测（120 s 窗口）：
+  //      Rename 版 data KEPT=False，枚举版 data KEPT=True。
+  //      而「装到哪个盘」正是我们自己交给用户选的功能。
+  //      改用枚举：删 $INSTDIR 下除 data\ 之外的一切，布局与卷都无关。
+  // 跨卷那条**只能**靠探针发现：默认自测目录在 %TEMP%，与 $LOCALAPPDATA 同卷。
+  check('静默卸载绕过 MessageBox（不让无人值守的卸载挂在没人看得见的模态框上）',
+    /IfSilent [A-Za-z0-9_]+\s+MessageBox MB_YESNO\|MB_DEFBUTTON2/.test(nsi),
+    '不加 IfSilent ⇒ /S 会先卡在隐藏的确认框上（实测 7.3 s 才返回、22 s 才删净），发布说明却承诺它能无人值守');
+  check('卸载器注释里不许再出现「MessageBox 让卸载器变空操作」这个被推翻的结论',
+    !nsiRaw.includes('turns the WHOLE uninstaller into a no-op'),
+    '长窗口重跑已推翻该假设；把错的根因留在代码里，下一个读它的人会去修一个不存在的 bug');
+  check('确认框带 /SD 默认应答，且 /SD 在文本之后而非 mode 段里',
+    /MessageBox MB_YESNO\|MB_DEFBUTTON2 "[^"\n]*" \/SD IDNO IDNO [A-Za-z0-9_]+/.test(nsi),
+    '把 /SD 塞进 MB_YESNO|MB_DEFBUTTON2 一段会编译失败：Usage: MessageBox');
+  check('卸载器不用 Rename 搬 data\\（Rename 不能跨卷 ⇒ 「保留」静默变成「全删」）',
+    !/\bRename\b/.test(nsi),
+    'Rename 跨卷必失败：装在别的盘时那条「保留数据」的分支会去删数据');
+  check('卸载器改为枚举删除，显式跳过 data\\',
+    nsi.includes('FindFirst $Fh $Fn "$INSTDIR\\*.*"') &&
+      nsi.includes('StrCmp $Fn "data" un_keep_next') &&
+      nsi.includes('FindClose $Fh'),
+    '只 RMDir /r 整个 $INSTDIR 会把要保留的 data\\ 一起删掉');
+  check('自测报出这次跑的卷关系（同卷则跨卷那条路根本没被走过）',
+    readText('make_nsis.ps1').includes('cross-volume path NOT exercised'),
+    '默认自测目录与 $LOCALAPPDATA 同卷 ⇒ 绿了也不代表跨卷可用，报告必须说清楚');
+  check('自测的残留检查覆盖整轮（含卸载器自复制的 ~nsu*.tmp）',
+    readText('make_nsis.ps1').includes('$tmpBeforeUn') &&
+      readText('make_nsis.ps1').includes('uninstall cue') &&
+      readText('make_nsis.ps1').includes('NSIS self-copy'),
+    '只在安装前取一次快照 ⇒ 卸载器留下的 ~nsu*.tmp 永远不在判据里，报告照样写「0 个新暂存目录」');
+  check('自测断言卸载后除了 data\\ 什么都不剩（不只看 start_all.bat）',
+    readText('make_nsis.ps1').includes('the uninstaller kept entries it should have removed'),
+    '只看一个文件 ⇒ 留下 12 万文件也算过；data\\ 之外每多一样都是漏删');
+  // NSIS 卸载器的**进程退出 ≠ 卸载完成**：它先把自己复制到 %TEMP%\~nsu.tmp 再重启。
+  // 2026-09-28 就是这样：断言在「进程返回」后立刻跑，报出 24 个残留顶层项 + 「卸载器留了树」，
+  // 一分钟后同一棵树是 0 个文件；而且我们自己的清理还在和它抢同一棵树（最后死在 index.js
+  // access denied）。判据必须是**终态**，且要有超时兜底（真不干活就等超时再失败）。
+  check('自测等卸载器真正结束（进程返回 ≠ 卸载完成）',
+    readText('make_nsis.ps1').includes('the uninstaller returns before it finishes') &&
+      /while \(\$settleSec -lt \$settleBudget -and \(Test-Path -LiteralPath \$entryBat\)\)/.test(readText('make_nsis.ps1')),
+    'WaitForExit 一返回就断言 ⇒ 会稳定报出「卸载器留了树」，而那棵树几秒后就没了');
+  check('自测的清理对「被卸载器占着的树」重试（并发删同一棵树 = access denied）',
+    readText('make_nsis.ps1').includes('Retry the transient lock'),
+    '首次即抛 ⇒ 一次偶发锁把整轮自测打成 THREW，真正的结论反而看不到');
+
+  const mkNsis = readText('make_nsis.ps1');
+  // 正则里的 `\\` 匹配的是**一个**反斜杠。写成 `\\\\` 会去匹配两个，然后恒假 ——
+  // 那种"断言永远不响"比没有断言更坏，因为它长得像一道门。
+  check('make_nsis.ps1 把路径规范化成反斜杠（NSIS 的 File 不认正斜杠）',
+    /\$Zip = \$Zip\.Replace\('\/', '\\'\)/.test(mkNsis) &&
+      /\$Out = \$Out\.Replace\('\/', '\\'\)/.test(mkNsis),
+    '正斜杠绝对路径会被 NSIS File 当成一个文件名 ⇒ no files found');
+  check('make_nsis.ps1 断言 payload 真的被内嵌（退出码 0 不等于产物能用）',
+    mkNsis.includes('the payload was NOT embedded'),
+    'Tauri 那条路就产过一个 3.5MB 的「安装器」而一切看起来正常');
+  check('make_nsis.ps1 捕获 makensis 输出（原生 stderr 不会被调用方的重定向合并）',
+    /\$mkOut = & \$Makensis \$defs \$nsi 2>&1/.test(mkNsis),
+    '不捕获则编译错误只剩一行空白，本次就是这样丢掉 `Invalid command: "IDNO"` 的');
+  check('make_nsis.ps1 不假设 runner 上有 makensis',
+    mkNsis.includes('makensis not found'), 'Server 2025 镜像没有 NSIS，而 windows-latest 会漂移');
+  // pack.ps1 写的 version.json 是 {commit, builtAt, dirty} —— **没有 version 键**。
+  // 读一个永远不存在的键等于「安静的兜底」，而它落到 DisplayVersion 上就是「0.0.0」，
+  // 在「应用和功能」里看起来像个正常版本号。兜底必须读真实存在的字段。
+  check('make_nsis.ps1 的版本兜底读 version.json 里真实存在的字段',
+    mkNsis.includes('$stamp.builtAt') && !mkNsis.includes('ConvertFrom-Json).version'),
+    'version.json 只有 {dirty, commit, builtAt}；读不存在的键 ⇒ 本地构建被标成 0.0.0');
+  // 「读了哪个字段」还不够，还得是「读了哪个文件」。version.json 由 pack.ps1 写在**仓库根**，
+  // 而 zip 落在 $PACK_ZIP_DIR ⇒ 把查找锚在 (Split-Path -Parent $Zip) 时，Test-Path 恒假、
+  // 这段兜底**一次都没生效过**；而上面那条只查字段名的断言照样通过。断「字段」也要断「锚点」。
+  check('make_nsis.ps1 到仓库根去找 version.json（zip 旁边没有这个文件）',
+    mkNsis.includes("Join-Path $root 'version.json'"),
+    'pack.ps1 把 version.json 写在 $root、zip 落在 $PACK_ZIP_DIR ⇒ 锚在 zip 旁边等于永远读不到');
+  const packDrop = readText('pack.ps1').slice(
+    readText('pack.ps1').indexOf('$dropScripts = @('),
+    readText('pack.ps1').indexOf('\n)', readText('pack.ps1').indexOf('$dropScripts = @(')),
+  );
+  check('pack.ps1 的 $dropScripts 排除 make_nsis.ps1（收件人不造安装包）',
+    packDrop.includes("'make_nsis.ps1'"),
+    '它依赖未分发的 installer\\ 与 makensis；留在包里只会让引用守卫报无关的悬空');
+
+  // 本块自带剥注释函数：下面 ⑥ 里的 stripHash 在本块之后才用 const 声明，
+  // 提前引用会撞进 TDZ 直接抛 ReferenceError（写断言时先撞了一次）。
+  const stripYamlComments = (s: string) => s.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
+  const relYml = stripYamlComments(readText('.github/workflows/release.yml'));
+  check('release.yml 构建 NSIS 安装包并真跑一次静默安装',
+    relYml.includes('./make_nsis.ps1') && relYml.includes('-SelfTest'),
+    '-SelfTest 是唯一能证明「下载一个文件、双击就能装」的检查；纯结构校验证明不了');
+  check('release.yml 不再构建自解压包（它已不是发布资产）',
+    !relYml.includes('make_sfx.ps1') && !relYml.includes('--extract-only'),
+    '两条下载路径做同一件事 ⇒ 用户要选，而选错的那个必然过时');
+  check('release.yml 仍从源码编译外壳（防止 tools/sfx/ 腐化）',
+    relYml.includes('tools/sfx/offerwhere_sfx.c'),
+    '搬出发布链路后又没人编译的源码，会安静地烂掉');
+  check('发布说明写清了无人值守装法（/S /D=）',
+    relYml.includes('/S /D=D:\\OfferWhere'),
+    'DS 的 /D= 必须末位且不带引号；写错则静默装到默认位置');
+
   // ── ⑥ PII 护栏必须在「构建发布产物的那条流水线」上真的跑起来 ──────────
   // 事故形状（2026-09-27 读 runner 自己的日志才发现）：denylist 住在 data/ 下，
   // 而 data/ 被 gitignore ⇒ runner 上永远不存在 ⇒ pack.ps1 打印一行平静的
@@ -1549,6 +1803,40 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('denylist 永不入库（data/ 被 gitignore）',
     readText('.gitignore').split(/\r?\n/).some((l) => l.trim() === 'data/'),
     'denylist 里就是它要防的那些字符串，入库等于二次泄露');
+}
+
+// ══════ 启动期可用性：磁盘清理必须「真异步」（2026-09-28） ══════
+// 背景（实测）：cleanupData 曾声明为 async，但**函数体内一个 await 都没有**，里面全是
+// readdirSync / statSync / unlinkSync，而且被**直接写在 app.listen 回调里** ⇒ 整段同步 I/O
+// 跑在事件循环上，把它占死到底。本机 data/ = 847MB / 5,351 文件时占用 **19,893 ms**；
+// 这段时间里日志已经打了「API 服务器已启动」、端口也已经 LISTENING，但**任何请求都得不到响应**
+// （客户端超时后服务端留下一排 CLOSE_WAIT）。看起来像「服务坏了」，其实是「在忙」。
+// 空 data/ 的 CI 冒烟里它只要几毫秒 ⇒ **门禁天然看不见**，所以必须靠断言钉住。
+{
+  const CT_ROOT2 = fileURLToPath(new URL('..', import.meta.url));
+  const rawSrc = fs.readFileSync(path.join(CT_ROOT2, 'server/services/dataCleanup.ts'), 'utf8');
+  // 先剥注释再断言：说明文字里就写着 readdirSync / statSync / withFileTypes，
+  // 不剥注释会让断言被「自己的注释」满足（既有教训）。
+  const cleanupSrc = rawSrc
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n');
+  // 注意：dirSize / pruneByAge 定义在 cleanupData **之前**，所以整文件扫描，
+  // 不能只截 cleanupData 的函数体（否则漏掉真正干活的那两个辅助函数）。
+  const fromDecl = cleanupSrc.slice(cleanupSrc.indexOf('export async function cleanupData'));
+  const cleanupBody = fromDecl.slice(0, fromDecl.indexOf('\n}') + 2);
+  check('cleanupData 真的 await（不能是「假 async」）',
+    /\bawait\s/.test(cleanupBody),
+    '函数体内 0 个 await ⇒ 整段同步 I/O 跑在事件循环上，服务表现为「已启动但不可服务」');
+  check('清理模块不用同步 fs（*Sync 会占住事件循环）',
+    !/\bfs\.\w*Sync\(/.test(cleanupSrc),
+    '启动路径上的 readdirSync/statSync/unlinkSync 会把可用性推迟到遍历结束');
+  check('目录遍历用 withFileTypes（省掉逐文件 stat）',
+    /withFileTypes\s*:\s*true/.test(cleanupSrc),
+    '否则每个文件一次 stat —— Windows 上这是主要开销');
+  check('目录遍历不跟随符号链接（Windows junction 会成环）',
+    /isSymbolicLink\(\)/.test(cleanupSrc),
+    '跟随 + 只有深度上限 ⇒ 含 junction 的 Chrome profile 会指数级展开');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

@@ -45,42 +45,55 @@ function human(bytes: number): string {
 /**
  * 递归统计目录体积。带上限保护（文件数/深度），避免在超大目录上卡住：
  * data/browser 存放各平台登录态 profile，实测约 18 万个小文件，全量遍历要数秒。
+ *
+ * ⚠️ 2026-09-28 由同步改为异步：本函数原先用 `readdirSync` + `statSync` 逐项遍历，
+ *    而 `cleanupData` 函数体内一个 `await` 都没有，于是它在 `app.listen` 回调里**同步**
+ *    跑完，把事件循环占住。实测本机 data/ = 847MB / 5,443 文件时占用 **19.9 秒**：
+ *    这段时间里端口已经 LISTENING、启动横幅也已打印，但**任何请求都得不到响应**
+ *    （连接堆在 accept 队列里，客户端超时后留下 CLOSE_WAIT）。健康探测脚本会据此
+ *    误判「进程起来了但服务是坏的」。改异步后阻塞降到毫秒级。
+ *
+ * 另外两处一并收紧：
+ *  1. 用 `withFileTypes` 拿条目类型，省掉**每个文件一次 stat**（Windows 上是大头）。
+ *  2. **不跟随目录符号链接**（Windows 上的 junction 可成环）。原先跟随 + 只有深度上限，
+ *     在含 junction 的 Chrome profile 上会造成层层展开的指数级爆炸，那才是「越用越慢」的隐患。
  */
-function dirSize(dir: string, opts: { maxFiles?: number; maxDepth?: number } = {}): { bytes: number; files: number; truncated: boolean } {
+async function dirSize(dir: string, opts: { maxFiles?: number; maxDepth?: number } = {}): Promise<{ bytes: number; files: number; truncated: boolean }> {
   const maxFiles = opts.maxFiles ?? 250000;
   const maxDepth = opts.maxDepth ?? 8;
   let bytes = 0, files = 0, truncated = false;
-  const walk = (d: string, depth: number) => {
+  const walk = async (d: string, depth: number): Promise<void> => {
     if (truncated) return;
     if (depth > maxDepth) { truncated = true; return; }
-    let entries: string[];
-    try { entries = fs.readdirSync(d); } catch { return; }
-    for (const n of entries) {
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
       if (files >= maxFiles) { truncated = true; return; }
-      const p = path.join(d, n);
-      let st: fs.Stats;
-      try { st = fs.statSync(p); } catch { continue; }
-      if (st.isDirectory()) walk(p, depth + 1);
-      else if (st.isFile()) { files++; bytes += st.size; }
+      if (e.isSymbolicLink()) continue; // 不跟随：防 junction 成环 + 指数展开
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { await walk(p, depth + 1); continue; }
+      if (!e.isFile()) continue;
+      try { bytes += (await fs.promises.stat(p)).size; files++; } catch { /* 单个文件失败不影响整体 */ }
     }
   };
-  walk(dir, 0);
+  await walk(dir, 0);
   return { bytes, files, truncated };
 }
 
 /** 删除目录下超过 days 天的普通文件（不递归子目录） */
-function pruneByAge(dir: string, days: number, dryRun: boolean): { deleted: number; freedBytes: number } {
+async function pruneByAge(dir: string, days: number, dryRun: boolean): Promise<{ deleted: number; freedBytes: number }> {
   const res = { deleted: 0, freedBytes: 0 };
-  if (!fs.existsSync(dir)) return res;
+  let names: string[];
+  try { names = await fs.promises.readdir(dir); } catch { return res; }
   const cutoff = Date.now() - days * 24 * 3600 * 1000;
-  for (const name of fs.readdirSync(dir)) {
+  for (const name of names) {
     const p = path.join(dir, name);
     try {
-      const st = fs.statSync(p);
+      const st = await fs.promises.stat(p);
       if (!st.isFile() || st.mtimeMs >= cutoff) continue;
       res.deleted++;
       res.freedBytes += st.size;
-      if (!dryRun) fs.unlinkSync(p);
+      if (!dryRun) await fs.promises.unlink(p);
     } catch { /* 跳过单个文件错误 */ }
   }
   return res;
@@ -96,32 +109,30 @@ export async function cleanupData(opts: CleanupOptions = {}): Promise<CleanupRep
   const runLogDays = opts.runLogDays ?? 30;
   const dryRun = opts.dryRun ?? false;
 
-  const screenshots = pruneByAge(path.join(DATA_DIR, 'screenshots'), screenshotDays, dryRun);
-  const runLogs = pruneByAge(path.join(DATA_DIR, 'run_log'), runLogDays, dryRun);
+  const screenshots = await pruneByAge(path.join(DATA_DIR, 'screenshots'), screenshotDays, dryRun);
+  const runLogs = await pruneByAge(path.join(DATA_DIR, 'run_log'), runLogDays, dryRun);
 
   // DB 备份：按 mtime 倒序，仅保留最近 keepDbBackups 份
   const dbBackups = { deleted: 0, freedBytes: 0 };
   try {
-    if (fs.existsSync(DATA_DIR)) {
-      const baks: Array<{ p: string; m: number; s: number }> = [];
-      for (const n of fs.readdirSync(DATA_DIR)) {
-        if (!n.startsWith('chat.db.bak-')) continue;
-        const p = path.join(DATA_DIR, n);
-        try { const st = fs.statSync(p); if (st.isFile()) baks.push({ p, m: st.mtimeMs, s: st.size }); } catch { /* 忽略 */ }
-      }
-      baks.sort((a, b) => b.m - a.m);
-      for (const b of baks.slice(keepDbBackups)) {
-        dbBackups.deleted++;
-        dbBackups.freedBytes += b.s;
-        if (!dryRun) fs.unlinkSync(b.p);
-      }
+    const baks: Array<{ p: string; m: number; s: number }> = [];
+    for (const n of await fs.promises.readdir(DATA_DIR)) {
+      if (!n.startsWith('chat.db.bak-')) continue;
+      const p = path.join(DATA_DIR, n);
+      try { const st = await fs.promises.stat(p); if (st.isFile()) baks.push({ p, m: st.mtimeMs, s: st.size }); } catch { /* 忽略 */ }
+    }
+    baks.sort((a, b) => b.m - a.m);
+    for (const b of baks.slice(keepDbBackups)) {
+      dbBackups.deleted++;
+      dbBackups.freedBytes += b.s;
+      if (!dryRun) { try { await fs.promises.unlink(b.p); } catch { /* 忽略 */ } }
     }
   } catch { /* 忽略 */ }
 
   const freedBytes = screenshots.freedBytes + dbBackups.freedBytes + runLogs.freedBytes;
   // O2：data/ 总量统计 + 阈值告警（阈值可经 DATA_MAX_MB 调整，默认 3000MB）
   const maxBytes = Math.max(256, Number(process.env.DATA_MAX_MB) || 3000) * 1024 * 1024;
-  const size = dirSize(DATA_DIR);
+  const size = await dirSize(DATA_DIR);
   const overThreshold = size.bytes > maxBytes;
   const report: CleanupReport = {
     screenshots, dbBackups, runLogs, freedBytes, freedHuman: human(freedBytes), dryRun,

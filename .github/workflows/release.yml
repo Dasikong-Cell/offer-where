@@ -131,11 +131,12 @@ jobs:
           # 若嫌慢可移除本步（ci.yml 每次推 main 都会跑它）。
           ./scripts/pack_smoke.ps1
 
-      # 自解压外壳是**编译产物**（tools/sfx/build/ 被 gitignore），所以每次发布都从
-      # tools/sfx/offerwhere_sfx.c 现编译 —— 这样 stub 永远与源码一致，不会出现
-      # 「改了 C 忘了重编译，发出去的 exe 还是旧行为」这种只有用户才会撞上的漂移。
-      # gcc 是本 job 唯一的工具链依赖；找不到就直接失败，而不是悄悄只发 zip。
-      - name: 编译自解压外壳
+      # 自解压外壳（上一代 OfferWhere-Setup）自 2026-09-28 起**不再是发布资产**，由 NSIS
+      # 安装包取代。这一步留着只有一个理由：tools/sfx/ 仍在仓库里，而「从发布链路里搬走、
+      # 却再也没被编译过」的源码会安静地腐化 —— 等到哪天需要它时才发现早就编不过了。
+      # 编译一次两秒，把「它还能编」变成每次发布都验证一次的事实。
+      # gcc 是本 job 的工具链依赖之一；找不到就直接失败，而不是跳过。
+      - name: 编译自解压外壳（只为防止源码腐化，不再发布）
         shell: pwsh
         run: |
           $gcc = Get-Command gcc -ErrorAction SilentlyContinue
@@ -146,18 +147,47 @@ jobs:
           New-Item -ItemType Directory -Force -Path tools/sfx/build | Out-Null
           & $gcc.Source -O2 -mwindows -municode -Wall -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32 -lole32
           if ($LASTEXITCODE -ne 0) { throw "stub build failed with $LASTEXITCODE" }
-          Write-Host ("      stub.exe " + (Get-Item tools/sfx/build/stub.exe).Length + " bytes")
+          Write-Host ("      stub.exe " + (Get-Item tools/sfx/build/stub.exe).Length + " bytes (compile-only check)")
 
-      # -SelfTest 会在无人值守模式下真跑一次安装器（解压整包 + 校验外壳落位 + 比对步骤日志），
-      # 这是唯一能证明「下载一个文件、双击就能用」的检查；纯结构校验证明不了。
-      - name: 构建自解压安装包并端到端自测
+      # makensis 不能假设 runner 上有。实测（actions/runner-images 清单）：
+      #   Windows Server 2022 -> NSIS 3.10 预装；Windows Server 2025 -> **没有 NSIS**。
+      # 而 `windows-latest` 在两者之间会随时间漂移，所以这里显式探测、缺了就装，
+      # 而不是赌镜像 —— 赌输的代价是发布直接红，且原因藏在镜像里。
+      - name: 确保 makensis 可用
+        shell: pwsh
+        run: |
+          $mk = Get-Command makensis -ErrorAction SilentlyContinue
+          if (-not $mk) {
+            $cands = @(
+              (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
+              (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
+              (Join-Path $env:LOCALAPPDATA 'Programs\NSIS\makensis.exe'),
+              'C:\ProgramData\chocolatey\bin\makensis.exe'
+            )
+            foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath $c)) { $mk = Get-Item -LiteralPath $c; break } }
+          }
+          if (-not $mk) {
+            Write-Host '      makensis not present on this image; installing NSIS'
+            choco install nsis -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed with $LASTEXITCODE" }
+            $mk = Get-Command makensis -ErrorAction SilentlyContinue
+          }
+          if (-not $mk) { throw 'no makensis on this runner; cannot build the installer' }
+          Write-Host ('      makensis: ' + $mk.Source)
+          "MAKENSIS_PATH=$($mk.Source)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # -SelfTest 会真跑一次静默安装（/S /D=<temp>，解压整包）并核对：退出码 0、
+      # 12.4 万个文件、入口与卸载器都在、静默安装没有启动 GUI、%TEMP% 没有残留暂存目录。
+      # 纯结构校验证明不了「下载一个文件、双击就能用」，这一步是唯一能证明的检查。
+      - name: 构建 NSIS 安装包并静默自测
         shell: pwsh
         env:
           PACK_ZIP_DIR: ${{ runner.temp }}
         run: |
           $setup = Join-Path $env:PACK_ZIP_DIR 'OfferWhere-Setup.exe'
-          ./make_sfx.ps1 -Zip (Join-Path $env:PACK_ZIP_DIR 'job-apply-agent-portable.zip') -Out $setup -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "make_sfx.ps1 failed with $LASTEXITCODE" }
+          $zip = Join-Path $env:PACK_ZIP_DIR 'job-apply-agent-portable.zip'
+          ./make_nsis.ps1 -Zip $zip -Out $setup -Makensis $env:MAKENSIS_PATH -AppVer $env:RELEASE_TAG -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "make_nsis.ps1 failed with $LASTEXITCODE" }
           Write-Host ("      " + $setup + "  " + [math]::Round((Get-Item $setup).Length / 1MB, 1) + " MB")
           "SETUP_PATH=$setup" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
@@ -169,16 +199,22 @@ jobs:
           $tag = $env:RELEASE_TAG
           $setupMB = [math]::Round((Get-Item $env:SETUP_PATH).Length / 1MB, 0)
           $zipMB = [math]::Round((Get-Item $env:ZIP_PATH).Length / 1MB, 0)
-          # 说明就是使用者下载时看到的第一段字：主推**一个文件**的自解压安装包，zip 作为备用。
-          $notes = "## 推荐：双击一个文件就能用`n`n"
-          $notes += "下载 **OfferWhere-Setup.exe**（约 $setupMB MB），双击它：`n`n"
-          $notes += "1) 弹出安装程序窗口，里面已经填好默认安装位置（%LOCALAPPDATA%\OfferWhere，按用户安装、不需要管理员权限）`n"
-          $notes += "   直接点「安装」即可；想装到别处就点「浏览…」选目录，或直接改那个路径`n"
-          $notes += "2) 解压完成后自动启动 OfferWhere，第一次启动会弹出「安装」对话框 —— 点「安装」`n"
-          $notes += "3) 桌面上出现 OfferWhere 图标，以后双击该图标即可使用`n`n"
-          $notes += "解压约需 1.2GB 可用空间（约 12.5 万个文件，需要一到三分钟）。若已装过一次，再双击这个 exe 会直接启动，不会重复解压。`n"
-          $notes += "免打扰安装（不弹任何对话框、不启动程序，只解压）：`n"
-          $notes += "    OfferWhere-Setup.exe --extract-only`n`n"
+          # 说明就是使用者下载时看到的第一段字：主推**一个文件**的安装程序，zip 作为备用。
+          # 这里的每一步都对应安装器里真实存在的东西（安装目录页 / 开始菜单与桌面入口 /
+          # 「应用和功能」里的卸载项 / /S 无人值守），不是宣传话术 —— 上一版文案里的
+          # `--extract-only` 与「再双击会直接启动」都是自解压外壳的行为，换成 NSIS 后不再成立。
+          $notes = "## 推荐：下载一个文件，双击就能装`n`n"
+          $notes += "下载 **OfferWhere-Setup.exe**（约 $setupMB MB）并双击：`n`n"
+          $notes += "1) 弹出安装程序（标题「OfferWhere 安装」）。默认装到 %LOCALAPPDATA%\OfferWhere`n"
+          $notes += "   按用户安装，不需要管理员权限`n"
+          $notes += "2) 「选择安装位置」那一页**装在哪由你决定**：直接改路径，或点「浏览(B)...」选目录`n"
+          $notes += "   下一点「安装(I)」开始解压（约 12.4 万个文件，实测 118-141 秒，慢的那次是装到 C 盘；页面会显示所需空间约 1.1GB）`n"
+          $notes += "3) 完成后可以勾选直接运行 OfferWhere，也可以稍后从开始菜单或桌面图标启动 —— 快捷方式由安装程序建好，`n"
+          $notes += "   **不会再出现第二次「安装」提示**`n`n"
+          $notes += "卸载：「设置 → 应用 → 已安装的应用」里找到 OfferWhere 卸载。`n"
+          $notes += "卸载会**默认保留**你的 data\ 目录（简历、采集到的 JD、投递记录），要一起删会单独问你一次。`n`n"
+          $notes += "无人值守安装（不弹任何窗口，只解压；目标路径可省）：`n"
+          $notes += "    OfferWhere-Setup.exe /S /D=D:\OfferWhere`n`n"
           $notes += "## 备用：便携 zip（约 $zipMB MB）`n`n"
           $notes += "1) 解压到纯英文路径（如 D:\offer-where）。建议用系统自带 tar 或 7-Zip；别用资源管理器双击解压（包内 13 万个小文件，会非常慢）：`n"
           $notes += "    mkdir D:\offer-where`n"

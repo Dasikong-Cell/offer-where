@@ -107,7 +107,107 @@ $env:CARGO_TARGET_DIR='D:\_ow_b10'
 后端探活 / 窗口关闭与销毁 / 退出请求 / panic。**出问题先看它。**
 WebView2 侧的崩溃转储在 `%LOCALAPPDATA%\com.offerwhere.desktop\EBWebView\Crashpad\reports`。
 
-### 自解压安装包（OfferWhere-Setup.exe）
+### NSIS 安装包（OfferWhere-Setup.exe）—— 2026-09-28 起的主推下载
+
+取代了下一节的自解压外壳。`release.yml` 每次发布都构建它，并**真跑一次静默安装**才放行。
+
+**架构**：安装器里内嵌那一个**已经压好**的 `job-apply-agent-portable.zip`，安装时释放到 `%TEMP%`，
+再调用系统自带的 `$SYSDIR\tar.exe` 解到用户选的目录。
+
+```
+[ makensis 生成的安装器 PE：UI + 脚本 + 卸载器，约 3.2MB ][ 原样内嵌的 payload.zip，约 362MB ]
+```
+
+- **为什么不用 Tauri 自带的 NSIS 打包器**：① `src-tauri/tauri.conf.json` 的 `bundle.resources` 是空的
+  ⇒ 它只会打出那个 3.5MB 的外壳（看起来一切正常，装完却没有负载）；② `tauri-bundler` 对**每个文件**
+  各生成一条 NSIS `File` 指令 ⇒ 12.45 万个文件走不通。内嵌一个 zip 是这两个问题的同一个解。
+- **为什么 `SetCompress off`**：payload 本来就是 deflate 压过的 zip，再压一遍实测**几分钟换 ~0%**。
+  代价只有 NSIS 自身开销 + 图标资源（**NSIS 不压缩图标**）：产物 **379,881,684 B** =
+  payload 379,580,025 **+ 301,659**（其中约 184KB 是安装器与卸载器各存一份 `public/app.ico`）。
+  **实测内嵌 362MB 只要 3 秒。** 合约测试钉住「`SetCompress off` 必须在 `File` 之前」——
+  顺序写反就等于把上面这件事白做。
+- **脚本**：`installer/offerwhere.nsi`（**纯 ASCII**；中文界面来自 NSIS 自带的 `SimpChinese.nlf/.nsh`，
+  脚本里写中文会让构建结果取决于编译机的代码页）。
+  **构建**：`./make_nsis.ps1 -Zip <便携包.zip> -Out <exe> -SelfTest`。
+- **首跑不会再有「安装」提示**：安装器自己写 `$INSTDIR\data\.installed` —— 与 `start_all.bat`、
+  `src-tauri/src/lib.rs` 判的是**同一个标记**（也就是 `install_first_run.bat` 那个「安装」按钮写的那个）。
+  理由是那个对话框的成因已经消失：它存在的背景是旧自解压包**只解压、从不碰外壳**，而它做的事只有
+  「跑 `create_desktop_shortcut.bat /silent` + 写标记」两件 —— 安装器两件都做了（还多一个开始菜单项
+  与卸载项）。留着它，用户会在刚点完向导的「安装」之后被要求再点一次「安装」。
+- **安装器自己也有图标了**（2026-09-28 补）：`installer/offerwhere.nsi` 的 `Icon` /
+  **`UninstallIcon`** / `MUI_ICON` / `MUI_UNICON` 四处同指 `public/app.ico`。
+  在此之前，**用户最先看到的那一个文件**（下载栏 / 资源管理器 / SmartScreen 提示框）带的是 NSIS 的默认
+  图标，而桌面快捷方式带的是我们的 —— 同一个产品两套品牌标记。这是拿一份「图标必须出现在所有位置」
+  的发布清单逐条对出来的（exe / 窗口 / 托盘 / favicon / 页内都覆盖了，唯独向导漏了）。
+  **指令名是 `UninstallIcon`，没有 `UnIcon`**（写错只报 `Invalid command: "UnIcon"`，读起来像手误）。
+  自测会把 **exe 里实际嵌入的图标**与源 `.ico` 逐像素比对 —— 只断言 `.nsi` 里写了 `Icon`，
+  「写了但编译器用了默认图标」照样能通过，而那正是它漏了这么久的形态。
+- **`-SelfTest`（本机实测 117–141 s 装到 C:，118 s 装到 D:；同一台机器差 20 秒，别把它当常数）**：用 `/S /D=<临时目录>` 真跑一次静默安装，核对退出码 0 /
+  **124,554 个文件** / 入口、卸载器与首跑标记都在 / **静默安装不许启动 GUI** /
+  `%TEMP%` 不留 `ns*.tmp` **与 `~nsu*.tmp`** / 没碰默认落点。
+  文件数口径可对账：**zip 中央目录 124,552 + 安装器写入的 `Uninstall.exe` + `data\.installed` = 124,554**。
+  然后**真跑一次静默卸载**：等终态（`settle wait` 实测 **87–94 s**，见下）、断言**除 `data\` 之外什么都不剩**、
+  `data\.installed` 还在、卸载项已注销、桌面入口已收回，并把**这次的卷关系**打出来
+  （默认 `$SelfTestDir` 在 `%TEMP%`，与 `$LOCALAPPDATA` **同卷** ⇒ 报告会明说「跨卷路径未被走过」；
+  要真验跨卷：`-SelfTestDir D:\somewhere`）。
+- **🔴 卸载器三条硬约束**（2026-09-28 用 6 组变体 + 120 s 观察窗口定下来）：
+  - **不许用 `Rename` 搬 `data\`**。`Rename` 不能跨卷 ⇒ 装机到别的盘时「保留数据」会**静默变成「删光数据」**
+    （实测 `data KEPT=False`）。而「装到哪个盘」正是我们自己交给用户选的功能。改用**枚举删除**除 `data\` 外的一切。
+  - **卸载器的进程退出 ≠ 卸载完成**。NSIS 先把自己复制到 `%TEMP%\~nsu.tmp` 再重启，**原进程立刻退出**、
+    树还在删（12.4 万文件实测 **87–94 s**）。所以断言必须等终态，清理函数也要对瞬时占用重试 ——
+    否则会稳定报出「卸载器留了树」，而那棵树几十秒后就没了。
+  - 残留要查 **`ns*.tmp` 和 `~nsu*.tmp` 两个族**。只查前者，等于把卸载器自复制的副本当干净。
+- **两个必须记住的坑**：
+  - **`/D=` 必须末位且不带引号**。写成 `/D="D:\x"` 时 NSIS 会**静默忽略**它、装到默认位置，
+    而退出码仍然是 0 —— 看起来完全成功。自测第 1 次就是被这一条抓住的。
+  - **别在 Git Bash 里传这些参数**。MSYS 会把 `/S` 当盘符路径改写成 `S:/`（静默模式静默失效）、
+    把 `/D=` 里的 `:` 当 POSIX 路径表分隔符拆开。要绝对干净就用 Python `subprocess` 传 argv，
+    或加 `MSYS_NO_PATHCONV=1`。**排查「卡住」前先看窗口标题**（`tasklist /V`），别看 CPU。
+- **CI 不赌镜像**：`windows-latest` 会在 Server 2022（预装 NSIS 3.10）与 Server 2025（**没有 NSIS**）
+  之间漂移 ⇒ `release.yml` 先探测四个常见路径、缺了 `choco install nsis`，都没有才失败。
+- **发布说明即产品文案**：`release.yml` 里那段文字就是用户下载时看到的第一段字，每一条都对应安装器里
+  真实存在的东西（目录页 / 开始菜单与桌面入口 / 「应用和功能」卸载项 / `/S`）。**改安装器时要同步改它。**
+- **⚠️ 已知缺口（待定，2026-09-28 发现）：手工 NSIS 不装 WebView2 运行时。**
+  `bundle.windows.webviewInstallMode` 是喂给 **Tauri 自带 bundler** 的配置，而我们绕开了它
+  ⇒ 本安装器只解 payload，**既不检查也不安装 WebView2**。缺运行时的机器（LTSC / Server /
+  未预装的老 Win10）装完点开是**空白窗口** —— 表象与 2026-09-27 那次 GPU 沙箱事故一模一样，
+  成因完全不同（那次见 `docs/tauri-shell-webview2-gpu-2026-09-27.md`）。
+  代价取决于要哪一档：`embedBootstrapper` **≈ +1.8 MB、需联网**；`offlineInstaller` **≈ +127 MB、可离线**。
+  判断运行时在不在的键（x64 实测）：
+  `HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` 的 `pv`
+  （按用户装法在 `HKCU\...\EdgeUpdate\Clients\{同 GUID}`）。**注意**：不带 `WOW6432Node` 的那条
+  `HKLM\SOFTWARE\Microsoft\EdgeUpdate\...` 在本机**不存在** ⇒ 只查它会得出「没装」的错误结论。
+  **未实施**：需要先决定「允不允许安装时联网」。另外，本机没有装它的必要（已预装），
+  所以这条**没法在本机端到端验证**，得靠一台干净的虚拟机。
+
+### 启动期磁盘清理（2026-09-28 由同步改为真正异步）
+
+> **背景**：`server/services/dataCleanup.ts` 的 `cleanupData` 声明为 `async`，但函数体内
+> **一个 `await` 都没有** —— 里面全是 `readdirSync` / `statSync` / `unlinkSync`。它被**直接写在
+> `app.listen` 回调里**，于是整段同步 I/O 跑在事件循环上，把循环占死到底。
+>
+> **症状**：日志已打「API 服务器已启动」、端口已 `LISTENING`，但**任何请求都得不到响应**；
+> 客户端超时后在服务端留下一排 `CLOSE_WAIT`。看起来像「服务坏了」，其实是「在忙」。
+>
+> **为什么长期没被发现**：① 端口和日志都显示「已就绪」；② 空 `data/` 的 CI 冒烟里它只要几毫秒
+> —— **门禁天然看不见**；③ 代价随 `data/` 规模变化，本机实测 `data/` = 847 MB / 5 351 文件时
+> **同步占用 19 893 ms**（进程内打点测得），而 Windows + Defender 逐文件扫描还会再放大。
+>
+> **修法**（三处）：
+> 1. 全面改用 `fs.promises.readdir / stat / unlink`，并真正 `await`；
+> 2. 遍历用 `readdir(dir, { withFileTypes: true })` 取条目类型 ⇒ **省掉每文件一次 `stat`**；
+> 3. **不跟随目录符号链接** ⇒ 修掉 Windows junction 成环导致指数级展开的隐患。
+>
+> **效果**：模块级隔离测试 `19 893 ms 全程阻塞` → **288 ms 且不阻塞**；
+> `npm test`（58/58 + 405/405）与 `npm run verify` 均回归通过。
+>
+> **验收提醒**：判断「服务起没起」不能只看端口或日志，**必须发一个请求拿到响应**才算数。
+
+### 上一代：自解压安装包（已退出发布链路）
+
+> **状态**：2026-09-28 起 `OfferWhere-Setup.exe` 改由 NSIS 生成（见上一节），本节的 stub **不再是发布资产**。
+> `tools/sfx/` 与 `make_sfx.ps1` 仍留在仓库里，`release.yml` 每次发布仍**从 C 源码编译一次** ——
+> 唯一目的是防止「搬出发布链路、之后再也没被编译过」的源码安静地腐化。下面内容保留为这段历史的设计记录。
 
 「下载**一个文件**、双击就能用」的入口，给不想碰命令行的人。文件布局：
 
@@ -143,8 +243,8 @@ stub 用 `seek(EOF-24)` 找到 payload；zip 前面挂了 stub 后 `tar` 读不�
     「构建脚本不许自带第二份副本」（自带副本时改一边就能产出打不开的 exe，且四道门禁全绿）。
 - **无人值守**：`OfferWhere-Setup.exe --extract-only` 不弹任何窗、不启动任何程序，退出码即结果；
   `OFFERWHERE_SFX_DEST=<目录>` 换安装位置、`OFFERWHERE_SFX_LOG=<文件>` 追加一份 ASCII 步骤日志。
-- **发布**：`release.yml` 每次发布都从 C 源码**现编译** stub（`tools/sfx/build/` 被 gitignore，不入库），
-  把 `OfferWhere-Setup.exe` 与 zip 一起挂到 Release。**不依赖预编译产物 ⇒ 不存在「改了 C 忘了重编译」的漂移。**
+- **发布**：~~`release.yml` 把 `OfferWhere-Setup.exe` 与 zip 一起挂到 Release~~ —— **2026-09-28 起不再成立**，
+  这个 exe 现在由 NSIS 生成。`release.yml` 仍保留一步「从 C 源码现编译 stub」，但**只为防腐化，产物不发布**。
 - **已知取舍**：没有代码签名证书 ⇒ 用户首次运行必然看到 SmartScreen「未知发布者」，得点「更多信息 → 仍要运行」。
 
 ---

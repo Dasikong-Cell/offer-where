@@ -255,7 +255,12 @@ $dropScripts = @(
   # the SFX builder: it concatenates tools\sfx\build\stub.exe into OfferWhere-Setup.exe,
   # and `tools\` is not shipped. Keeping it would make the launcher cross-reference guard
   # fire on paths that only exist in the source tree -- a false alarm for the recipient.
-  'make_sfx.ps1'
+  'make_sfx.ps1',
+  # the NSIS installer builder, same reason (added 2026-09-28 when it became the published
+  # installer). It needs installer\ -- which is not in $dirs and therefore never ships --
+  # plus a makensis on PATH that no recipient has. Recipients run an installer, they do
+  # not build one.
+  'make_nsis.ps1'
 )
 $scripts = Get-ChildItem $root -File -Force |
   Where-Object { @('.bat', '.sh', '.ps1') -contains $_.Extension -and $dropScripts -notcontains $_.Name } |
