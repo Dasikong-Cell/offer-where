@@ -1086,6 +1086,66 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
     `中招：${nonAscii.join(', ')}。修法：中文改英文，或走 powershell -EncodedCommand`);
 }
 
+// ── 两条投递通道都必须落证据截图（2026-09-29）────────────────────────────────
+// 背景：第③关「真实投递」端到端验收跑通后，回读 `/api/apply/evidence` 发现
+// **只有 5 条记录，且全部停在 2026-09-24** —— 本次刚投的两家一家都没有。
+// 追下去发现：`evidence_path` 全程只有 batch.ts 一处写入（批量通道），
+// 单岗通道 `/api/apply` 建了投递记录却从不写证据 ⇒ 控制台「录屏回溯」面板
+// 对「在岗位卡片上点投递」这条主路径**永远是空的**，而门禁看不出来
+// （闸 7 当时只断言「证据条目 > 0」，5 条旧记录就能让它恒绿 —— 空过断言）。
+//
+// 匹配前**先剥注释**：否则上面这段说明文字自己就能满足 includes 判断
+// （本仓库在 release.yml 上踩过同一件事）。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const strip = (s: string) => s.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const idxLive = strip(fs.readFileSync(path.join(ROOT, 'server', 'index.ts'), 'utf8'));
+  const batchLive = strip(fs.readFileSync(path.join(ROOT, 'server', 'services', 'apply', 'batch.ts'), 'utf8'));
+
+  const at = idxLive.indexOf("result.status === 'applied' && (jobId || job)");
+  const applyBlock = at >= 0 ? idxLive.slice(at, at + 2000) : '';
+  check('/api/apply 单岗投递成功后落证据截图',
+    at >= 0 && /tryScreenshot\(/.test(applyBlock) && /updateApplication\(appId,/.test(applyBlock) && /evidence_path/.test(applyBlock),
+    '单岗通道不写 evidence_path ⇒ 控制台「录屏回溯」对「点岗位卡片投递」这条主路径永远空（实测全库仅 5 条、停在 2026-09-24）');
+  check('批量投递（batch.ts）同样落证据截图',
+    /tryScreenshot\(/.test(batchLive) && /evidence_path/.test(batchLive),
+    '两条通道里只有一条写证据 ⇒ 用户会发现「有些投递有回溯、有些没有」，且无法解释原因');
+}
+
+// ── 证据截图必须能在 BOSS 聊天页拿到（2026-09-29）────────────────────────────
+// 背景：修完「单岗投递不写 evidence_path」后，实测发现证据**还是拿不到** ——
+//   `Page.captureScreenshot` 在 BOSS 聊天页恒超时。同一会话同一页面的三向对照：
+//     默认(未指定)       -> 超时 >12s
+//     fromSurface:true   -> 超时 >12s
+//     fromSurface:false  -> 成功 1284ms
+//   而 BOSS 投递完成后页面正好停在 /web/geek/chat ⇒ 证据截图会系统性失败。
+//   空白页截图 54ms 成功，证明**机制本身是好的**，问题只在窗口表面合成这条路径。
+//
+// 顺带修掉一句**在猜原因**的报错：原超时文案写「疑似页面上下文被反爬销毁」，
+//   实测与反爬无关（同页面 fromSurface:false 就成功）⇒ 会把排查带向错误方向。
+//   报错只应陈述「检查过什么/等了多久」。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const strip = (s: string) => s.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const cdpLive = strip(fs.readFileSync(path.join(ROOT, 'server', 'services', 'cdpDriver.ts'), 'utf8'));
+
+  const at = cdpLive.indexOf("case 'screenshot':");
+  const shotBlock = at >= 0 ? cdpLive.slice(at, at + 1500) : '';
+  // 🔴 匹配要**精确到调用参数**，不能只搜 `fromSurface:false` 这个子串：
+  //   本仓库踩过「断言被自己的注释满足」，这次是另一变体 —— 兜底分支里那句
+  //   `console.warn('…用 fromSurface:false 兜底重试')` 的**日志文案**就含这个子串，
+  //   所以只搜子串时，即使真参数被改回 fromSurface:true（会超时）断言照样绿。
+  //   ⇒ 要求「captureScreenshot 的 send 调用里」出现该参数（`[^)]*` 保证不跨到下一次调用）。
+  check('截图在常规路径失败时用 fromSurface:false 兜底',
+    at >= 0 && /'Page\.captureScreenshot'[^)]*fromSurface:\s*false/.test(shotBlock) && /catch/.test(shotBlock),
+    'BOSS 聊天页（投递后必然落到这里）上常规截图恒超时 ⇒ 证据截图系统性拿不到，' +
+    '而「录屏回溯」面板会一直空着且看不出原因');
+  check('CDP 超时报错不猜测原因（不写「疑似反爬」）',
+    !/疑似页面上下文被反爬销毁/.test(cdpLive),
+    '实测超时与反爬无关（同页面 fromSurface:false 1.28s 成功）；猜的原因会把排查带向错误方向。' +
+    '报错只应陈述等了多久、没等到什么');
+}
+
 // ── C10 段：控制台发出的浏览器动作名必须在驱动里真实存在（2026-09-26）─────────
 // 背景：控制台有两处按钮发送 action:'focus'（平台卡片「打开窗口」、批量结果里的
 // 「打开该平台调试窗口」），而 **CDP 驱动根本没有 focus 动作**（它叫 bringToFront）。

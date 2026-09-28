@@ -30,6 +30,7 @@ import { listSchedules, setSchedule, getSchedule, describeSchedule, evaluateSche
 import { getExchangeActions, setExchangeActions, runExchangeActions, summarizeExchange, EXCHANGE_LABELS } from "./services/apply/exchangeContact.js";
 import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMAGE_INPUTS } from "./services/apply/chatResumeImage.js";
 import { locateJobById } from "./services/apply/jobLocate.js";
+import { tryScreenshot } from "./services/apply/common.js";
 import { runApply, isSupported, SUPPORTED_PLATFORMS } from "./services/apply/index.js";
 import { computeAbReport, backfillLegacyStrategy } from "./services/apply/applyAbTest.js";
 import { checkResumeCompliance } from "./services/apply/resumeCompliance.js";
@@ -2211,8 +2212,9 @@ app.post("/api/apply", async (req, res) => {
         boss: 'BOSS直聘', zhilian: '智联招聘', job51: '前程无忧', liepin: '猎聘', nowcoder: '牛客网', offerbiu: '企业官网(Offerbiu)',
       };
       try {
+        const appId = uuidv4();
         db.createApplication({
-          id: uuidv4(),
+          id: appId,
           platform,
           company: result.company || job?.company || '',
           position: result.position || job?.position || '',
@@ -2223,6 +2225,19 @@ app.post("/api/apply", async (req, res) => {
           login_method: 'email',
           message: `由专用投递脚本完成（${PLATFORM_LABEL[platform] || platform}）；匹配分 ${job?.match_score ?? '—'}`,
         });
+        // 2026-09-29 补：单岗投递此前**不落证据截图**，而批量投递（batch.ts）会落
+        // ⇒ 控制台「录屏回溯」面板只能看到批量通道的记录。实测：全库 applications 里
+        //   带 evidence_path 的只有 5 条，且全部停在 2026-09-24（那天跑的是批量）。
+        //   这里与 batch.ts 对齐：投递后对平台页截图，归档到 data/evidence/<appId>.png。
+        //   截图是可选审计证据，失败只 warn，**绝不阻断「已投递」主流程**。
+        // 刻意**不写 strategy**：A/B 报告按 strategy 分组，而单岗通道没有
+        //   「是否带求职信 / 用了哪版简历」这层语义，硬编一个值会给报告制造假分组。
+        try {
+          const shot = await tryScreenshot(platform, appId);
+          if (shot) db.updateApplication(appId, { evidence_path: shot });
+        } catch (e: any) {
+          console.warn('[/api/apply] 投递后截图失败，不影响已投递：', e?.message || e);
+        }
         if (jobId) db.updateJob(jobId, { status: 'applied' });
       } catch { /* 记录失败不阻断主流程 */ }
     }

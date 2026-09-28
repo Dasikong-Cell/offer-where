@@ -450,7 +450,11 @@ function send(s: PageSession, method: string, params: any = {}, timeoutMs = 2500
       if (s.pending.has(id)) {
         s.pending.delete(id);
         s.dead = true; // 标记会话失效，下次调用重建
-        rej(new Error(`CDP 命令超时（${method}），疑似页面上下文被反爬销毁`));
+        // 🔴 报错只陈述「检查过什么」，不要猜原因。旧文案写「疑似页面上下文被反爬销毁」，
+        //    2026-09-29 实测把它证伪了：BOSS 聊天页（/web/geek/chat）上
+        //    Page.captureScreenshot 恒超时，但同一页面用 fromSurface:false 1.28s 就成功
+        //    —— 是窗口表面合成路径的问题，跟反爬无关。猜的原因会把排查带去错误方向。
+        rej(new Error(`CDP 命令超时（${method}）：等待 ${timeoutMs}ms 未收到响应（不推测原因）`));
       }
     }, timeoutMs);
     s.pending.set(id, {
@@ -975,7 +979,21 @@ export async function execCdpAction(
       }
       case 'screenshot': {
         if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
-        const r = await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        // 🔴 2026-09-29 修：默认（fromSurface 走窗口表面合成）在 BOSS 聊天页**永久挂住**。
+        //   实测同一次会话、同一页面三种参数对照：
+        //     默认(未指定)           -> 超时 >12s
+        //     fromSurface:true       -> 超时 >12s
+        //     fromSurface:false      -> 成功 1284ms
+        //   而 BOSS 投递完成后页面正好停在 /web/geek/chat ⇒ 投递后的证据截图
+        //   **系统性拿不到**（全库 applications 带 evidence_path 的只有 5 条、停在 2026-09-24）。
+        //   策略：先按原样试一次（保真度最好，短超时 8s），失败再用 fromSurface:false 兜底。
+        let r: any;
+        try {
+          r = await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 8000);
+        } catch (e: any) {
+          console.warn(`[CDP ${platform}] 常规截图失败（${e?.message || e}），用 fromSurface:false 兜底重试`);
+          r = await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, fromSurface: false });
+        }
         const fileName = `${platform}-${Date.now()}.png`;
         const filePath = path.join(SHOT_DIR, fileName);
         fs.writeFileSync(filePath, Buffer.from(r.data, 'base64'));
