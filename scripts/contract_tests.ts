@@ -1427,6 +1427,54 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('stub 支持 --extract-only 无人值守分支', sfxC.includes('--extract-only'),
     '没有它就只能靠人手点对话框来验收，等于没验收');
 
+  // ── ⑤b 安装位置必须由**用户**决定（2026-09-28） ──────────────────────
+  // 之前只有一句「安装位置：%LOCALAPPDATA%\OfferWhere」加 OK/Cancel —— 等于替用户
+  // 拍板装到哪，与其他软件的安装流程不一样。改成真对话框（路径输入框 + 浏览按钮）。
+  //
+  // ⚠️ 先剥 C 注释再匹配。这一段新代码的注释里**恰好**写着 IFileDialog /
+  // SHBrowseForFolderW / cmd_path 这些名字（说明它为什么这么做），
+  // 不剥注释的话断言会被自己的说明文字满足 —— 与 §⑥ 那条同一个坑。
+  const stripC = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const sfxCode = stripC(sfxC);
+  check('stub 用真对话框问安装位置（路径可改），不是只能点确定的 MessageBox',
+    sfxCode.includes('DialogBoxIndirectParamW') && sfxCode.includes('ask_install_dir'),
+    '只弹一句「将安装到 X」的 MessageBox，用户无从更改');
+  check('对话框里有「浏览」按钮', /#define\s+IDC_BROWSE\s+1002/.test(sfxCode),
+    '没有浏览按钮就只能手打路径');
+  check('「浏览」走系统标准文件夹选择器（IFileDialog）',
+    sfxCode.includes('CLSCTX_INPROC_SERVER') && sfxCode.includes('FOS_PICKFOLDERS'),
+    '自己糊一个目录列表既不标准也不可靠');
+  // ⚠️ 这条的**第一版没牙**：只断言源码里出现过 SHBrowseForFolderW。
+  // 阳性对照（删掉「IFileDialog 失败后改走老选择器」那一行）当场证明它照样全绿 ——
+  // 因为函数体里那个 SHBrowseForFolderW(&bi) 还在，符号在 ≠ 这条退路还通。
+  // ⇒ 必须断言**可达性**：IFileDialog 没给出路径时，确实还会去调老选择器。
+  check('标准选择器没给出路径时，确实回退到 SHBrowseForFolderW（浏览不是死按钮）',
+    sfxCode.includes('SHBrowseForFolderW(&bi)') &&
+      /if \(!ok\) ok = pick_folder_legacy\(owner, out, cap\);/.test(sfxCode),
+    'COM 初始化失败时按钮会毫无反应');
+  // cdit 必须等于实际 item 数：多一个少一个，Windows 要么丢控件要么越界读，
+  // 而且**两种都只在真弹窗时才暴露**，编译期完全看不出来。
+  // （这一条故意用**未剥注释**的源码：定位 cdit 就靠它行尾那行注释。）
+  const cditM = /tmpl_word\(p,\s*(\d+)\);\s*\/\* cdit/.exec(sfxC);
+  const itemCount = (sfxCode.match(/tmpl_item\(p,\s*base,/g) || []).length;
+  check('对话框模板的 cdit 等于实际 item 数',
+    !!cditM && Number(cditM[1]) === itemCount,
+    `cdit=${cditM ? cditM[1] : '未解析到'}，实际 item=${itemCount}`);
+  check('无人值守分支不弹对话框（否则自测会挂住）',
+    /if\s*\(SILENT\)\s*\{[\s\S]{0,900}?\}\s*else\s+if\s*\(!ask_install_dir\(/.test(sfxCode),
+    '自测靠 --extract-only 跑通；静默模式下弹窗会让它永远等下去');
+  // 这条防的是一次真实踩坑：用户把安装目录选成盘根（D:\）时，`-C "D:\"` 里的
+  // 尾反斜杠会**转义掉闭合引号**，tar 收到的是垃圾参数 ⇒ 解压失败且理由莫名其妙。
+  check('送进命令行的目标路径经过 cmd_path() 规范化（尾反斜杠会毁掉 -C "<dir>"）',
+    sfxCode.includes('static void cmd_path(') &&
+      /-C \\"%ls\\"", sysRoot, tmpZip, cmdRoot\)/.test(sfxCode),
+    'tail backslash escapes the closing quote of the CreateProcess argument');
+  check('release.yml 的 gcc 链接了 ole32（文件夹选择器要 COM）',
+    /gcc\.Source[^\n]*-lshell32 -lole32/.test(readText('.github/workflows/release.yml')),
+    '少了 -lole32 ⇒ undefined reference to CoInitializeEx，且只在发布时才炸');
+  check('DEVELOPMENT.md 的本地编译配方同样带 -lole32',
+    readText('DEVELOPMENT.md').includes('-lshell32 -lole32'));
+
   // ── ⑥ PII 护栏必须在「构建发布产物的那条流水线」上真的跑起来 ──────────
   // 事故形状（2026-09-27 读 runner 自己的日志才发现）：denylist 住在 data/ 下，
   // 而 data/ 被 gitignore ⇒ runner 上永远不存在 ⇒ pack.ps1 打印一行平静的

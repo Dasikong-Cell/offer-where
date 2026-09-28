@@ -144,7 +144,7 @@ jobs:
           if (-not $gcc) { throw "no MinGW gcc on this runner; cannot build tools/sfx/build/stub.exe" }
           Write-Host ("      gcc: " + $gcc.Source)
           New-Item -ItemType Directory -Force -Path tools/sfx/build | Out-Null
-          & $gcc.Source -O2 -mwindows -municode -Wall -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32
+          & $gcc.Source -O2 -mwindows -municode -Wall -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32 -lole32
           if ($LASTEXITCODE -ne 0) { throw "stub build failed with $LASTEXITCODE" }
           Write-Host ("      stub.exe " + (Get-Item tools/sfx/build/stub.exe).Length + " bytes")
 
@@ -172,10 +172,11 @@ jobs:
           # 说明就是使用者下载时看到的第一段字：主推**一个文件**的自解压安装包，zip 作为备用。
           $notes = "## 推荐：双击一个文件就能用`n`n"
           $notes += "下载 **OfferWhere-Setup.exe**（约 $setupMB MB），双击它：`n`n"
-          $notes += "1) 弹窗点「确定」，它会自动解压到自己选的位置（默认 %LOCALAPPDATA%\OfferWhere，不需要管理员权限）`n"
+          $notes += "1) 弹出安装程序窗口，里面已经填好默认安装位置（%LOCALAPPDATA%\OfferWhere，按用户安装、不需要管理员权限）`n"
+          $notes += "   直接点「安装」即可；想装到别处就点「浏览…」选目录，或直接改那个路径`n"
           $notes += "2) 解压完成后自动启动 OfferWhere，第一次启动会弹出「安装」对话框 —— 点「安装」`n"
           $notes += "3) 桌面上出现 OfferWhere 图标，以后双击该图标即可使用`n`n"
-          $notes += "解压约需 1.2GB 可用空间（约 12.5 万个文件）。若已装过一次，再双击这个 exe 会直接启动，不会重复解压。`n"
+          $notes += "解压约需 1.2GB 可用空间（约 12.5 万个文件，需要一到三分钟）。若已装过一次，再双击这个 exe 会直接启动，不会重复解压。`n"
           $notes += "免打扰安装（不弹任何对话框、不启动程序，只解压）：`n"
           $notes += "    OfferWhere-Setup.exe --extract-only`n`n"
           $notes += "## 备用：便携 zip（约 $zipMB MB）`n`n"

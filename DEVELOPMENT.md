@@ -117,17 +117,22 @@ footer = "OFWSFX01"(8) + uint64 payload 偏移 + uint64 payload 长度   ← 就
 ```
 
 stub 用 `seek(EOF-24)` 找到 payload；zip 前面挂了 stub 后 `tar` 读不了，所以它先把 payload 复制到 `%TEMP%` 再解压。
-安装目标是 `%LOCALAPPDATA%\OfferWhere`（**每用户、不需要管理员权限、不写注册表**）；装过再运行则直接启动，不重复解压。
+安装位置：**弹一个真正的安装对话框让用户选**（输入框 + 「浏览…」走系统标准文件夹选择器），
+默认填 `%LOCALAPPDATA%\OfferWhere`（**每用户、不需要管理员权限、不写注册表**）；装过再运行则直接启动，不重复解压。
 
 - **外壳源码** `tools/sfx/offerwhere_sfx.c`：**纯 ASCII**，中文 UI 全部写成 `\uXXXX` 转义 —— 免得编译结果依赖编译机的输入字符集。
   它是**生成物**：改文案要改 `_tools/gen_sfx.mjs`（不随包分发），再 `node _tools/gen_sfx.mjs tools/sfx/offerwhere_sfx.c`。
 - **编译**（本机 MinGW 配方，与 `build_app.ps1` 共用 `D:\_mingw`）：
   ```bash
   TMP=D:\_tmp TEMP=D:\_tmp /d/_mingw/mingw64/bin/gcc.exe -O2 -mwindows -municode -Wall \
-      -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32
+      -o tools/sfx/build/stub.exe tools/sfx/offerwhere_sfx.c -lshell32 -lole32
   ```
-  两个实测坑：`TMP`/`TEMP` 指向含中文的路径时 gcc 报 `can't create ...ccXXXX.o: No such file or directory`；
-  少了 `-municode` 会报 `undefined reference to 'WinMain'`（`UNICODE` + `-mwindows` 的组合要求它）。
+  三个实测坑：`TMP`/`TEMP` 指向含中文的路径时 gcc 报 `can't create ...ccXXXX.o: No such file or directory`；
+  少了 `-municode` 会报 `undefined reference to 'WinMain'`（`UNICODE` + `-mwindows` 的组合要求它）；
+  `-lole32` 是文件夹选择器（COM）需要的，少了会报 `undefined reference to 'CoInitializeEx'`。
+- **对话框为什么不用 `.rc`**：构建是**单次 gcc**，没有 `windres` 步骤 ⇒ 对话框用内存里的
+  `DLGTEMPLATE` + `DialogBoxIndirectParamW` 描述（每条 item 必须 DWORD 对齐、字符串是 NUL 结尾的 UTF-16）。
+  `IFileDialog` / `IShellItem` 的 GUID 也**在源码里写死**，省掉 `-luuid`：它们是固定的 ABI，不会变。
 - **拼接 + 验收**：`./make_sfx.ps1 -Zip <便携包.zip> -SelfTest`
   - 结构校验（秒级）：尺寸 = stub + zip + footer、footer 各字段、偏移处是 zip 签名 `PK\x03\x04`、
     内嵌 payload 的 sha256 **与原 zip 逐字节一致**、payload 内含安装链路文件。
