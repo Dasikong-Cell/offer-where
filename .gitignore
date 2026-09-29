@@ -75,6 +75,13 @@ version.json
 # ⇒ project.config.json 入库，但**由工具改写产生的漂浮 diff 不要一起提交**，
 #    只保留人手写的意图（pages/appid/miniprogramRoot/setting.urlCheck）。
 miniprogram/project.private.config.json
+# 开发者工具还会顺手生成多平台/i18n 脚手架（点开「多端」面板或版本较新时）：
+#   这些是**工具行为**而非项目需要 —— 本项目只做微信小程序单端。
+#   2026-09-30 实测：仅「打开项目窗口」就会产出 app.miniapp.json / project.miniapp.json /
+#   i18n/base.json，且会把 project.config.json 改写（多出 condition/projectArchitecture）。
+miniprogram/app.miniapp.json
+miniprogram/project.miniapp.json
+miniprogram/i18n/
 
 # ── 临时调试脚本（未被任何源码引用）─────────────────────
 # _tools/ 是本机排查/一次性工具目录（如离线用 Git Data API 推送的 gh_api_push.mjs、
