@@ -14,6 +14,8 @@
     "console:check": "tsx scripts/check_console_syntax.ts",
     "mp:check": "tsx scripts/mp_check.ts",
     "mp:icons": "python scripts/make_tabbar_icons.py",
+    "mp:probe": "tsx scripts/_mp_api_probe.mts",
+    "auth:verify": "tsx scripts/_auth_leak_verify.mts",
     "bat:check": "tsx scripts/bat_encoding.ts check",
     "bat:fix": "tsx scripts/bat_encoding.ts fix",
     "pii:check": "git -c core.quotePath=false ls-files | tsx scripts/pii_guard.ts --stdin",

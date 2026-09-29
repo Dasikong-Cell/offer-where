@@ -67,6 +67,15 @@ version.json
 # ── 本机会话记忆 / 本地技能（工作区状态的副本，因人而异，不该入库）──
 .workbuddy/
 
+# ── 小程序项目配置 ────────────────────────────────────
+# 微信开发者工具会自动改写 project.config.json（写回 appid、补 simulatorPluginLibVersion /
+# editorSetting / 补全 setting 默认键、甚至重排 packOptions.ignore 里的键序），
+# 并顺手新建 project.private.config.json 存**每台机器不同**的东西（libVersion、编译设置）。
+# ⇒ 私有配置不入库（换台电脑就该重新生成）；
+# ⇒ project.config.json 入库，但**由工具改写产生的漂浮 diff 不要一起提交**，
+#    只保留人手写的意图（pages/appid/miniprogramRoot/setting.urlCheck）。
+miniprogram/project.private.config.json
+
 # ── 临时调试脚本（未被任何源码引用）─────────────────────
 # _tools/ 是本机排查/一次性工具目录（如离线用 Git Data API 推送的 gh_api_push.mjs、
 # 复现 CI 哈希差异的诊断脚本）。它只服务本机调试，不属于产品源码，也不该进包。
@@ -79,6 +88,10 @@ _update_profile.cjs
 _update_profile2.cjs
 _probe_*.cjs
 _gaga_*.cjs
+# 驱动微信开发者工具做模拟器验收时落在仓库根的临时参数/解析文件
+_nav_args.json
+_jd_len.cjs
+_jd_before.txt
 # .ts 版临时探针：命名以 `_` 开头即视为一次性，不入库
 # （历史上 scripts/_probe_pos.ts 被误提交并留存很久，内含硬编码人名过滤，属噪音）
 scripts/_probe_*.ts
@@ -95,6 +108,12 @@ scripts/*_tmp*.ts
 # 写错时 wxml 静默渲染空白、静态检查全绿 —— 它第一次跑就抓出了 title vs position。
 # 注意用 ! 放行，否则会被上面的 scripts/*probe*.ts 规则吃掉。
 !scripts/_mp_api_probe.mts
+
+# 鉴权白名单的真实验证（**有意入库**）。理由同上，但更硬：
+# 缺口形状是「静态检查全绿，而局域网里裸 curl 能读走简历 PDF」——
+# 静态断言只能证明代码里有白名单，证不了服务真按它执行（中间件顺序 / req.path 语义都能让它落空）。
+# 唯一可信判据是起个 HOST=0.0.0.0 的真服务、用不带令牌的请求去读。
+!scripts/_auth_leak_verify.mts
 
 # ── 编辑器 / 系统文件 ─────────────────────────────────
 .vscode/

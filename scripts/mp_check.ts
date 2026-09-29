@@ -326,6 +326,22 @@ check('request.js 与后端 SIDE_EFFECT_GET_PATHS 对齐（含 auto-reply/run）
 check('request.js 识别 401 并引导到连接页', reqSrc.includes('401') && reqSrc.includes(CONNECT_REL()));
 check('config.js 提供 normalizeBaseUrl', readText('utils/config.js').includes('function normalizeBaseUrl'));
 
+// 🔴 GET 的 query 必须拼进 URL，不能交给 wx.request 的 data（2026-09-30 实测修正）。
+// 实测（基础库 3.17.3）：`data` 传**字符串**时 wx.request 既不拼 URL 也不报错，
+// 后端收到的就是无参请求 —— 于是日志页的级别/日期/关键词筛选、看板的 days 全部静默失效。
+// 页面照常渲染，只是筛了个寂寞；静态检查与肉眼都看不出，只有真跑才发现。
+// 这里钉住「拼进 URL」这个写法，防止有人图省事再改回 data。
+check('GET 的 query 拼进 URL（不是交给 wx.request 的 data）',
+  /const query = method === 'GET' \? serializeQuery\(opts\.data\)/.test(reqSrc) &&
+    /url \+ \(url\.indexOf\('\?'\) >= 0 \? '&' : '\?'\) \+ query/.test(reqSrc),
+  'data 传字符串给 GET ⇒ wx.request 静默丢参（实测），所有筛选条件失效');
+check('GET 不再往 data 里塞序列化后的字符串',
+  !/data:\s*isBodyless && method === 'GET'/.test(reqSrc),
+  '残留旧写法 = 上面那条修复没真正生效');
+check('GET 请求不设 body（避免 data 又覆盖掉 URL 上的 query）',
+  /data: isBodyless \? undefined : opts\.data/.test(reqSrc),
+  'GET 同时带 URL query 与 data ⇒ 行为依赖实现细节，容易再次丢参');
+
 function CONNECT_REL() {
   return '/pages/connect/connect';
 }

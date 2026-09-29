@@ -8,7 +8,7 @@
   <!-- 后端地址 -->
   <view class="section-title">后端地址</view>
   <view class="card">
-    <input class="input" type="text" placeholder="http://192.168.1.5:4400"
+    <input class="input js-url-input" type="text" placeholder="http://192.168.1.5:4400"
            value="{{baseUrl}}" bindinput="onUrlInput" confirm-type="done" />
     <view class="field-hint">
       在电脑上运行 <text class="mono">start_lan.bat</text>，窗口里会打印手机/小程序要用的地址。
@@ -26,10 +26,10 @@
   <view class="section-title">访问令牌（选填）</view>
   <view class="card">
     <view class="token-line">
-      <input class="input flex1" type="text" password="{{!tokenVisible}}"
+      <input class="input flex1 js-token-input" type="text" password="{{!tokenVisible}}"
              placeholder="粘贴 data/.auth_token 里的 48 位字符"
              value="{{token}}" bindinput="onTokenInput" confirm-type="done" />
-      <view class="eye" bindtap="toggleTokenVisible">{{tokenVisible ? '隐藏' : '显示'}}</view>
+      <view class="eye js-token-toggle" bindtap="toggleTokenVisible">{{tokenVisible ? '隐藏' : '显示'}}</view>
     </view>
     <view class="field-hint">
       后端以局域网方式启动时会自动开启令牌鉴权。令牌在**运行后端那台电脑**的文件
@@ -40,7 +40,7 @@
 
   <!-- 测试 -->
   <view class="actions">
-    <button class="btn btn-primary" bindtap="test" loading="{{testing}}" disabled="{{testing}}">
+    <button class="btn btn-primary js-test-btn" bindtap="test" loading="{{testing}}" disabled="{{testing}}">
       {{testing ? '测试中…' : '测试连接'}}
     </button>
     <button class="btn" bindtap="onReset">清除配置</button>

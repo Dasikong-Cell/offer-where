@@ -25,7 +25,7 @@ import {
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins, lanOriginsFromIps } from '../server/services/requestGuard.js';
-import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS } from '../server/services/authToken.js';
+import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet } from '../server/services/authToken.js';
 import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
 import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
 import { computeAbReport } from '../server/services/apply/applyAbTest.js';
@@ -288,12 +288,51 @@ check('常量时间比较：不等为假', !safeEqual('tok123', 'tok124') && !sa
 const idxSrc = readText('server/index.ts');
 check('带副作用的 GET 也要令牌（不是只拦写方法）',
   SIDE_EFFECT_GET_PATHS.length > 0 && SIDE_EFFECT_GET_PATHS.includes('/api/auto-reply/run') &&
-    /SIDE_EFFECT_GET_PATHS\.includes\(/.test(idxSrc) && /const readOnly = \(m === 'GET' \|\| m === 'HEAD'\)/.test(idxSrc),
+    /isPublicReadGet\(/.test(idxSrc),
   '只拦写方法 ⇒ ?realSend=1 这类 GET 无需令牌即可替用户发消息');
 check('该清单来自单一真相源（服务端 import，不在 index.ts 里另抄一份）',
   /import \{[^}]*SIDE_EFFECT_GET_PATHS[^}]*\} from "\.\/services\/authToken\.js"/.test(idxSrc) &&
     !/const SIDE_EFFECT_GET_PATHS\s*=/.test(idxSrc),
   '两处各写一份 ⇒ 以后加新路由只改一处，另一处静默漏掉');
+
+// ── 只读 ≠ 无隐私：GET 默认要令牌，只有白名单放行（2026-09-30 修正）──────────
+// 缺口形状（实测）：HOST=0.0.0.0 时鉴权虽开，但原策略是「GET 全放行 + 副作用 GET 黑名单」，
+// 于是裸 curl 不带任何令牌就能拿到：
+//   /api/resume/file?version=original → 200，整份简历 PDF
+//   /api/profile                      → 200，name / phone / email
+//   /api/jobs                         → 200，1000 条职位
+//   /api/applications                 → 200，500 条投递
+// 「GET 无副作用」被错当成「GET 可公开」，而真正该问的是「泄露出去伤不伤用户」。
+// 另外黑名单会随新增路由静默失效；白名单的失败方向才安全（新接口默认受保护）。
+check('匿名放行的 GET 是白名单且极简（只探活/元信息）',
+  PUBLIC_READ_GET_PATHS.length > 0 && PUBLIC_READ_GET_PATHS.length <= 5 &&
+    PUBLIC_READ_GET_PATHS.includes('/api/ping') &&
+    PUBLIC_READ_GET_PATHS.includes('/api/lan'),
+  '白名单被放大 = 又回到「凭 GET 就能读」的老路');
+check('含个人信息的 GET 一律不在匿名白名单里',
+  ['/api/profile', '/api/resume/file', '/api/resume/current', '/api/jobs',
+   '/api/applications', '/api/sessions', '/api/mail/config', '/api/mail/recent']
+    .every((p) => !PUBLIC_READ_GET_PATHS.includes(p)),
+  '这些接口读的是姓名/手机/邮箱/简历/求职记录 —— 匿名可读即等同把 PII 贴在局域网上');
+check('副作用 GET 优先于白名单（误加进白名单也仍要令牌）',
+  SIDE_EFFECT_GET_PATHS.every((p) => !isPublicReadGet('GET', p)),
+  '两道清单打架时必须 fail-closed');
+check('只读 GET 默认不放行（反面：任意路径不该被当成公开）',
+  !isPublicReadGet('GET', '/api/whatever-new-endpoint') &&
+    !isPublicReadGet('POST', '/api/ping') &&
+    !isPublicReadGet('DELETE', '/api/ping'),
+  '新路由必须默认受保护；POST 打 /api/ping 也不该走白名单');
+check('放行判定只认路径的 path 部分（不含 query，防绕过）',
+  isPublicReadGet('GET', '/api/ping') && !isPublicReadGet('GET', '/api/ping/../profile'),
+  '带 query 或路径穿越都不能被当白名单命中');
+check('服务端中间件调用白名单判定（不是又抄一份 if 链）',
+  /isPublicReadGet\(m,\s*String\(req\.path \|\| ''\)\)/.test(idxSrc) &&
+    !/const readOnly = \(m === 'GET'/.test(idxSrc),
+  '残留旧的 readOnly 判断 ⇒ 新策略没真正生效');
+check('CORS Allow-Headers 含 X-Auth-Token 与 Authorization',
+  /Access-Control-Allow-Headers',\s*'[^']*X-Auth-Token/.test(idxSrc) &&
+    /Access-Control-Allow-Headers',\s*'[^']*Authorization/.test(idxSrc),
+  '预检不放行这两个头 ⇒ 跨源带令牌的请求被浏览器拒发（只列 Content-Type 就会这样）');
 // 控制台那条裸 fetch 必须带上令牌，否则「鉴权一开，自动回复就用不了」
 // （而它走的是 GET，正是这次要收紧的对象）。
 check('控制台调 /api/auto-reply/run 时带上令牌头',

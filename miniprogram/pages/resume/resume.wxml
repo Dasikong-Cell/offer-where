@@ -22,10 +22,9 @@
       <view class="card hero">
         <view class="row-between">
           <view class="card-title">简历状态</view>
-          <view class="badge {{status === 'ready' ? 'badge-ok' : 'badge-warn'}}">
-            {{status === 'ready' ? '已就绪' : (status || '未知')}}
-          </view>
+          <view class="badge {{statusTone === 'ok' ? 'badge-ok' : 'badge-warn'}}">{{statusText}}</view>
         </view>
+        <view class="card-sub" wx:if="{{statusDesc}}">当前底稿：{{statusLabel}} —— {{statusDesc}}</view>
         <view class="card-sub">小程序端只读。上传、解析、合规检查请在电脑控制台操作。</view>
       </view>
 

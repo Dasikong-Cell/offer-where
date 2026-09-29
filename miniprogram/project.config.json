@@ -1,6 +1,6 @@
 {
-  "description": "OfferWhere 小程序项目配置。appid 使用测试号占位，接入正式 AppID 后替换即可。",
-  "appid": "touristappid",
+  "description": "OfferWhere 小程序项目配置。appid 填的是本机可用的测试号；换成正式 AppID 时只改这一行即可。",
+  "appid": "wxabfc171e9ce5feee",
   "projectname": "offer-where-miniprogram",
   "compileType": "miniprogram",
   "miniprogramRoot": "./",

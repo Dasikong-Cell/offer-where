@@ -22,7 +22,12 @@ Page({
     loading: true,
     configured: true,
     error: '',
-    status: null,
+    // statusTone/statusText 是**字符串**，专供 wxml 比较与显示。
+    // 不要往 data 里塞后端返回的 status 对象再在模板里比较：实测会渲染成 `[object Object]`。
+    statusTone: '',
+    statusText: '',
+    statusLabel: '',
+    statusDesc: '',
     original: null,
     optimized: null,
     copying: false,
@@ -49,10 +54,17 @@ Page({
 
     try {
       const r = await req.get('/api/resume/current');
+      const original = decorate(r.original, '原始简历');
       this.setData({
         loading: false,
-        status: r.status || null,
-        original: decorate(r.original, '原始简历'),
+        // ⚠️ 后端的 status 是**对象**（{version,label,description,hasOriginal,hasOptimized,options}），
+        // 不是字符串。模板里绝不能用 `{{status === 'ready'}}` 去比 —— 那会渲染成 `[object Object]`
+        // （实测如此）。这里把它拆成两个**字符串**字段给 wxml 用，模板里就只剩字符串比较。
+        statusTone: original.exists ? 'ok' : 'warn',
+        statusText: original.exists ? '已就绪' : '缺原始简历',
+        statusLabel: (r.status && r.status.label) || '',
+        statusDesc: (r.status && r.status.description) || '',
+        original,
         optimized: decorate(r.optimized, '优化简历'),
       });
     } catch (err) {

@@ -67,10 +67,21 @@ function request(opts) {
     const url = base + path;
     const isBodyless = method === 'GET' || method === 'HEAD';
 
+    // 🔴 GET 的 query 必须**拼进 URL**，不能交给 `data` —— 实测（开发者工具 3.17.3）：
+    //   data: 'limit=200&level=ERROR'  → 后端收到 total=32（参数被整个丢掉，筛选失效）
+    //   data: { limit: 200, level: 'ERROR' } → 后端收到 total=1（正确）
+    //   即：`wx.request` 对 GET 只认**对象**形式的 data；给**字符串**时它不拼 URL 也不报错。
+    //   原先这里把 data 序列化成字符串再传，导致日志页的级别/日期/关键词筛选、看板的 days
+    //   全部静默失效 —— 页面照常渲染，只是筛了个寂寞（最危险的一类 bug）。
+    //   所以统一自己拼，两条路径（对象/字符串）都归一到 URL 上。
+    const query = method === 'GET' ? serializeQuery(opts.data) : '';
+    const fullUrl = query ? (url + (url.indexOf('?') >= 0 ? '&' : '?') + query) : url;
+
     wx.request({
-      url,
+      url: fullUrl,
       method,
-      data: isBodyless && method === 'GET' ? serializeQuery(opts.data) : opts.data,
+      // 非 GET 才用 body；GET 的 query 已经拼进 URL，这里必须留空否则又会覆盖
+      data: isBodyless ? undefined : opts.data,
       header: buildHeaders(opts.header),
       timeout: opts.timeout || DEFAULT_TIMEOUT,
       dataType: 'json',
@@ -108,7 +119,10 @@ function request(opts) {
   });
 }
 
-/** GET 的 data 不能直接扔给 wx.request 的对象形式，需要拼成 query 串（含数组展开）。 */
+/**
+ * 把对象序列化成 query 串（支持数组展开、跳过空值）。
+ * 结果由调用方拼进 URL —— **不要**交给 `wx.request` 的 `data`（见上面的实测说明）。
+ */
 function serializeQuery(data) {
   if (!data || typeof data !== 'object') return data || '';
   const parts = [];

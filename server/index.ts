@@ -52,7 +52,7 @@ import { probePlatformHealthCached, summarizeHealth } from "./services/platformH
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
-import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS } from "./services/authToken.js";
+import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
 import { locateByIp } from "./services/geo.js";
@@ -182,7 +182,11 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // 必须同时列出 X-Auth-Token / Authorization：否则浏览器预检会因
+    // 「请求头不在 Allow-Headers 里」而拒发实际请求 —— 症状是
+    // 「同源页面能开、控制台一调带令牌的接口就失败」，且只在跨源（如局域网另一端口）时暴露。
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Auth-Token,Authorization');
+    res.setHeader('Access-Control-Max-Age', '600');
   }
   if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
   const verdict = checkRequestOrigin({
@@ -199,26 +203,24 @@ app.use((req, res, next) => {
 // 默认 HOST=127.0.0.1（回环）时关闭 → 本机自用零影响；
 // 一旦暴露到局域网（HOST=0.0.0.0）自动开启，或显式 REQUIRE_AUTH=1 强制开启。
 //
-// 带真实副作用的 GET：鉴权开启时**同样要令牌**（2026-09-29 补）。
-// 原本只拦写方法，理由是 GET 一般是只读的 —— 但下面这几个不是：
-// `GET /api/auto-reply/run?realSend=1` 会真的替你给 HR 发消息。
-// 而 GET 是「简单请求」：不触发 CORS 预检、curl 直连也不带 Origin，
-// requestGuard（那个是挡跨站浏览器页面的）拦不到它。
-// 于是非回环暴露时，任何能连到端口的人都能无令牌触发真实副作用。
-// 只读的 SSE（`/api/auto-apply/watch`）**不在**此列：它只订阅事件，不启动任何东西
-// （顺带避开 EventSource 无法自定义请求头的问题）。
-// 清单本身在 `services/authToken.ts`（单一真相源，合约测试直接 import 它）。
+// 🔴 策略：**默认全部要令牌**，只有 `PUBLIC_READ_GET_PATHS` 里那几个探活/元信息 GET 放行。
+// 原来是反过来的（GET 全放行 + 副作用 GET 黑名单），2026-09-30 改掉，因为实测漏了隐私：
+// HOST=0.0.0.0 下裸 curl 无令牌 → `/api/resume/file` 返回整份简历 PDF、
+// `/api/profile` 返回姓名手机邮箱、`/api/jobs` 返回 1000 条职位、`/api/applications` 返回 500 条投递。
+// 「GET 无副作用」被错当成了「GET 可公开」，但**只读 ≠ 无隐私**；
+// 而且黑名单会随新增路由静默失效，白名单的失败方向才是安全的（新接口默认受保护）。
+// 同时白名单仍挡不住的那类 GET（`/api/auto-reply/run` 等）继续由 `SIDE_EFFECT_GET_PATHS` 兜底。
+// 两份清单都在 `services/authToken.ts`（单一真相源，合约测试直接 import 它）。
 const AUTH_ENABLED = isAuthEnabled(HOST);
 if (AUTH_ENABLED) {
   app.use((req, res, next) => {
     const m = String(req.method || '').toUpperCase();
     if (m === 'OPTIONS') return next();
-    const readOnly = (m === 'GET' || m === 'HEAD') && !SIDE_EFFECT_GET_PATHS.includes(String(req.path || ''));
-    if (readOnly) return next();
+    if (isPublicReadGet(m, String(req.path || ''))) return next();
     if (isAuthorizedStrict(req)) return next();
     res.status(401).json({ error: '缺少或无效的访问令牌（请在请求头带 X-Auth-Token，令牌见 data/.auth_token）' });
   });
-  logRun('INFO', `访问令牌鉴权已开启（令牌文件 data/.auth_token）`);
+  logRun('INFO', `访问令牌鉴权已开启（令牌文件 data/.auth_token；匿名放行的 GET：${PUBLIC_READ_GET_PATHS.join(', ')}）`);
 }
 
 // ── 5xx 统一落日志 + 告警 ──

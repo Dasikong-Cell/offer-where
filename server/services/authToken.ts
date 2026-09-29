@@ -9,11 +9,24 @@
  *  - 开关：`REQUIRE_AUTH=1` 强制开、`=0` 强制关；未设时**仅当监听地址非回环**才自动开。
  *    → 默认 HOST=127.0.0.1 时鉴权关闭，控制台/脚本行为完全不变。
  *  - 令牌：`data/.auth_token`（首次启动自动生成 48 位 hex；data/ 已 gitignore）。
- *  - 校验：写方法（POST/PUT/PATCH/DELETE）要求 `X-Auth-Token`（或 `Authorization: Bearer`）；
- *    **外加 `SIDE_EFFECT_GET_PATHS` 里那些"带真实副作用的 GET"**（2026-09-29 补）。
- *    其余只读 GET/HEAD/OPTIONS 不校验（无副作用，保留探活便利）。
+ *  - 校验：**默认全部要求令牌**（含 GET），只有 `PUBLIC_READ_GET_PATHS` 里
+ *    那些"确无隐私、无副作用"的探活/元信息 GET 放行；
+ *    `SIDE_EFFECT_GET_PATHS`（带真实副作用的 GET）永远不会被放行（防御性保留）。
  *  - 分发：控制台由服务端把令牌注入页面（同源，外部站点读不到）；
  *    同机脚本用 `scripts/lib/apiAuth.ts` 从同一文件读取。
+ *
+ * 🔴 为什么从「黑名单副作用 GET」改成「白名单公开 GET」（2026-09-30 修正）：
+ *    原策略是「GET 全部放行，只把 2 个带副作用的 GET 记进黑名单」。这个方向选错了 ——
+ *    它默认了"GET 没有副作用 = GET 可以公开"，但**只读 ≠ 无隐私**。
+ *    实测（HOST=0.0.0.0 + REQUIRE_AUTH 自动开的情况下，裸 curl 不带任何令牌）：
+ *      GET /api/resume/file?version=original → 200，348354 字节，就是本人的简历 PDF
+ *      GET /api/profile                      → 200，含 name / phone / email
+ *      GET /api/jobs                         → 200，1000 条职位
+ *      GET /api/applications                 → 200，500 条投递记录
+ *    ⇒ 同一 Wi-Fi 下任何人都能拿走全部个人信息，令牌形同虚设。
+ *    黑名单的另一个问题是**它随新增路由而失效**：每加一个 GET 接口都要记得补，
+ *    忘了就静默漏一个。白名单则相反 —— 新接口默认受保护，忘了补只是"多要一次令牌"，
+ *    失败方向是安全的。
  */
 import fs from 'fs';
 import path from 'path';
@@ -61,6 +74,35 @@ export function getAuthToken(): string {
  * 新增带副作用的 GET 时必须同步这里；合约测试会钉住这份清单非空且被服务端引用。
  */
 export const SIDE_EFFECT_GET_PATHS = ['/api/auto-reply/run', '/api/apply/record'];
+
+/**
+ * 无需令牌即可访问的 GET —— **白名单，保持极简**。
+ *
+ * 判据是「这个响应泄露出去会不会伤到用户」，而不是「它是不是 GET」：
+ *  - 探活/版本/能力声明类：不含任何个人信息，且手机端在**填令牌之前**要靠它判断连通性
+ *    （`pages/connect/connect.js` 先打 `/api/ping`，再补 `/api/version`、`/api/lan`）。
+ *  - `/api/lan` 会回内网 IP 列表。这是有意的：小程序就是靠它拿到「点一下填入」的候选地址；
+ *    同网段的人本来也能自己 `ipconfig` / 扫到这台机器，算不上新增暴露面。
+ *
+ * 🔴 明确**不放行**（它们看着"只读"，实则含个人信息）：
+ *  - `/api/profile`     姓名/手机/邮箱/简历路径
+ *  - `/api/resume/*`    简历本体与元数据
+ *  - `/api/jobs`、`/api/applications`、`/api/sessions`、`/api/logs/*`  求职全量记录
+ *  - `/api/mail/config`、`/api/mail/recent`                           邮箱配置与邮件
+ *
+ * 新增路由时**不要往这里加**，除非它能通过上面那条判据；合约测试会钉住这份清单。
+ */
+export const PUBLIC_READ_GET_PATHS = ['/api/ping', '/api/version', '/api/lan'];
+
+/** 该 GET 是否允许匿名访问（白名单命中且不在副作用清单里） */
+export function isPublicReadGet(method: string, pathname: string): boolean {
+  const m = String(method || '').toUpperCase();
+  if (m !== 'GET' && m !== 'HEAD') return false;
+  const p = String(pathname || '');
+  // 副作用清单优先：即使将来有人误把它加进白名单，这里也挡住
+  if (SIDE_EFFECT_GET_PATHS.includes(p)) return false;
+  return PUBLIC_READ_GET_PATHS.includes(p);
+}
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 

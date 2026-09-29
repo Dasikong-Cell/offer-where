@@ -59,10 +59,10 @@
       <view class="card">
         <view class="jd {{jdExpanded ? '' : 'jd-collapsed'}}">{{jdText}}</view>
         <view class="jd-actions">
-          <view class="jd-toggle" wx:if="{{jdLong}}" bindtap="toggleJd">
+          <view class="jd-toggle js-jd-expand" wx:if="{{jdLong}}" bindtap="toggleJd">
             {{jdExpanded ? '收起' : '展开全文'}}
           </view>
-          <view class="jd-toggle" bindtap="toggleCleanJd">
+          <view class="jd-toggle js-jd-clean" bindtap="toggleCleanJd">
             {{jdCleaned ? '恢复原文' : '清理噪音'}}
           </view>
         </view>

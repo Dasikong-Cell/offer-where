@@ -56,6 +56,11 @@ job-apply-agent/data/.auth_token
 
 > 连接页如果检测到「后端已开启鉴权但你没填令牌」，会显示橙色警告 —— 看到它就去填。
 
+只有两个接口不需要令牌：`/api/ping`、`/api/version`、`/api/lan`。
+它们不含任何个人信息，且连接页要靠它们在**填令牌之前**判断后端是否可达。
+**其余接口（含看起来「只是读一下」的 `/api/profile`、`/api/jobs`、`/api/resume/file`）
+一律要令牌** —— 原因见下面第 5 条。
+
 ---
 
 ## 二、页面清单
@@ -101,8 +106,13 @@ job-apply-agent/data/.auth_token
 
 ### 3. 职位记录最多显示 1000 条
 
-后端 `/api/jobs` 内部有行数上限（实测 1000），**不是**全库扫描。
-页面上「共 N 条」显示的就是后端返回的条数；如果你知道库里更多，那就是被截断了。
+`db.listJobs()` 的 SQL 里 `LIMIT` 的默认值写死为 **1000**（`params.push(opts.limit || 1000)`），
+与库大小无关 —— 不是「刚好这么多」，而是**到 1000 就停**。前端分页是在这 1000 条之内翻。
+
+还有个容易误判的点：记录列表的排序是
+`ORDER BY (match_score IS NULL), match_score DESC, created_at DESC`
+—— 即**先按有无匹配分分组、再按匹配分降序**，**不是时间序**。
+想按时间找某个岗位请用搜索框，别指望往下滚。
 
 ### 4. 字段名是 snake_case
 
@@ -185,14 +195,48 @@ miniprogram/
 
 `utils/request.js` 的两条规则：
 
-1. **所有请求都带 `X-Auth-Token`。** 因为后端把两个 **GET** 也列进了副作用清单
-   （`SIDE_EFFECT_GET_PATHS = ['/api/auto-reply/run', '/api/apply/record']`，它们会真发消息），
-   所以「GET 不带令牌」这种省事写法会 401。统一带，规则只有一条。
+1. **所有请求都带 `X-Auth-Token`。** 后端现在**默认所有接口都要令牌**，
+   只放行 `/api/ping`、`/api/version`、`/api/lan` 这三个探活/元信息 GET
+   （白名单在 `server/services/authToken.ts` 的 `PUBLIC_READ_GET_PATHS`）。
+   统一带上，规则只有一条。
 2. **401 单独识别**并引导到连接页 —— 它的解法是「去填令牌」而不是「重试」。
 
 后端侧无需任何改动即可接受小程序请求：`wx.request` 不带 `Origin`、
 不带 `Sec-Fetch-Site`，会通过 `checkRequestOrigin` 的来源守卫。
 
-> 待验证：CORS 的 `Access-Control-Allow-Headers` 目前只列了 `Content-Type`。
-> 开发者工具内实测不受影响（不走浏览器 CORS 预检），但若将来引入代理/中间层，
-> 可能需要把 `X-Auth-Token` 补进该头。真机遇到预检失败时先查这里。
+CORS 的 `Access-Control-Allow-Headers` 已补上 `X-Auth-Token` 与 `Authorization`
+（原先只列 `Content-Type`；开发者工具内不走浏览器预检所以看不出来，
+但一旦引入代理或跨源中间层，预检会因「请求头未获准」直接拒发实际请求）。
+
+---
+
+## 七、两个「页面看着对、其实是坏的」的坑（改代码前必读）
+
+这两条都是**在真机模拟器里跑出来**的，静态检查全绿、肉眼也看不出，
+属于「不报错但功能没生效」的最危险一类。写在这里是因为它们会重复发生。
+
+### 1. GET 的参数必须拼进 URL，不能交给 `wx.request` 的 `data`
+
+实测（基础库 3.17.3）：
+
+| 写法 | 后端实际收到 |
+|------|--------------|
+| `data: 'limit=200&level=ERROR'`（字符串） | `total=32` —— **参数被整个丢掉** |
+| `data: {limit:200, level:'ERROR'}`（对象） | `total=1, level=ERROR` ✅ |
+
+`wx.request` 对 GET **只认对象形式的 `data`**；收到字符串时它既不拼进 URL、
+也不报错。原先 `request.js` 正是「先序列化成字符串再交给 data」，
+于是日志页的级别/日期/关键词筛选、看板的 `days` 全部静默失效 ——
+点「错误」还是 32 行，页面照常渲染。
+现在统一自己拼查询串并直接拼到 URL 上，GET 一律不设 body。
+`scripts/mp_check.ts` 已加断言钉住这个写法。
+
+### 2. wxml 里比较 `{{}}` 时，先确认那个值是字符串还是对象
+
+`/api/resume/current` 的 `status` 是**对象**
+（`{version,label,description,hasOriginal,hasOptimized,options}`），
+不是字符串。模板里写 `{{status === 'ready' ? ... : (status || '未知')}}`
+两个分支都不成立，直接把对象 `toString()` 出来 ⇒ 徽标显示成 **`[object Object]`**。
+
+正确做法是在 js 里把它拆成字符串字段（本页是 `statusTone` / `statusText`）再给模板。
+**通用规则：wxml 的 `{{}}` 只做字符串/数字比较，别把对象丢进去比。**
