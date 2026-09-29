@@ -104,3 +104,8 @@ tools/sfx/build/
 
 # ── 临时校验脚本 ──────────────────────────────────────
 test_env.bat
+
+# ── GitHub Git Data API 推送用的离线导出（export_commit.sh 产出）──
+# 里面是变更 blob 的原始字节，含 .env.example 等文件的副本；
+# 不入库（体积+会随每次推送重建），但**必须忽略**，否则 PII 扫描与打包会扫到它的一份影子副本。
+_push2/
