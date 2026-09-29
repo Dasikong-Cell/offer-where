@@ -24,7 +24,7 @@ import {
 } from '../server/services/apply/platformsChat.js';
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
-import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
+import { checkRequestOrigin, buildAllowedOrigins, lanOriginsFromIps } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS } from '../server/services/authToken.js';
 import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
 import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
@@ -138,6 +138,130 @@ check('写请求 + 无 Origin 本机脚本放行', checkRequestOrigin({ method: 
   const ext = buildAllowedOrigins(4400, ['http://192.168.1.20:4400/']);
   check('EXTRA_ORIGINS 追加生效且去尾斜杠', ext.has('http://192.168.1.20:4400'));
   check('EXTRA_ORIGINS 来源放行（局域网共用）', checkRequestOrigin({ method: 'POST', origin: 'http://192.168.1.20:4400', allowed: ext }).ok);
+}
+{
+  // 局域网自动白名单（2026-09-29 手机端）：HOST 非回环时服务端用 lanOriginsFromIps
+  // 把本机网卡地址并入白名单，免去手填 EXTRA_ORIGINS。
+  // 关键：手机浏览器的**同源写请求**也会带 Origin: http://<局域网IP>:<端口>，
+  // 不并入就会被判 403 —— 症状是「手机能打开、一保存/投递就失败」。
+  const lan = lanOriginsFromIps(4400, ['192.168.1.20', ' 10.0.0.7 ', '']);
+  check('lanOriginsFromIps 生成局域网来源并跳过空值',
+    lan.length === 2 && lan.includes('http://192.168.1.20:4400') && lan.includes('http://10.0.0.7:4400'),
+    `实际=${JSON.stringify(lan)}`);
+  const allowedLan = buildAllowedOrigins(4400, lan);
+  check('局域网自动并入后，手机同源写请求放行',
+    checkRequestOrigin({ method: 'POST', origin: 'http://192.168.1.20:4400', allowed: allowedLan }).ok,
+    '漏并白名单 ⇒ 手机端「能打开、一保存就 403」');
+}
+{
+  // 移动端可用性：控制台必须有抽屉导航（原先手机上 .side{display:none} ⇒ 没有任何导航入口）
+  const html = fs.readFileSync(path.join(fileURLToPath(new URL('..', import.meta.url)), 'public', 'console.html'), 'utf8');
+  check('控制台含移动端抽屉导航（汉堡 + 遮罩 + 展开类）',
+    html.includes('id="menuBtn"') && html.includes('id="navBackdrop"') && /\.side\.open\s*\{/.test(html),
+    '缺任一 ⇒ 手机上无法切换视图（原实现直接隐藏侧栏）');
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A1.5 PWA（手机「添加到主屏幕」= 独立窗口 App） ══════');
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const pub = (f: string) => path.join(ROOT, 'public', f);
+
+  // ── manifest 本体 ──
+  // ⚠️ 不能用 require() 读 .webmanifest（Node 会当 .js 解析并报 SyntaxError），
+  //    必须 readFileSync + JSON.parse。
+  const mfRaw = fs.readFileSync(pub('manifest.webmanifest'), 'utf8');
+  let mf: any = null;
+  try { mf = JSON.parse(mfRaw); } catch (e: any) {
+    check('manifest.webmanifest 是合法 JSON', false, e?.message || '解析失败');
+  }
+  if (mf) {
+    check('manifest.webmanifest 是合法 JSON', true);
+    check('manifest 声明 name / short_name / display:standalone',
+      !!mf.name && !!mf.short_name && mf.display === 'standalone',
+      `name=${mf.name} short=${mf.short_name} display=${mf.display}`);
+    // start_url/scope 必须是根：控制台视图靠 #hash 切换，指到子路径会让「装完点开」落到空白
+    check('manifest start_url 与 scope 均为 /',
+      mf.start_url === '/' && mf.scope === '/',
+      `start_url=${mf.start_url} scope=${mf.scope}`);
+    // theme_color 必须与 CSS 的 --brand 一致，否则安卓状态栏和界面是两种橙
+    const con = fs.readFileSync(pub('console.html'), 'utf8');
+    const brand = (con.match(/--brand:\s*(#[0-9a-fA-F]{3,8})/) || [])[1];
+    check('manifest theme_color 与控制台 --brand 一致',
+      !!brand && String(mf.theme_color).toLowerCase() === brand.toLowerCase(),
+      `manifest=${mf.theme_color} --brand=${brand}`);
+  }
+
+  // ── 图标：Chromium 不接受 .ico 作 maskable；iOS 的 apple-touch-icon 也只吃 PNG ──
+  const iconList: any[] = Array.isArray(mf?.icons) ? mf.icons : [];
+  const iconSizes = iconList.map((i) => String(i.sizes));
+  check('manifest 图标含 192x192 与 512x512',
+    iconSizes.includes('192x192') && iconSizes.includes('512x512'),
+    `实际=${JSON.stringify(iconSizes)}`);
+  check('manifest 图标含 maskable 用途（安卓自适应图标）',
+    iconList.some((i) => String(i.purpose || '').includes('maskable')),
+    '缺 maskable ⇒ 安卓主屏上图标被套白底圆框');
+  // 图标必须真的存在，否则安装时会静默降级成字母占位图
+  const missingIcons = iconList
+    .map((i) => String(i.src || ''))
+    .filter((src) => !fs.existsSync(path.join(ROOT, 'public', src.replace(/^\//, ''))));
+  check(`manifest 引用的图标文件都存在（共 ${iconList.length} 个）`,
+    missingIcons.length === 0, missingIcons.length ? `缺失=${missingIcons.join(',')}` : '全部存在');
+  check('apple-touch-icon.png 存在（iOS 添加到主屏幕用）',
+    fs.existsSync(pub('apple-touch-icon.png')));
+
+  // ── 控制台接线 ──
+  const con = fs.readFileSync(pub('console.html'), 'utf8');
+  check('控制台 <head> 链接 manifest',
+    /<link[^>]+rel=["']manifest["'][^>]*>/.test(con));
+  check('控制台声明 theme-color（安卓状态栏取色）',
+    /<meta[^>]+name=["']theme-color["']/.test(con));
+  check('控制台引用 apple-touch-icon', con.includes('rel="apple-touch-icon"'));
+  check('控制台注册 Service Worker（注册失败不得抛错）',
+    con.includes("serviceWorker' in navigator") && con.includes('register('),
+    '缺存在性判断 ⇒ 局域网 http 下直接抛 TypeError');
+  check('控制台含「添加到主屏幕」引导条（安装按钮 + 永久关闭）',
+    con.includes('id="pwaBar"') && con.includes('id="pwaInstallBtn"') && con.includes('id="pwaCloseBtn"'),
+    '缺任一 ⇒ 手机用户不知道可以装成 App');
+
+  // ── 布局陷阱（2026-09-29 真机验收踩到，必须钉住） ──
+  // 引导条若不放在 .main 内部，它是 flex 容器的兄弟节点 ⇒ 挤进文档流把整页推下去，
+  // 且 sticky 的包含块变成 body，偏移永不生效；两个 sticky 相叠时手机上点「安装」会被
+  // 下面的 .topbar 拦截（Playwright 报 "intercepts pointer events"）。
+  const mainIdx = con.indexOf('<div class="main">');
+  const barIdx = con.indexOf('id="pwaBar"');
+  const topbarIdx = con.indexOf('<div class="topbar">');
+  check('引导条位于 .main 内部且在 .topbar 之前',
+    mainIdx > -1 && barIdx > mainIdx && barIdx < topbarIdx,
+    `main=${mainIdx} bar=${barIdx} topbar=${topbarIdx}`);
+  check('引导条不使用 position:sticky（避免与 .topbar 的 sticky 叠加被拦截点击）',
+    !/\.pwa-bar\{[^}]*position:\s*sticky/.test(con),
+    '两个 sticky 叠加 ⇒ 后者的偏移盖住前者，手机上点不到「安装」');
+  check('引导条图标显式约束 CSS 宽高（不靠 HTML 属性）',
+    /\.pwa-bar-ico\{[^}]*width:34px[^}]*height:34px/.test(con),
+    '只写 width/height 属性时，某些浏览器会把 192px 原图铺满整条');
+
+  // ── Service Worker：安全上下文 + 不缓存 API ──
+  const sw = fs.readFileSync(pub('sw.js'), 'utf8');
+  check('sw.js 含 fetch 处理器（PWA 可安装性的硬性要求）',
+    /addEventListener\(\s*['"]fetch['"]/.test(sw));
+  check('sw.js 明确不拦截 /api/（双端共享同一份数据，缓存住就会看到旧记录）',
+    sw.includes("startsWith('/api/')"),
+    '缺此判断 ⇒ 未来一旦加缓存，手机端数据会滞后于桌面端');
+  // sw.js 的 activate 里有一段「清理历史缓存」的兜底代码（caches.delete），
+  // 所以只禁「写入型」API：open/put/add/addAll。出现即说明有人加了缓存策略。
+  check('sw.js 不写入任何缓存（本项目刻意零预缓存）',
+    !/caches\.(open|put)|cache\.(add|addAll|put)/.test(sw),
+    '出现即说明有人给 SW 加了缓存策略，需重新评估「改了页面不生效」风险');
+
+  // ── 服务端托管：MIME 与缓存头 ──
+  const srv = fs.readFileSync(path.join(ROOT, 'server', 'index.ts'), 'utf8');
+  check('服务端为 .webmanifest 指定 application/manifest+json',
+    srv.includes('application/manifest+json'),
+    'MIME 退化成 octet-stream 时 Chrome 会整个忽略 manifest');
+  check('服务端给 sw.js 设 no-cache + Service-Worker-Allowed',
+    srv.includes('Service-Worker-Allowed') && /no-cache/.test(srv),
+    '不加 no-cache ⇒ 改了 sw.js 用户手机上可能一整天跑旧版');
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -4,6 +4,7 @@ import { query, unstable_v2_createSession, unstable_v2_authenticate, PermissionR
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { fileURLToPath } from "url";
 import { exec, spawn } from "child_process";
 import { promisify } from "util";
@@ -49,7 +50,7 @@ import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuC
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealthCached, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
-import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
+import { buildAllowedOrigins, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
 import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
@@ -118,7 +119,9 @@ function logRun(level: 'INFO' | 'ERROR', msg: string): void {
 
 // ── 安全中间件：JSON 体积 + CORS 白名单 + 写请求来源校验 ──
 // 目的：防止任意网页调用本机 API 触发真实投递/发信（DNS-rebinding / 恶意页面静默调用）。
-// 局域网多人共用：把对方访问地址加入 EXTRA_ORIGINS（如 http://192.168.1.20:4400），并把 HOST 设为 0.0.0.0。
+// 局域网多人 / 手机共用：把 HOST 设为 0.0.0.0 即可 —— 服务端会自动把本机网卡地址
+// 并入来源白名单（见下方 LAN_IPS / lanOriginsFromIps），无需再手填 EXTRA_ORIGINS。
+// EXTRA_ORIGINS 保留为「非本机网卡来源」的手工补充通道。
 app.use(express.json({ limit: '15mb' }));
 
 // ── 安全响应头（2026-09-25 加固）──
@@ -138,9 +141,38 @@ app.use((_req, res, next) => {
   next();
 });
 
+/** 本机全部非回环 IPv4 地址（手机 / 平板走这些地址访问控制台） */
+function detectLanIpv4(): string[] {
+  const out: string[] = [];
+  try {
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+      for (const ni of ifaces[name] || []) {
+        // 不同 Node/类型版本里 family 可能是 'IPv4' 或 4，两种都收
+        const fam = String(ni.family);
+        if ((fam === 'IPv4' || fam === '4') && !ni.internal && ni.address) out.push(ni.address);
+      }
+    }
+  } catch { /* 拿不到网卡信息就当作「无局域网地址」，不影响本机使用 */ }
+  return out;
+}
+
+/** HOST 是回环 → 仅本机可达；否则（0.0.0.0 / 局域网 IP）视为已暴露到局域网 */
+const HOST_IS_LOOPBACK = ['127.0.0.1', 'localhost', '::1'].includes(String(HOST).toLowerCase());
+const LAN_EXPOSED = !HOST_IS_LOOPBACK;
+/** 仅暴露到局域网时把本机网卡地址并入来源白名单：回环时手机根本连不上，无需放行 */
+const LAN_IPS = LAN_EXPOSED ? detectLanIpv4() : [];
+/** 手机 / 平板可访问的控制台地址（暴露到局域网时才有值） */
+const LAN_URLS = lanOriginsFromIps(PORT, LAN_IPS);
+
 const ALLOWED_ORIGINS = buildAllowedOrigins(
   PORT,
-  String(process.env.EXTRA_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  [
+    ...String(process.env.EXTRA_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    // 自动并入本机局域网地址：浏览器同源写请求也会带 Origin，漏了就会 403（见 requestGuard.ts）
+    ...LAN_URLS,
+    ...lanOriginsFromIps(5173, LAN_IPS), // 开发态 Vite 前端也可能被局域网访问
+  ],
 );
 
 app.use((req, res, next) => {
@@ -223,6 +255,40 @@ if (!fs.existsSync(CONSOLE_DIR)) fs.mkdirSync(CONSOLE_DIR, { recursive: true });
 // 控制台统一走 `/`（那里按需注入访问令牌）；直接开 /console.html 会拿到未注入令牌的页面
 app.get('/console.html', (_req, res) => { res.redirect('/'); });
 
+// ── PWA 静态资源（manifest / Service Worker / 图标） ──────────────────────────
+// 这些文件由 express.static 自动托管（就在 CONSOLE_DIR 下），但需要三处显式处理：
+//
+// 1) MIME：`.webmanifest` 不在 express 默认 mime 表里（会退化成 octet-stream）——
+//    Chrome 对 manifest 的 MIME 有要求，退回 octet-stream 时**整个 manifest 被忽略**，
+//    「添加到主屏幕」就退化成普通书签（没有图标、没有独立窗口）。
+//    `.js` 在 Windows 上还要防 IIS/注册表把 MIME 改成 text/plain 的经典事故。
+// 2) Service Worker 的 scope：带 `Service-Worker-Allowed: /`，即使将来 sw.js 挪到子目录
+//    也仍能管辖整个源。
+// 3) 缓存：sw.js **必须** no-cache —— 浏览器对 SW 脚本有 24h 缓存上限，
+//    若不显式禁缓存，改了 sw.js 后用户手机上可能一整天都跑旧版。
+//    manifest 同样给 no-cache（体积才 1KB，每次刷新拿最新的收益远大于省这点流量）。
+//    图标是内容寻址的稳定资源，给一天缓存。
+const PWA_TYPES: Record<string, string> = {
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
+};
+app.use((req, res, next) => {
+  const p = String(req.path || '');
+  const ext = path.extname(p).toLowerCase();
+  if (!PWA_TYPES[ext]) return next();
+  res.type(PWA_TYPES[ext]);
+  if (ext === '.webmanifest' || p === '/sw.js') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  } else if (ext === '.png') {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+  }
+  if (p === '/sw.js') res.setHeader('Service-Worker-Allowed', '/');
+  next();
+});
+
 app.use(express.static(CONSOLE_DIR));
 app.get("/", (_req, res) => {
   const file = path.join(CONSOLE_DIR, 'console.html');
@@ -250,6 +316,23 @@ app.get("/api/ping", (_req, res) => {
 });
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString(), ai: isAiEnabled() });
+});
+
+// ── 局域网 / 手机访问信息（供控制台展示「手机访问地址」） ──────────────────────
+// 双端互通说明：桌面端与手机端都连这一台后端、读写同一份 SQLite(data/chat.db)，
+// 因此数据天然共享 —— 只要手机能连上（HOST=0.0.0.0 且与本机同一网络）。
+// 本接口只暴露「本机自己算出来的网卡地址」，不含任何秘密。
+app.get("/api/lan", (_req, res) => {
+  res.json({
+    exposed: LAN_EXPOSED,
+    host: HOST,
+    port: PORT,
+    authEnabled: AUTH_ENABLED,
+    urls: LAN_URLS,
+    hint: LAN_EXPOSED
+      ? '手机 / 平板与本机连同一 Wi-Fi，浏览器打开上面任一地址即可使用同一套数据'
+      : '当前仅监听本机回环（127.0.0.1）。要手机访问，请用 start_lan.bat 启动，或设 HOST=0.0.0.0',
+  });
 });
 
 // ── 版本标识：让「我现在跑的是哪一版」可自证 ──────────────────────────────────
@@ -2721,6 +2804,15 @@ const server = app.listen(PORT, HOST, () => {
 ║                                            ║
 ╚════════════════════════════════════════════╝
   `);
+  // 局域网 / 手机访问：把可访问地址显式打出来（不塞进上面的定宽方框，避免长短不一把框撑歪）。
+  // 双端互通：手机与桌面连同一后端、同一 SQLite，改的是一份数据。
+  if (LAN_EXPOSED) {
+    const urls = LAN_URLS.length ? LAN_URLS : [];
+    logRun('INFO', `已暴露到局域网（HOST=${HOST}）：${urls.join(' ') || '未检测到网卡地址'}｜令牌鉴权已开启`);
+    console.log('[局域网] 手机 / 平板访问地址（需与本机连同一 Wi-Fi）：');
+    console.log(urls.length ? urls.map((u) => `         ${u}`).join('\n') : '         (未检测到局域网网卡地址，请检查网络连接)');
+    console.log('[局域网] 注意：同网段设备都能打开控制台并触发真实投递，请仅在可信网络下使用。');
+  }
   // 若配置启用自动回复监视器，则恢复常驻轮询（不立即跑，等首个间隔，避免启动即操作浏览器）
   try {
     bootstrapWatcher();

@@ -35,6 +35,26 @@ export function buildAllowedOrigins(port: number, extra: string[] = []): Set<str
   return set;
 }
 
+/**
+ * 把「本机局域网网卡地址」转成允许来源（`http://<ip>:<port>`）。
+ * ==========================================================================
+ * 背景：手机 / 平板通过 `http://<局域网IP>:<端口>` 打开控制台时，页面里的写请求
+ * 虽然**同源**，但浏览器对非 GET 的同源请求**仍会带 `Origin: http://<局域网IP>:<端口>`**；
+ * 若该来源不在白名单里，会被 `checkRequestOrigin` 判 403 —— 表现就是「手机上能打开、
+ * 一点保存/投递就失败」。原先要用户手填 `EXTRA_ORIGINS`，容易漏。
+ * 这里由服务端在 HOST 非回环时自动把本机网卡地址补进白名单，免手工。
+ * 纯函数，便于单测。
+ */
+export function lanOriginsFromIps(port: number, ips: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of ips) {
+    const ip = String(raw || '').trim();
+    if (!ip) continue;
+    out.push(`http://${ip}:${port}`);
+  }
+  return out;
+}
+
 export interface OriginCheckInput {
   method: string;
   origin?: string;
