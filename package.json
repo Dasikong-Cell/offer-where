@@ -26,7 +26,7 @@
     "selftest": "tsx scripts/selftest.ts",
     "test:contract": "tsx scripts/contract_tests.ts",
     "test": "npm run selftest && npm run test:contract",
-    "verify": "npm run typecheck && npm run console:check && npm run mp:check",
+    "verify": "npm run typecheck && npm run console:check && npm run mp:check && npm run guide:check",
     "db:report": "tsx scripts/db_report.ts",
     "db:fix": "tsx scripts/fix_job_data.ts",
     "data:cleanup": "tsx scripts/cleanup_data.ts",
@@ -35,7 +35,8 @@
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "tauri build --no-bundle",
-    "app:bundle": "tauri build"
+    "app:bundle": "tauri build",
+    "guide:check": "tsx scripts/guide_check.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.80",

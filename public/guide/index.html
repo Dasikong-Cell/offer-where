@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#7c5cff">
+<title>OfferWhere 使用说明 · 一个能替你自动投简历的工具</title>
+<meta name="description" content="OfferWhere 使用说明：装在你自己电脑上，用你自己的账号，数据只存在你电脑里。3 分钟装好，扫码登录后自动投简历。">
+<link rel="icon" href="app.ico">
+<style>
+:root{
+  --bg:#f5f6fa; --card:#fff; --ink:#1b1d23; --ink2:#5a6072; --ink3:#8b92a6;
+  --line:#e6e8f0; --brand:#7c5cff; --brand-soft:#f0ecff;
+  --ok:#0ea472; --okbg:#e6f7f1; --warn:#c2410c; --warnbg:#fff4e8;
+  --danger:#d92d20; --dangerbg:#fdecea;
+  --r:14px; --shadow:0 1px 2px rgba(20,22,40,.05),0 6px 20px -8px rgba(20,22,40,.10);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  overflow-wrap:break-word;
+}
+.wrap{max-width:720px;margin:0 auto;padding:0 16px 72px}
+img{max-width:100%;height:auto;display:block}
+
+/* ---------- 顶部 ---------- */
+.hero{
+  background:linear-gradient(150deg,#7c5cff 0%,#5b34e8 55%,#4a24d0 100%);
+  color:#fff;padding:34px 16px 30px;text-align:center;position:relative;overflow:hidden;
+}
+.hero::after{
+  content:"";position:absolute;inset:auto -40% -70% -40%;height:200px;
+  background:radial-gradient(ellipse at center,rgba(255,255,255,.20),transparent 70%);
+}
+.hero .ic{width:64px;height:64px;border-radius:17px;margin:0 auto 14px;display:block;
+  box-shadow:0 8px 24px -6px rgba(0,0,0,.35);position:relative;z-index:1}
+.hero h1{margin:0 0 8px;font-size:25px;line-height:1.35;letter-spacing:-.3px;position:relative;z-index:1}
+.hero p{margin:0 auto;max-width:440px;font-size:14.5px;line-height:1.7;
+  color:rgba(255,255,255,.90);position:relative;z-index:1}
+
+/* ---------- 下载卡 ---------- */
+.dl{max-width:720px;margin:-18px auto 0;padding:0 16px;position:relative;z-index:2}
+.dl-card{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 16px}
+.btn{
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  background:var(--brand);color:#fff;text-decoration:none;font-weight:650;font-size:16.5px;
+  padding:15px 18px;border-radius:11px;border:0;width:100%;cursor:pointer;
+  box-shadow:0 5px 16px -5px rgba(124,92,255,.65);transition:transform .12s,filter .12s;
+}
+.btn:active{transform:translateY(1px);filter:brightness(.96)}
+.btn svg{width:19px;height:19px;flex:none}
+.btn.alt{background:#fff;color:var(--brand);border:1.5px solid var(--brand);box-shadow:none}
+.dl-meta{display:flex;flex-wrap:wrap;gap:6px 14px;justify-content:center;
+  margin-top:12px;font-size:12.5px;color:var(--ink3)}
+.dl-meta b{color:var(--ink2);font-weight:600}
+
+/* ---------- 概览条 ---------- */
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin:14px 0 0}
+.fact{background:var(--brand-soft);border-radius:11px;padding:11px 8px;text-align:center}
+.fact .v{font-size:16px;font-weight:750;color:var(--brand);line-height:1.3}
+.fact .l{font-size:11.5px;color:var(--ink2);margin-top:3px;line-height:1.4}
+
+/* ---------- 章节 ---------- */
+main{margin-top:26px}
+section{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);
+  padding:20px 16px;margin-bottom:14px}
+h2{font-size:18.5px;margin:0 0 4px;line-height:1.45;letter-spacing:-.2px;
+  display:flex;align-items:flex-start;gap:9px}
+h2 .n{
+  flex:none;width:25px;height:25px;border-radius:8px;background:var(--brand);color:#fff;
+  font-size:13.5px;font-weight:750;display:flex;align-items:center;justify-content:center;margin-top:2px;
+}
+h3{font-size:15.5px;margin:20px 0 8px;line-height:1.5}
+p{margin:9px 0}
+ul,ol{margin:9px 0;padding-left:21px}
+li{margin:5px 0}
+a{color:var(--brand);text-underline-offset:2px}
+code{background:#f1f2f7;padding:1.5px 5px;border-radius:5px;font-size:.88em;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#c026d3}
+strong{font-weight:680}
+
+/* ---------- 提示块 ---------- */
+.note{border-radius:11px;padding:12px 13px;margin:13px 0;font-size:14.5px;line-height:1.72;border:1px solid transparent}
+.note.tip{background:var(--brand-soft);border-color:#ded4ff}
+.note.warn{background:var(--warnbg);border-color:#ffdcc0}
+.note.bad{background:var(--dangerbg);border-color:#f9c9c5}
+.note.ok{background:var(--okbg);border-color:#c4ebdc}
+.note b{font-weight:700}
+.note>*:first-child{margin-top:0}
+.note>*:last-child{margin-bottom:0}
+
+/* ---------- 表格（手机上转卡片）---------- */
+.tbl{margin:13px 0;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.tbl table{width:100%;border-collapse:collapse;font-size:14.5px}
+.tbl th{background:#fafbfe;text-align:left;padding:10px 12px;font-weight:650;
+  font-size:13px;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.65}
+.tbl tr:last-child td{border-bottom:0}
+.tbl td:first-child{font-weight:600;white-space:nowrap}
+.tbl code{font-size:.85em}
+
+/* ---------- 截图 ---------- */
+.shot{margin:15px 0}
+.shot img{border:1px solid var(--line);border-radius:11px;box-shadow:0 2px 12px -4px rgba(20,22,40,.14)}
+.shot figcaption{font-size:12.5px;color:var(--ink3);text-align:center;margin-top:8px;line-height:1.6}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.two .shot img{border-radius:10px}
+.two .shot figcaption{font-size:11.5px}
+
+/* ---------- 步骤 ---------- */
+.steps{counter-reset:s;margin:13px 0}
+.step{position:relative;padding:0 0 0 32px;margin-bottom:15px}
+.step::before{
+  counter-increment:s;content:counter(s);
+  position:absolute;left:0;top:1px;width:22px;height:22px;border-radius:50%;
+  background:var(--brand);color:#fff;font-size:12.5px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+}
+.step:last-child{margin-bottom:0}
+.step .t{font-weight:680;font-size:15px;margin-bottom:3px}
+.step .d{font-size:14.5px;color:var(--ink2);line-height:1.7}
+
+/* ---------- 折叠 ---------- */
+details{border:1px solid var(--line);border-radius:11px;margin:9px 0;background:#fcfcfe;overflow:hidden}
+summary{
+  padding:13px 14px;cursor:pointer;font-weight:640;font-size:15px;line-height:1.55;
+  list-style:none;display:flex;align-items:flex-start;gap:9px;
+}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"＋";margin-left:auto;color:var(--ink3);font-size:15px;flex:none;font-weight:400}
+details[open] summary::after{content:"－"}
+details[open] summary{border-bottom:1px solid var(--line);background:#fff}
+details .body{padding:13px 14px;font-size:14.5px;line-height:1.75}
+details .body>*:first-child{margin-top:0}
+details .body>*:last-child{margin-bottom:0}
+
+/* ---------- 页脚 ---------- */
+footer{text-align:center;color:var(--ink3);font-size:13px;margin-top:26px;line-height:1.8}
+footer a{color:var(--ink2)}
+.sig{margin-top:14px;font-size:12.5px;color:#a8aebe}
+
+@media (min-width:600px){
+  .hero{padding:46px 16px 40px}
+  .hero h1{font-size:29px}
+  section{padding:24px 26px}
+  .dl-card{padding:20px}
+  .facts{gap:12px}
+  .fact .v{font-size:18px}
+}
+@media (max-width:400px){
+  .two{grid-template-columns:1fr}
+  .facts{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <img class="ic" src="pwa-192.png" alt="OfferWhere 图标" width="64" height="64">
+  <h1>OfferWhere 使用说明</h1>
+  <p>一个能替你在招聘网站上自动投简历的工具。<br>
+     装在<strong>你自己的电脑</strong>上，用<strong>你自己的账号</strong>，数据只存在你电脑里。</p>
+</header>
+
+<div class="dl">
+  <div class="dl-card">
+    <a class="btn" href="https://github.com/Dasikong-Cell/offer-where/releases/latest" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/></svg>
+      下载 OfferWhere-Setup.exe
+    </a>
+    <div class="dl-meta">
+      <span>约 <b>362 MB</b></span>
+      <span>·</span>
+      <span>Windows 10 1803+</span>
+      <span>·</span>
+      <span>免安装 Node</span>
+      <span>·</span>
+      <span><b>免费开源</b></span>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="v">3 分钟</div><div class="l">装好</div></div>
+      <div class="fact"><div class="v">15 个</div><div class="l">招聘平台</div></div>
+      <div class="fact"><div class="v">0 上传</div><div class="l">数据不出本机</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+<main>
+
+<!-- 一 -->
+<section>
+  <h2><span class="n">1</span>开始之前，先确认两件事</h2>
+  <div class="tbl">
+    <table>
+      <tr><th>检查项</th><th>要求</th></tr>
+      <tr><td>电脑系统</td><td><strong>Windows 10 1803 以上</strong>（Win11 也行）</td></tr>
+      <tr><td>浏览器</td><td><strong>要装 Google Chrome</strong><br>工具靠它去点招聘网站的按钮，没装用不了</td></tr>
+    </table>
+  </div>
+  <div class="note tip">不需要装 Node、不需要配置环境、不需要会写代码。</div>
+</section>
+
+<!-- 二 -->
+<section>
+  <h2><span class="n">2</span>安装（约 3 分钟）</h2>
+
+  <div class="steps">
+    <div class="step">
+      <div class="t">下载</div>
+      <div class="d">点最上面的按钮，或直接打开
+        <a href="https://github.com/Dasikong-Cell/offer-where/releases/latest" target="_blank" rel="noopener">Release 页面</a>，
+        下载最新版里的 <code>OfferWhere-Setup.exe</code>（约 362 MB）。
+        只有这一个文件要下载，其它不用管。</div>
+    </div>
+    <div class="step">
+      <div class="t">双击安装</div>
+      <div class="d">双击 <code>OfferWhere-Setup.exe</code>，会弹出安装向导。
+        <strong>不用管理员权限</strong>，如果弹权限窗口，直接允许即可。</div>
+    </div>
+    <div class="step">
+      <div class="t">处理「Windows 已保护你的电脑」</div>
+      <div class="d">这是<strong>正常现象，不是病毒</strong>——软件没买代码签名证书（那要花钱）。
+        点 <strong>「更多信息」</strong> → 再点 <strong>「仍要运行」</strong>。</div>
+    </div>
+    <div class="step">
+      <div class="t">等它装完</div>
+      <div class="d">全自动，约 <strong>1–3 分钟</strong>。装到哪可以自己选，一路点「下一步 / 安装」也能装好。
+        「选择组件」那页默认勾选「在桌面上创建快捷方式」——<strong>保持勾选</strong>即可。</div>
+    </div>
+    <div class="step">
+      <div class="t">启动</div>
+      <div class="d">装完双击桌面的 <strong>OfferWhere</strong> 图标。
+        没勾桌面图标的话，从<strong>开始菜单</strong>搜「OfferWhere」也能找到。</div>
+    </div>
+  </div>
+
+  <div class="note tip"><strong>更方便的做法</strong>：安装向导最后那一页可以勾「运行 OfferWhere」，等于装完立刻启动。</div>
+</section>
+
+<!-- 三 -->
+<section>
+  <h2><span class="n">3</span>第一次启动：让「窗口」都出来</h2>
+  <p>双击图标后，程序会<strong>自动</strong>做这些事（你不用管）：</p>
+  <ol>
+    <li>启动本地服务（端口 4400）</li>
+    <li>为 <strong>5 个核心平台</strong>各开一个 Chrome 调试窗口（BOSS直聘 / 猎聘 / 前程无忧 / 智联招聘 / 官网渠道）</li>
+    <li>打开操作界面（叫「控制台」）</li>
+  </ol>
+  <p><strong>过一会儿</strong>屏幕上应该出现 5 个 Chrome 窗口 + 一个控制台窗口。</p>
+
+  <figure class="shot">
+    <img src="img/d-home.png" alt="控制台首页：开箱自检、岗位统计、投递漏斗、AI 能力" loading="lazy">
+    <figcaption>控制台首页（桌面浏览器打开的样子）</figcaption>
+  </figure>
+
+  <div class="note warn"><strong>⚠️ 这些窗口是独立的，不要关掉。</strong>它们是工具在操作招聘网站用的。</div>
+</section>
+
+<!-- 四 -->
+<section>
+  <h2><span class="n">4</span>关键一步：在每个窗口里扫码登录</h2>
+  <p>这是<strong>最重要</strong>的一步。工具不会帮你登录，也不需要你的密码——
+     你需要在每个 Chrome 窗口里，用<strong>手机扫码</strong>登录对应网站。</p>
+
+  <div class="tbl">
+    <table>
+      <tr><th>窗口</th><th>登录方式</th></tr>
+      <tr><td>BOSS直聘</td><td>手机 App 扫码</td></tr>
+      <tr><td>猎聘</td><td>手机 App 扫码</td></tr>
+      <tr><td>前程无忧</td><td>扫码 / 账号密码<br><span style="color:var(--warn)">可能会弹滑块，手动滑一下</span></td></tr>
+      <tr><td>智联招聘</td><td>手机 App 扫码</td></tr>
+      <tr><td>官网渠道</td><td>视具体网站而定</td></tr>
+    </table>
+  </div>
+
+  <p><strong>每个网站都要单独登录一次</strong>，因为它们互相独立。</p>
+  <div class="note tip">💡 <strong>登录一次就行了。</strong>工具会把登录状态存在你电脑上，下次打开不用重新登。</div>
+
+  <h3>另外 10 个平台：先看「能力标签」再决定要不要开</h3>
+  <p>「平台通道」页里一共登记了 <strong>15 个平台</strong>，但<strong>它们不是都能自动投递</strong>。
+     每张卡片右上角有个标签：</p>
+
+  <div class="tbl">
+    <table>
+      <tr><th>标签</th><th>数量</th><th>含义</th></tr>
+      <tr>
+        <td>全套</td><td>4</td>
+        <td>BOSS直聘 / 猎聘 / 前程无忧 / 智联招聘<br>
+            <span style="color:var(--ink2)">采集 + 投递 + 复聊 + 求职信都支持，<strong>主力平台</strong></span></td>
+      </tr>
+      <tr>
+        <td>可投递</td><td>6</td>
+        <td>offerbiu / 牛客网 / 中华英才网 / 鱼泡直聘 / 国聘 / 应届生求职网<br>
+            <span style="color:var(--ink2)">能投，但能力较基础</span></td>
+      </tr>
+      <tr>
+        <td>待接入</td><td>5</td>
+        <td>易直聘 / 58同城招聘 / 店长直聘 / 脉脉高聘 / 赶集招聘<br>
+            <span style="color:var(--danger)">还不能自动投递</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="note bad"><strong>别对着「待接入」的平台白折腾。</strong>
+    要投哪个平台，先确认它是「<strong>全套</strong>」或「<strong>可投递</strong>」。</div>
+
+  <p>要开更多窗口：双击程序目录里的 <code>start_platforms.bat</code>（默认开 9 个）；
+     想全开就加参数：<code>start_platforms.bat all</code>（开全部 14 个）。</p>
+
+  <h3>🔴 怎么确认真的登录成功了？</h3>
+  <p><strong>这一步最容易出错</strong>，请务必按下面的方法确认：</p>
+  <p>打开控制台，点左边「<strong>平台通道</strong>」，每个平台卡片上有两个按钮：
+     <strong>「检查登录」</strong> 和 <strong>「打开窗口」</strong>。
+     点「<strong>检查登录</strong>」→ 状态显示 <strong>「已登录」</strong> 才算成功。</p>
+
+  <div class="note bad"><strong>为什么不能只看这个</strong>：历史上多次出现「检查登录」说已登录、
+     但实际搜出来 0 个岗位——那是没真正登录。
+     所以请再用控制台首页的「<strong>开箱自检</strong>」交叉验证。</div>
+
+  <h3>首页的「开箱自检」是给你看的清单</h3>
+  <p>控制台首页有张卡片叫「<strong>开箱自检</strong>」，会把「还差什么」直接列出来。一共 6 项：</p>
+
+  <div class="tbl">
+    <table>
+      <tr><th>自检项</th><th>说明</th></tr>
+      <tr><td>Node 运行时</td><td>包内自带，<strong>永远是「已就绪」</strong>，不用管</td></tr>
+      <tr><td>Google Chrome</td><td>没装 Chrome 会显示「待处理」→ 去装一个</td></tr>
+      <tr><td>平台端口表</td><td>内置默认值，<strong>正常就是好的</strong></td></tr>
+      <tr><td>平台调试窗口</td><td>显示「已打开 N/15 个」。<strong>只要 N ≥ 1 就判「已就绪」</strong>，但 N 太少会导致能投的平台少</td></tr>
+      <tr><td>简历</td><td>没上传会显示「待处理」→ 去「简历中心」上传</td></tr>
+      <tr><td>AI 能力（可选）</td><td>没配也是<strong>可用</strong>的，只是匹配质量略降</td></tr>
+    </table>
+  </div>
+
+  <div class="note tip">卡片右上角会显示「<strong>N 项待处理</strong>」。
+    把这个数字变成「<strong>全部就绪 ✓</strong>」再开始投递。</div>
+
+  <div class="note warn"><strong>⚠️ 注意</strong>：「平台调试窗口」只统计<strong>有没有至少一个</strong>窗口活着，
+    所以 <strong>1/15 也会显示「已就绪」</strong>。想投哪个平台，就确认那个平台的窗口在、且登录成功。</div>
+
+  <figure class="shot">
+    <img src="img/m-home.png" alt="手机上的控制台首页，显示开箱自检与投递统计" loading="lazy">
+    <figcaption>同一个控制台，在手机上打开长这样（数据是共用的）</figcaption>
+  </figure>
+</section>
+
+<!-- 五 -->
+<section>
+  <h2><span class="n">5</span>填好「在线简历」</h2>
+  <p>招聘网站投递时，用的是<strong>你在该网站上填的在线简历</strong>，不是工具里的。
+     所以请先在<strong>每个网站</strong>把自己的在线简历填完整：</p>
+  <ul>
+    <li>工作 / 项目经历</li>
+    <li>教育经历</li>
+    <li>期望职位与城市</li>
+    <li>联系方式</li>
+  </ul>
+
+  <div class="note bad"><strong>⚠️ 简历不完整的话，投递会被网站拦掉</strong>，
+    表现是「投了但没成功」，不容易发现。</div>
+
+  <p><strong>另外</strong>：在工具里也上传一份简历。左侧边栏点「<strong>简历中心</strong>」→「<strong>上传简历</strong>」，
+     选 PDF / Word（≤ 8MB）。AI 匹配和文案会用到这一份。</p>
+
+  <figure class="shot">
+    <img src="img/m-resume.png" alt="简历中心页面" loading="lazy">
+    <figcaption>「简历中心」长这样</figcaption>
+  </figure>
+</section>
+
+<!-- 六 -->
+<section>
+  <h2><span class="n">6</span>开始投递</h2>
+  <p>控制台左侧边栏 →「<strong>投递中心</strong>」。里面有「批量投递 / 自动回复 / 邮箱直投」三个页签，
+     默认打开的就是<strong>批量投递</strong>。</p>
+
+  <figure class="shot">
+    <img src="img/d-deliver.png" alt="投递中心 · 批量投递表单" loading="lazy">
+    <figcaption>投递中心 · 批量投递（桌面端）</figcaption>
+  </figure>
+
+  <p>按从上到下填：</p>
+  <div class="tbl">
+    <table>
+      <tr><th>字段</th><th>怎么填</th></tr>
+      <tr><td>平台</td><td>默认「<strong>全部平台</strong>」，也可以只选某一个网站</td></tr>
+      <tr><td>来源（source）</td><td>默认「<strong>全部来源</strong>」，一般不用改</td></tr>
+      <tr><td>目标城市</td><td>输入城市名 / 拼音 / 首字母搜（不选 = 全部城市）；右边有「📍 定位」可按 IP 猜</td></tr>
+      <tr><td>最低匹配分</td><td>默认 <strong>40</strong>（0 = 不限制）。分太低会投一堆不相关的岗位</td></tr>
+      <tr><td>职位关键词</td><td>如 <code>Java,后端</code>，逗号分隔；<strong>留空 = 全部</strong></td></tr>
+      <tr><td>每日投递上限</td><td>默认 <strong>40</strong>（0 = 不限制）。别调太高</td></tr>
+    </table>
+  </div>
+
+  <p>下面有一排勾选框（默认已勾好，一般不用动）：</p>
+  <div class="tbl">
+    <table>
+      <tr><th>勾选框</th><th>默认</th><th>作用</th></tr>
+      <tr><td>排除已投递</td><td style="color:var(--ok)">✓ 已勾</td><td>投过的不重复投（<strong>建议保持勾选</strong>）</td></tr>
+      <tr><td>仅真实 JD 岗位</td><td>未勾</td><td>跳过只有图片、没文字的岗位</td></tr>
+      <tr><td>仅远程岗位</td><td>未勾</td><td>按需</td></tr>
+      <tr><td>模拟真人节奏</td><td style="color:var(--ok)">✓ 已勾</td><td><strong>保持勾选</strong>——它会放慢操作速度，降低被网站风控的概率</td></tr>
+      <tr><td>记录操作录像</td><td>未勾</td><td>出问题时可以回看（占空间，按需）</td></tr>
+      <tr><td>仅预览（不真正投递）</td><td>未勾</td><td><strong>第一次用请务必勾上它</strong></td></tr>
+    </table>
+  </div>
+
+  <div class="note ok">
+    <p><strong>强烈建议：第一次先勾「仅预览（不真正投递）」。</strong></p>
+    <p>勾上后点「开始投递」，<strong>它不会真的投</strong>，但会完整走一遍流程：
+       检查登录态 → 加载岗位页 → 检测岗位是否已下线 → 抓取 JD → 探测投递按钮能否点。</p>
+    <p>这一步是给你确认用的：它会告诉你「哪些岗位投得出去、文案长什么样」。
+       确认没问题后，<strong>取消勾选「仅预览」，再点一次「开始投递」</strong>——这次才是真的投。</p>
+  </div>
+
+  <div class="note tip">💡 别跳过预览直接投。预览能挡掉「登录其实没成」「岗位已下线」这类问题。</div>
+
+  <p>投递结果去左侧「<strong>职位记录</strong>」看，失败的岗位和原因都在那里。
+     界面上还有个「<strong>停止</strong>」按钮，投到一半不想继续可以随时停。</p>
+
+  <figure class="shot">
+    <img src="img/d-records.png" alt="职位记录页面" loading="lazy">
+    <figcaption>「职位记录」里有每个岗位的状态和失败原因</figcaption>
+  </figure>
+
+  <div class="note warn">关于速度：<strong>没有「间隔」可以调</strong>，节奏由「模拟真人节奏」这个选项控制。
+    <strong>请保持勾选</strong>，别追求快——这也是最容易被封号的操作。</div>
+
+  <h3>几个降低风险的习惯</h3>
+  <ol>
+    <li><strong>保持「模拟真人节奏」勾选</strong>——别关掉它去追求速度</li>
+    <li><strong>每日投递别拉满</strong>——默认 40 个够用了</li>
+    <li><strong>BOSS 直聘尤其要慢</strong>——它反爬最严，登录后建议先手动浏览几个页面再交给自动化</li>
+    <li><strong>猎聘要放慢</strong>——连续快速访问会触发短信验证</li>
+    <li><strong>先「仅预览」再真投</strong>——别一上来就批量投</li>
+  </ol>
+</section>
+
+<!-- 七 -->
+<section>
+  <h2><span class="n">7</span>还有个用法：手机上看</h2>
+  <p>如果你想把手机也变成操作端（同一 Wi-Fi 下）：</p>
+  <p>双击安装目录里的 <code>start_lan.bat</code>，它会打印一个手机能打开的网址。</p>
+  <div class="note warn">方便躺着看投递进度。<strong>但仅限你自己家的 Wi-Fi 用，
+    别在公司 / 公共网络开。</strong></div>
+</section>
+
+<!-- FAQ -->
+<section>
+  <h2><span class="n">?</span>常见问题</h2>
+
+  <details>
+    <summary>双击后提示「未知发布者」/「Windows 已保护你的电脑」</summary>
+    <div class="body">正常现象。点「<strong>更多信息</strong>」→「<strong>仍要运行</strong>」。
+      原因是安装包没有代码签名证书（那要花钱），不是病毒。</div>
+  </details>
+
+  <details>
+    <summary>没有出现 Chrome 窗口</summary>
+    <div class="body">
+      <ol>
+        <li>确认装了 <strong>Google Chrome</strong>（在「设置 → 应用」里看有没有）</li>
+        <li>关掉<strong>所有</strong> Chrome 窗口，重新双击图标启动一次</li>
+      </ol>
+    </div>
+  </details>
+
+  <details>
+    <summary>控制台显示「连不上后端」</summary>
+    <div class="body">
+      <ul>
+        <li>等 <strong>10–20 秒</strong>再刷新（第一次启动比较慢）</li>
+        <li>还是没有的话，关掉所有窗口重新启动一次</li>
+      </ul>
+    </div>
+  </details>
+
+  <details>
+    <summary>投递了但好像没成功</summary>
+    <div class="body">
+      <p>按顺序检查：</p>
+      <ol>
+        <li>平台上<strong>真的登录了吗</strong>？（见第 4 节，先看「开箱自检」是否全部就绪）</li>
+        <li>平台的<strong>在线简历填完整了吗</strong>？（见第 5 节）</li>
+        <li>打开左侧「<strong>职位记录</strong>」，看这些岗位的状态和失败原因</li>
+      </ol>
+      <p>如果大部分都失败，通常是登录态掉了。回第 4 节重新确认一遍。</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>会不会封我的号？</summary>
+    <div class="body">
+      <p>工具用的是<strong>你的真实账号、真实浏览器</strong>，通过「<strong>模拟真人节奏</strong>」放慢操作速度。
+         正常使用和人工点的节奏差不多。</p>
+      <p>但如果<strong>你关掉「模拟真人节奏」、或把「每日投递上限」拉得很高，是有风险的</strong>。</p>
+      <div class="note tip"><strong>建议</strong>：保持「模拟真人节奏」勾选，每日上限就用默认的 40。别贪快。</div>
+    </div>
+  </details>
+
+  <details>
+    <summary>我的简历和数据会被别人看到吗？</summary>
+    <div class="body">
+      <p><strong>不会。</strong>所有数据都在<strong>你自己的电脑上</strong>：</p>
+      <ul>
+        <li>简历文件在你电脑的安装目录里</li>
+        <li>招聘网站的登录状态存在你电脑的 Chrome 配置里</li>
+        <li><strong>不经过任何服务器</strong>，也不会传给其他人</li>
+      </ul>
+    </div>
+  </details>
+
+  <details>
+    <summary>想彻底删掉</summary>
+    <div class="body">
+      <p>「设置 → 应用 → 已安装的应用」里找到 <strong>OfferWhere</strong> → 卸载。</p>
+      <div class="note tip">卸载时<strong>默认会保留你的数据</strong>（简历、投递记录），
+        会单独问你一次要不要一起删。</div>
+    </div>
+  </details>
+</section>
+
+<!-- 请遵守 -->
+<section>
+  <h2><span class="n">!</span>请遵守</h2>
+  <p>这个工具是用<strong>你自己的账号</strong>帮你省时间的，不是让你去批量骚扰 HR。</p>
+  <ul>
+    <li>投递速度保持正常，别刷</li>
+    <li>投的岗位看清楚，别乱投</li>
+    <li>招聘网站的用户协议仍然适用</li>
+  </ul>
+  <p>有任何问题问我。</p>
+</section>
+
+<footer>
+  <p>
+    <a href="https://github.com/Dasikong-Cell/offer-where" target="_blank" rel="noopener">GitHub 仓库</a>
+    ·
+    <a href="https://github.com/Dasikong-Cell/offer-where/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+    ·
+    <a href="https://github.com/Dasikong-Cell/offer-where/blob/main/LICENSE" target="_blank" rel="noopener">开源许可</a>
+  </p>
+  <p class="sig">OfferWhere · 本地化 AI 求职自动化引擎</p>
+</footer>
+
+</main>
+</div>
+
+</body>
+</html>
