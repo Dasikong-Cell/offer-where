@@ -73,19 +73,33 @@ function isConfigured() {
  * 把用户从后端看到的提示语翻译成可操作的话。
  * 之所以单独一个函数：小程序端最容易卡住的不是代码而是「地址/令牌填错」，
  * 报错必须直接说清下一步做什么，而不是抛一个 -1。
+ *
+ * 🔴 2026-09-30 修正：原文案把「端口 4400」写死在字符串里，**并且不回显实际用的地址**，
+ *   于是出现这种最难查的故障 —— 用户存的地址是 `http://127.0.0.1:4418`（早先调试遗留的
+ *   死端口），页面却提示「检查…端口 4400」，看着像 4400 有问题，实际 4400 好得很。
+ *   真实报错必须**回显当前 baseUrl**，否则用户只能靠猜。
+ *   ⇒ 现在所有分支都带上 `【当前地址: …】`，且端口不再写死。
  */
-function describeError(err) {
+function describeError(err, baseUrlOverride) {
   const msg = String((err && (err.errMsg || err.message)) || err || '');
+  // 优先用调用方传入的地址；没有就现读（保证回显的就是**这次真正请求**用的地址）
+  const base = normalizeBaseUrl(baseUrlOverride || getBaseUrl());
+  const at = base ? `\n【当前地址：${base}】` : '\n【当前地址：未设置】';
+
   if (/url not in domain list/i.test(msg)) {
-    return '域名校验未通过：请在微信开发者工具「详情 → 本地设置」勾选「不校验合法域名」，真机请在微信后台配置合法域名（需 HTTPS）。';
+    return '域名校验未通过：请在微信开发者工具「详情 → 本地设置」勾选「不校验合法域名」，真机请在微信后台配置合法域名（需 HTTPS）。' + at;
   }
   if (/request:fail timeout/i.test(msg)) {
-    return '连接超时：确认后端已启动、手机与电脑在同一 Wi-Fi、地址里的 IP 填的是电脑的局域网 IP。';
+    return '连接超时：确认后端已启动、手机与电脑在同一 Wi-Fi、地址里的 IP 填的是电脑的局域网 IP。' + at;
   }
   if (/request:fail/i.test(msg)) {
-    return '连不上后端：检查地址是否正确（含 http:// 与端口 4400），以及后端是否正在运行。';
+    // 端口从当前地址里现取，不写死 —— 后端可换端口，写死会误导
+    const port = (base.match(/:(\d+)(?:\/|$)/) || [])[1];
+    const portHint = port ? `端口 ${port}` : '端口';
+    return `连不上后端：请确认 ${portHint} 上有服务在跑、地址含 http:// 与正确端口。` +
+      '若刚换过后端或重启过，请到「连接后端」页重新测试并保存。' + at;
   }
-  return msg || '未知错误';
+  return (msg || '未知错误') + at;
 }
 
 module.exports = {

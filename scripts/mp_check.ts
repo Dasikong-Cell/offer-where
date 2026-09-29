@@ -335,6 +335,26 @@ check('GET 的 query 拼进 URL（不是交给 wx.request 的 data）',
   /const query = method === 'GET' \? serializeQuery\(opts\.data\)/.test(reqSrc) &&
     /url \+ \(url\.indexOf\('\?'\) >= 0 \? '&' : '\?'\) \+ query/.test(reqSrc),
   'data 传字符串给 GET ⇒ wx.request 静默丢参（实测），所有筛选条件失效');
+
+// 🔴 连不上后端时的报错必须**回显实际地址**，且端口不能写死（2026-09-30）。
+// 事故形状：用户存的地址是 `http://127.0.0.1:4418`（早先调试遗留的死端口），
+// 页面却提示「检查…端口 4400」—— 看着像 4400 有问题，实际 4400 好得很，
+// 且全文不回显 4418，用户只能靠猜。这是**最耗时的一类报错：文案本身在误导**。
+// 三条断言钉住：① 端口不写死；② 报错拼接当前地址；③ 调用方传入本次请求真正用的地址。
+const cfgSrc = readText('utils/config.js');
+// 🔴 必须**先剥注释**再匹配：本次的修正说明本身就写在注释里、含「端口 4400」字样，
+// 不剥就会把注释当成代码命中（正是 MEMORY 里那条「静态断言会被文本满足」）。
+// 复用本文件上方已定义的 stripComments（勿重复声明）。
+const cfgCode = stripComments(cfgSrc);
+check('报错文案不把端口写死（应回显实际地址）',
+  !/端口\s*4400/.test(cfgCode),
+  '写死端口会误导：用户地址填的是别的端口时，提示却在说 4400');
+check('连不上后端的报错带回显地址（【当前地址：…】）',
+  cfgCode.includes('【当前地址：') && /const base = normalizeBaseUrl\(baseUrlOverride/.test(cfgCode),
+  '不回显实际地址 ⇒ 用户只能靠猜，无法自查');
+check('request.js 把本次请求真正用的 base 传给 describeError',
+  /config\.describeError\(e,\s*base\)/.test(reqSrc),
+  '现读 Storage 可能回显一个与失败请求不同的地址（地址刚被改过时）');
 check('GET 不再往 data 里塞序列化后的字符串',
   !/data:\s*isBodyless && method === 'GET'/.test(reqSrc),
   '残留旧写法 = 上面那条修复没真正生效');

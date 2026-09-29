@@ -112,7 +112,10 @@ function request(opts) {
       fail(e) {
         const err = new Error((e && e.errMsg) || 'request:fail');
         err.code = 'NETWORK';
-        err.friendly = config.describeError(e);
+        // 把**本次真正请求用的 baseUrl**（上面的 `base`）传下去，让报错里回显的就是它。
+        // 不在 describeError 里现读 Storage：万一地址刚被改过，现读会回显一个
+        // 与失败请求不同的地址，反而更难查（2026-09-30 的 4418 事故就是这个形状）。
+        err.friendly = config.describeError(e, base);
         reject(err);
       },
     });
