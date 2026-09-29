@@ -1673,6 +1673,39 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     '落位写错 ⇒ 快捷方式指向不存在的文件');
   check('快捷方式图标用包内 public\\app.ico（唯一真相源）',
     nsi.includes('!define ICON_REL   "public\\app.ico"'), '写死别的图标 ⇒ 一个产品两套品牌标记');
+  // 桌面快捷方式从「无条件创建」改成「可选」（2026-09-29 用户要求：桌面是用户的地盘）。
+  // 判据不是「源码里出现了组件页」——那样把两条 CreateShortCut 都留在主 Section 里也能过。
+  // 真正要看的是**位置**：桌面那条必须在自己的 Section 里，开始菜单那条留在主 Section 里。
+  const mainSecAt = nsi.indexOf('Section "$(STR_SEC_CORE)" SEC_MAIN');
+  const deskSecAt = nsi.indexOf('Section "$(STR_SEC_DESKTOP)" SEC_DESKTOP');
+  const smCutAt = nsi.indexOf('CreateShortCut "$SMPROGRAMS');
+  const dtCutAt = nsi.indexOf('CreateShortCut "$DESKTOP');
+  check('桌面快捷方式是独立的可选组件（不再无条件创建）',
+    nsi.includes('MUI_PAGE_COMPONENTS') && mainSecAt > -1 && deskSecAt > mainSecAt &&
+      dtCutAt > deskSecAt,
+    '桌面图标落在用户的桌面而不是安装目录 ⇒ 该由用户决定（与「安装位置自己选」同一个道理）');
+  check('开始菜单项留在主 Section（不跟着桌面勾选项一起消失）',
+    /SectionIn RO/.test(nsi) && smCutAt > mainSecAt && smCutAt < deskSecAt,
+    '把开始菜单也做成可选 ⇒ 取消勾选的人会失去唯一入口（已端到端验证：/NODESKTOP 下开始菜单仍建）');
+  // 中文不能进 nsi（前面已断言它纯 ASCII），只能进独立的 .nsh。
+  // BOM 是否必需取决于 makensis 版本（3.11 实测带不带都能正确解码），保留它是为了把这份
+  // 不确定性去掉 —— 断言它存在，免得有人当「多余字节」清理掉。
+  const nshBytes = fs.readFileSync(path.join(ROOT, 'installer/ui_strings.nsh'));
+  check('自建中文串放在独立 .nsh 里，且带 UTF-8 BOM',
+    nshBytes[0] === 0xef && nshBytes[1] === 0xbb && nshBytes[2] === 0xbf &&
+      nshBytes.includes(Buffer.from('在桌面上创建快捷方式', 'utf8')),
+    'BOM 被清掉 ⇒ 脚本编码变成一次取决于编译器版本的赌注');
+  check('该 .nsh 在 MUI_LANGUAGE 之后引入（LangString 需要 ${LANG_SIMPCHINESE}）',
+    nsi.indexOf('MUI_LANGUAGE "SimpChinese"') > -1 &&
+      nsi.indexOf('MUI_LANGUAGE "SimpChinese"') < nsi.indexOf('ui_strings.nsh'),
+    '引在语言文件之前 ⇒ 语言常量还不存在，字符串静默变空');
+  // ${SEC_DESKTOP} 这个常量要到 Section 被解析时才存在。
+  check('.onInit 定义在 Section 之后（${SEC_DESKTOP} 那时才存在）',
+    nsi.indexOf('Function .onInit') > deskSecAt,
+    '写早了 ⇒ unknown variable/constant，而报错却指向 SectionSetFlags 的用法，看着像参数写错');
+  check('静默安装也有办法不建桌面图标（/NODESKTOP）',
+    nsi.includes('/NODESKTOP') && nsi.includes('SectionSetFlags ${SEC_DESKTOP} 0'),
+    '无人值守装不了勾选框 ⇒ 不给开关就等于强制每个 /S 都在桌面放图标');
   // 安装器自己那一个文件是用户**最先**看到的东西（下载栏 / 资源管理器 / SmartScreen 提示），
   // 而它此前带的是 NSIS 的默认图标 —— 产品第一印象是别人的 logo。
   // 这条是拿一份「图标必须出现在所有位置」的发布清单逐条对出来的（2026-09-28）：
@@ -1870,6 +1903,11 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('发布说明写清了无人值守装法（/S /D=）',
     relYml.includes('/S /D=D:\\OfferWhere'),
     'DS 的 /D= 必须末位且不带引号；写错则静默装到默认位置');
+  // 发布说明是用户下载时看到的第一段字（本仓库的明确约定）。安装器多了一页、多了个开关，
+  // 而说明没跟上 ⇒ 用户第一次见到那个勾选框时没有任何解释。
+  check('发布说明同步了「桌面图标可选」与 /NODESKTOP（改了安装器就要改说明）',
+    relYml.includes('选择组件') && relYml.includes('/NODESKTOP'),
+    '安装器已多出「选择组件」一页，说明不写 ⇒ 用户不知道那个勾选框是干什么的');
 
   // ── ⑤-b makensis 候选路径清单：两处必须一致（2026-09-29 事故的机械护栏）────────
   // 事故形状：release.yml 装完 NSIS 后**只用 `Get-Command makensis` 复查** —— choco 改的是

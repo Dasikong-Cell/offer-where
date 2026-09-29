@@ -38,6 +38,8 @@ SetCompressor /FINAL zlib
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+; ${GetOptions}: parses our own /NODESKTOP switch out of $CMDLINE (see .onInit).
+!include "FileFunc.nsh"
 
 ; ---------------------------------------------------------------- injected
 !ifndef PAYLOAD_ZIP
@@ -97,6 +99,16 @@ SetCompressor /FINAL zlib
 !define INSTALLED_KB 1140800
 !define PAGE_KB      770100
 
+; Two entry points now write a shortcut (Start Menu, and optionally Desktop), so
+; the target resolution is a macro rather than a copy: judging the package ROOT
+; for offer-where.exe is the defect that shipped once (it never exists there),
+; and two hand-maintained copies of this is how it ships twice.
+!macro ResolveEntry outvar
+  StrCpy ${outvar} "$INSTDIR\${ENTRY_BAT}"
+  IfFileExists "$INSTDIR\${ENTRY_EXE}" 0 +2
+    StrCpy ${outvar} "$INSTDIR\${ENTRY_EXE}"
+!macroend
+
 Name "${APPNAME}"
 OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\OfferWhere"
@@ -137,6 +149,12 @@ VIAddVersionKey "LegalCopyright" "See LICENSE in the installed package"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${ENTRY_EXE}"
 
 !insertmacro MUI_PAGE_WELCOME
+; The components page carries exactly ONE optional item: the desktop shortcut.
+; It exists because the shortcut lands OUTSIDE the install dir (someone else's
+; desktop), so it is the one thing the installer should not decide unilaterally
+; -- the same reason the directory page exists. Default ON: that is what every
+; build before 2026-09-29 did, so nobody silently loses a shortcut they expect.
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -145,6 +163,14 @@ VIAddVersionKey "LegalCopyright" "See LICENSE in the installed package"
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+; Our own UI text (component names + their descriptions) cannot be written here:
+; this file is held to pure ASCII so the build never depends on the compiler
+; machine's code page. It lives in ui_strings.nsh, UTF-8 **with a BOM** -- see
+; the header of that file for why the BOM is load-bearing. It must be included
+; AFTER MUI_LANGUAGE: LangString resolves ${LANG_SIMPCHINESE}, which only
+; exists once the language file has been loaded.
+!include "${__FILEDIR__}\ui_strings.nsh"
 
 Var TarRC
 Var TarOut
@@ -157,7 +183,7 @@ Var Fn
 ; ===========================================================================
 ; Install
 ; ===========================================================================
-Section "${APPNAME}" SEC_MAIN
+Section "$(STR_SEC_CORE)" SEC_MAIN
   SectionIn RO
   SetShellVarContext current
   AddSize ${PAGE_KB}
@@ -208,27 +234,27 @@ Section "${APPNAME}" SEC_MAIN
   ; native shell, fall back to start_all.bat. Judging the package ROOT for
   ; offer-where.exe is the mistake that shipped once (it never exists there),
   ; so this only ever looks inside dist-app\.
-  StrCpy $0 "$INSTDIR\${ENTRY_BAT}"
-  IfFileExists "$INSTDIR\${ENTRY_EXE}" 0 +2
-    StrCpy $0 "$INSTDIR\${ENTRY_EXE}"
+  !insertmacro ResolveEntry $0
 
+  ; Start Menu entry: always. It lives under %APPDATA%, i.e. inside the user's
+  ; own profile, so unlike the desktop it is not somebody else's real estate --
+  ; and it is what "Apps & features" and every launcher index expect to find.
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
   IfFileExists "$INSTDIR\${ICON_REL}" 0 shortcut_noicon
     CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$0" "" "$INSTDIR\${ICON_REL}" 0 "" "" "offer-where console"
-    CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$0" "" "$INSTDIR\${ICON_REL}" 0 "" "" "offer-where console"
     Goto shortcuts_done
   shortcut_noicon:
     CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$0" "" "" 0 "" "" "offer-where console"
-    CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$0" "" "" 0 "" "" "offer-where console"
   shortcuts_done:
 
   ; ---------------------------------------------------------------- first run
   ; Suppress the app's own first-run "Install" prompt.
   ; install_first_run.bat exists because the SFX only ever unpacked files -- it never
   ; touched the shell -- so the first launch had to offer to create an entry point.
-  ; This installer already created BOTH entries (Start Menu and Desktop, same target,
-  ; same icon) plus the uninstall entry. Left alone, the first launch would ask the
-  ; user to press "Install" a second time for work that is already done.
+  ; This installer already created the Start Menu entry (and the Desktop one when
+  ; the user left that component ticked -- since 2026-09-29 it is optional, see
+  ; SEC_DESKTOP below) plus the uninstall entry. Left alone, the first launch would
+  ; ask the user to press "Install" a second time for work that is already done.
   ; The prompt has exactly two effects -- run create_desktop_shortcut.bat /silent,
   ; then write this marker (install_first_run.bat's decoded payload; the guard is
   ; src-tauri/src/lib.rs). The shortcut half is what we just replaced, and the marker
@@ -251,6 +277,65 @@ Section "${APPNAME}" SEC_MAIN
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 SectionEnd
+
+; ---------------------------------------------------------------- desktop shortcut
+; The ONE optional component. It is optional because the desktop is the user's
+; space, not ours -- but it stays ON by default so nobody who upgrades loses the
+; icon they already have. Unchecking it changes nothing else: the Start Menu
+; entry, the uninstall entry and the app itself are all unaffected.
+; Note this runs AFTER SEC_MAIN, so $INSTDIR is already populated and the entry
+; point can be resolved the same way (same macro -- one rule, two callers).
+Section "$(STR_SEC_DESKTOP)" SEC_DESKTOP
+  SetShellVarContext current
+  !insertmacro ResolveEntry $1
+  IfFileExists "$INSTDIR\${ICON_REL}" 0 desktop_noicon
+    CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$1" "" "$INSTDIR\${ICON_REL}" 0 "" "" "offer-where console"
+    Goto desktop_done
+  desktop_noicon:
+    CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$1" "" "" 0 "" "" "offer-where console"
+  desktop_done:
+SectionEnd
+
+; Component descriptions. Without this block the components page still works,
+; but its bottom pane stays blank and the checkbox is unexplained -- and an
+; unexplained checkbox that is ON by default is the kind of thing people notice
+; only after it has already put an icon on their desktop.
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MAIN}    "$(STR_SEC_CORE_DESC)"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "$(STR_SEC_DESKTOP_DESC)"
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+; ===========================================================================
+; .onInit
+; ===========================================================================
+; DEFINED HERE, AFTER THE SECTIONS, ON PURPOSE: a Section's index constant
+; (${SEC_DESKTOP}) only exists from the moment that Section is parsed. Written
+; above them, makensis says `unknown variable/constant "{SEC_DESKTOP}"` and then
+; `Usage: SectionSetFlags section_index flags` -- the second line reads like the
+; flag value is wrong, but the real problem is the missing constant. Placement
+; is the fix, not the argument. (Measured 2026-09-29, NSIS 3.11.)
+Function .onInit
+  ; /NODESKTOP is the silent-install twin of the components-page checkbox: a
+  ; scripted deployment cannot tick or untick anything, so without a switch the
+  ; one optional component is unreachable there and every /S install gets a
+  ; desktop icon whether it wants one or not. Both paths clear the same flag.
+  ; NOTE: /D= swallows the rest of the command line, so /NODESKTOP must come
+  ; BEFORE it:  OfferWhere-Setup.exe /S /NODESKTOP /D=D:\OfferWhere
+  ${GetOptions} $CMDLINE "/NODESKTOP" $R0
+  IfErrors nodt_done 0
+    SectionSetFlags ${SEC_DESKTOP} 0
+  nodt_done:
+FunctionEnd
+
+; ===========================================================================
+; .onInit
+; ===========================================================================
+; DEFINED HERE, AFTER THE SECTIONS, ON PURPOSE: a Section's index constant
+; (${SEC_DESKTOP}) only exists from the moment that Section is parsed. Written
+; above them, makensis says `unknown variable/constant "{SEC_DESKTOP}"` and then
+; `Usage: SectionSetFlags section_index flags` -- the second line reads like the
+; flag value is wrong, but the real problem is the missing constant. Placement
+; is the fix, not the argument.
 
 ; ===========================================================================
 ; Uninstall
