@@ -25,7 +25,7 @@ import {
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins, lanOriginsFromIps } from '../server/services/requestGuard.js';
-import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet } from '../server/services/authToken.js';
+import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isConsoleAsset } from '../server/services/authToken.js';
 import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
 import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
 import { computeAbReport } from '../server/services/apply/applyAbTest.js';
@@ -329,10 +329,53 @@ check('服务端中间件调用白名单判定（不是又抄一份 if 链）',
   /isPublicReadGet\(m,\s*String\(req\.path \|\| ''\)\)/.test(idxSrc) &&
     !/const readOnly = \(m === 'GET'/.test(idxSrc),
   '残留旧的 readOnly 判断 ⇒ 新策略没真正生效');
+// 控制台自身资源必须放行，否则 `GET /` 直接 401 —— 控制台连页面都打不开。
+// 这条是**真浏览器**跑出来的：curl 测 /api/* 全「符合预期」，完全看不出。
+// 放行它是安全的：全是 public/ 下的 HTML/图标/SW（不含个人信息），
+// 而控制台页面本身不带令牌（令牌是服务端注入进 HTML 的），挡住就是「把钥匙锁在屋里」。
+check('控制台自身资源匿名可达（含 `/`、app.ico、manifest、sw.js）',
+  /isConsoleAsset\(m,\s*String\(req\.path \|\| ''\)\)/.test(idxSrc) &&
+    ['/', '/app.ico', '/manifest.webmanifest', '/sw.js'].every((p) => isConsoleAsset('GET', p)),
+  '只放行 /api/* 而挡住 `GET /` ⇒ 控制台白屏；curl 测接口全绿，看不出来');
+check('控制台资源白名单不含数据目录（别顺手把 /data/ 放进来）',
+  !isConsoleAsset('GET', '/data/evidence/x.png') &&
+    !isConsoleAsset('GET', '/data/screenshots/x.png') &&
+    !isConsoleAsset('GET', '/data/resume_tailored/x.pdf'),
+  '把 data/ 放进这份清单 ⇒ 证据截图与简历全部裸奔，刚堵的缺口又开了');
+check('控制台资源白名单只放行读方法',
+  isConsoleAsset('GET', '/') && !isConsoleAsset('POST', '/') && !isConsoleAsset('DELETE', '/'),
+  '把写方法也放行 ⇒ 匿名可改控制台状态');
 check('CORS Allow-Headers 含 X-Auth-Token 与 Authorization',
   /Access-Control-Allow-Headers',\s*'[^']*X-Auth-Token/.test(idxSrc) &&
     /Access-Control-Allow-Headers',\s*'[^']*Authorization/.test(idxSrc),
   '预检不放行这两个头 ⇒ 跨源带令牌的请求被浏览器拒发（只列 Content-Type 就会这样）');
+
+// ── 静态资源签名：收紧鉴权时最容易踩的回归（2026-09-30）─────────────────────
+// 形状：把「GET 默认要令牌」收严之后，控制台里 `<img src="/data/evidence/x.png">`、
+// `<a href>`、`window.open('/api/resume/file?...')` 全变 401 ——
+// 这些浏览器取资源的方式**发不出自定义请求头**，只认请求头必然挂；
+// 而 `onerror` 还会把裂图隐藏掉，用户看到的是「证据没了 / 简历打不开」而不是报错，更难查。
+// 解法是把授权放进 URL（HMAC 签名，绑定路径 + 有时效），而不是把目录整体放开。
+check('静态资源走 URL 签名（不是靠放开目录）',
+  /isAuthorizedStaticRes\(req\)/.test(idxSrc) &&
+    /export function isAuthorizedStaticRes/.test(readText('server/services/authToken.ts')),
+  '把 /data/evidence 等目录整体放行 ⇒ 刚堵上的隐私缺口换个门又开了');
+check('签名绑定路径（拿 A 的签名读不了 B）',
+  /staticSig\(exp, pathname\)/.test(readText('server/services/authToken.ts')) &&
+    /update\(`\$\{exp\}\|\$\{pathname\}`\)/.test(readText('server/services/authToken.ts')),
+  '签名不含路径 ⇒ 一个签名可以读任意静态文件，等于没有鉴权');
+check('签名有时效且会校验过期',
+  /STATIC_TTL_MS/.test(readText('server/services/authToken.ts')) &&
+    /Date\.now\(\) > exp/.test(readText('server/services/authToken.ts')),
+  '永不过期的签名 = 长期有效凭据，一旦链接被转发就等同泄露');
+check('签名可替代请求头的路径清单是显式白名单（含 /api/resume/file）',
+  /SIGNED_PATH_PREFIXES/.test(readText('server/services/authToken.ts')) &&
+    /'\/api\/resume\/file'/.test(readText('server/services/authToken.ts')),
+  '漏了 /api/resume/file ⇒ 控制台「预览简历」按钮恒 401');
+check('控制台简历预览用后端签发的 previewUrl（不是自己拼裸路径）',
+  /window\.open\(b\.dataset\.prev/.test(readText('public/console.html')) &&
+    /data-prev="'\+esc\(pv\)/.test(readText('public/console.html')),
+  'window.open 发不出请求头 ⇒ 裸路径在鉴权开启时恒 401');
 // 控制台那条裸 fetch 必须带上令牌，否则「鉴权一开，自动回复就用不了」
 // （而它走的是 GET，正是这次要收紧的对象）。
 check('控制台调 /api/auto-reply/run 时带上令牌头',

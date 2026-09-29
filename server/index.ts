@@ -52,7 +52,7 @@ import { probePlatformHealthCached, summarizeHealth } from "./services/platformH
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
-import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet } from "./services/authToken.js";
+import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isAuthorizedStaticRes, signStaticPath, isConsoleAsset } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
 import { locateByIp } from "./services/geo.js";
@@ -211,12 +211,26 @@ app.use((req, res, next) => {
 // 而且黑名单会随新增路由静默失效，白名单的失败方向才是安全的（新接口默认受保护）。
 // 同时白名单仍挡不住的那类 GET（`/api/auto-reply/run` 等）继续由 `SIDE_EFFECT_GET_PATHS` 兜底。
 // 两份清单都在 `services/authToken.ts`（单一真相源，合约测试直接 import 它）。
+//
+// ⚠️ 除了探活接口，控制台**自己的静态资源**也必须放行（`/`、`/app.ico`、`/manifest.webmanifest`、
+// `/sw.js`、`/pwa-*.png`）。第一版只放行 /api/*，结果 `GET /` 直接 401 —— 控制台连页面都打不开。
+// curl 测 `/api/*` 全「符合预期」，完全看不出这个问题；是**真浏览器**跑一次才暴露的
+// （见 scripts/_console_auth_verify.mts）。放行它们是安全的：全是控制台的 HTML/图标/SW，
+// 不含任何个人信息；而控制台页面本身不带令牌（令牌是服务端注入进 HTML 的），
+// 挡住它等于把钥匙锁在屋里。真正要保护的是 data/ 下的截图与 API 数据，那两处仍在门后。
 const AUTH_ENABLED = isAuthEnabled(HOST);
 if (AUTH_ENABLED) {
   app.use((req, res, next) => {
     const m = String(req.method || '').toUpperCase();
     if (m === 'OPTIONS') return next();
     if (isPublicReadGet(m, String(req.path || ''))) return next();
+    if (isConsoleAsset(m, String(req.path || ''))) return next();
+    // 静态资源（证据截图 / 录制帧 / 定制简历）走 URL 上的短时签名：
+    // 浏览器里 `<img src>`、`<a href>`、`window.open` 都**无法附加请求头**，
+    // 只认请求头就会让控制台里那些图全变裂图（`onerror` 还会把它们隐藏掉，
+    // 用户看到的是「证据没了」而不是报错，更难查）。
+    // 签名只授权**这一个路径**且短时有效，比把它们整体放开安全得多。
+    if (isAuthorizedStaticRes(req)) return next();
     if (isAuthorizedStrict(req)) return next();
     res.status(401).json({ error: '缺少或无效的访问令牌（请在请求头带 X-Auth-Token，令牌见 data/.auth_token）' });
   });
@@ -1546,8 +1560,10 @@ app.get("/api/apply/evidence", (_req, res) => {
       platform: a.platform,
       company: a.company,
       position: a.position,
-      evidence_path: a.evidence_path,
-      video_path: a.video_path || null,
+      // 前端用 `<img src>` 渲染（发不出请求头），所以这里直接给**已签名**的路径。
+      // 让签名逻辑只存在于服务端，控制台不需要知道有这回事。
+      evidence_path: a.evidence_path ? signStaticPath(a.evidence_path) : a.evidence_path,
+      video_path: a.video_path ? signStaticPath(a.video_path) : null,
       strategy: a.strategy || null,
       status: a.status,
       created_at: a.created_at,
@@ -1620,7 +1636,12 @@ app.get("/api/apply/record", async (req, res) => {
       seconds: Number(req.query.seconds) || 8,
       intervalMs: Number(req.query.intervalMs) || 1200,
     });
-    res.json(r);
+    // 前端用 `<img src>` / `<a href>` 展示这些帧（发不出请求头）⇒ 路径要先签名
+    res.json({
+      ...r,
+      dir: r.dir ? signStaticPath(r.dir) : r.dir,
+      frames: (r.frames || []).map((f: string) => signStaticPath(f)),
+    });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || '录制失败' });
   }
@@ -1744,7 +1765,16 @@ app.get("/api/resume/current", (_req, res) => {
   const build = (ver: string) => {
     const target = resFileFor(ver);
     const m = meta[ver];
-    return { exists: fs.existsSync(target), size: fs.existsSync(target) ? fs.statSync(target).size : 0, fileName: m && m.fileName, uploadedAt: m && m.uploadedAt, url: '/api/resume/file?version=' + ver };
+    // url      = 裸路径，小程序用它 + `X-Auth-Token` 头（downloadFile 支持自定义头）；
+    // previewUrl = 带短时签名，专供控制台 `window.open`（新标签页发不出请求头）。
+    return {
+      exists: fs.existsSync(target),
+      size: fs.existsSync(target) ? fs.statSync(target).size : 0,
+      fileName: m && m.fileName,
+      uploadedAt: m && m.uploadedAt,
+      url: '/api/resume/file?version=' + ver,
+      previewUrl: signStaticPath('/api/resume/file?version=' + ver),
+    };
   };
   res.json({ status: resumeVersionStatus(), original: build('original'), optimized: build('optimized') });
 });

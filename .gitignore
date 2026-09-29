@@ -115,6 +115,16 @@ scripts/*_tmp*.ts
 # 唯一可信判据是起个 HOST=0.0.0.0 的真服务、用不带令牌的请求去读。
 !scripts/_auth_leak_verify.mts
 
+# 浏览器级回归：控制台在收紧鉴权后是否还能用。
+# 必须存在，因为这次的坑**只有真浏览器能看见**：
+#   - 第一版只放行 /api/*，`GET /` 直接 401 ⇒ 控制台白屏；
+#     而 curl 测 /api/* 全部「符合预期」，完全看不出来。
+#   - `<img src>` / `window.open` 发不出请求头，fetch 能带令牌**恰恰证明不了它们没坏**
+#     （我第一次就是这么漏的：接口全绿，页面里的图其实已经全裂了）。
+!scripts/_console_auth_verify.mts
+!scripts/_static_auth_verify.mts
+!scripts/_img_path_verify.mts
+
 # ── 编辑器 / 系统文件 ─────────────────────────────────
 .vscode/
 .idea/

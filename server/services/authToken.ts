@@ -104,6 +104,40 @@ export function isPublicReadGet(method: string, pathname: string): boolean {
   return PUBLIC_READ_GET_PATHS.includes(p);
 }
 
+/**
+ * 控制台**前端自身**的资源 —— 必须匿名可达，否则连页面都打不开。
+ *
+ * 第一版只放行了 /api/*，结果 `GET /` 直接 401：控制台白屏，而 curl 测 /api/*
+ * 全部「符合预期」，完全看不出来 —— 是**真浏览器**跑一次才暴露的。
+ *
+ * 为什么安全：这里全是控制台的 HTML 与图标（`public/` 下的东西），不含任何个人信息。
+ * 且控制台**页面本身不带令牌**（令牌由服务端在 `/` 路由注入进 HTML），
+ * 把它们挡在门外等于「把钥匙锁在屋里」。
+ *
+ * ⚠️ 刻意**不使用** `express.static` 的实际目录做来源，而是显式列清单 ——
+ * 因为 `public/` 哪天多放了一个含数据的文件（比如导出的 CSV），
+ * 显式清单不会自动把它带出去，而按目录放行会。
+ */
+const CONSOLE_ASSETS = new Set([
+  '/',
+  '/console.html',
+  '/manifest.webmanifest',
+  '/sw.js',
+  '/app.ico',
+  '/favicon.ico',
+  '/apple-touch-icon.png',
+  '/pwa-192.png',
+  '/pwa-512.png',
+  '/pwa-maskable-512.png',
+]);
+
+/** 是否是控制台前端自身资源（只有读方法、无副作用） */
+export function isConsoleAsset(method: string, pathname: string): boolean {
+  const m = String(method || '').toUpperCase();
+  if (m !== 'GET' && m !== 'HEAD') return false;
+  return CONSOLE_ASSETS.has(String(pathname || ''));
+}
+
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 
 /** 是否启用鉴权：显式 env 优先；否则「非回环监听」即自动启用 */
@@ -141,4 +175,76 @@ export function safeEqual(a: string, b: string): boolean {
 /** 请求是否携带正确令牌（常量时间比较版本） */
 export function isAuthorizedStrict(req: any): boolean {
   return safeEqual(extractToken(req), getAuthToken());
+}
+
+/**
+ * 静态资源的短时签名 —— 解决「浏览器取图片发不出请求头」。
+ * ==========================================================================
+ * 问题：`<img src="/data/evidence/x.png">`、`<a href=... target="_blank">`、
+ * `window.open(...)` 都**无法附加 `X-Auth-Token`**。鉴权一收紧，控制台里
+ * 证据截图与录制帧就全变 401 ⇒ 裂图（还被 `onerror` 隐藏，用户只看到「证据没了」）。
+ *
+ * 方案：把「授权」放进 URL —— `?t=<exp>.<sig>`，其中
+ *   sig = HMAC_SHA256(token, "<exp>|<path>")
+ * 这样：
+ *   - 签名**绑定具体路径** ⇒ 拿到 A 图的链接不能用来读 B 图（防横向扩散）；
+ *   - 有**有效期**（默认 1 小时）⇒ 链接被复制出去也不会长期有效；
+ *   - 密钥就是 `data/.auth_token` ⇒ 不引入新的密钥管理。
+ *
+ * 为什么不用「把 static 目录整体放行」：那些目录里就是投递证据截图与简历，
+ * 恰恰是最该挡住的东西；放行等于把刚堵上的隐私缺口换个门再开一次。
+ */
+/**
+ * 允许用 URL 签名替代请求头的路径（**精确前缀**，不要放宽成通配）。
+ *  - `/data/evidence/`、`/data/screenshots/`、`/data/resume_tailored/`：控制台用 `<img src>` 渲染
+ *  - `/api/resume/file`：控制台用 `window.open` 在新标签页预览简历 PDF
+ * 这些是**下载/展示型**端点，不是 JSON API；把授权放进 URL 是它们唯一的可行做法。
+ */
+const SIGNED_PATH_PREFIXES = [
+  '/data/evidence/',
+  '/data/screenshots/',
+  '/data/resume_tailored/',
+  '/api/resume/file',
+];
+const STATIC_TTL_MS = 60 * 60 * 1000; // 1 小时
+
+function staticSig(exp: number, pathname: string): string {
+  return crypto.createHmac('sha256', getAuthToken()).update(`${exp}|${pathname}`).digest('hex');
+}
+
+/**
+ * 为某个路径生成带签名的 URL。
+ * 注意 `pathname` 必须**不含** query（`/api/resume/file?version=original` 会先被拆开，
+ * 只对 path 部分签名），否则签出来的串与校验时用的 `req.path` 对不上。
+ */
+export function signStaticPath(rawPath: string, ttlMs: number = STATIC_TTL_MS): string {
+  const s = String(rawPath || '');
+  if (!s) return s;
+  const q = s.indexOf('?');
+  const pathname = q >= 0 ? s.slice(0, q) : s;
+  const query = q >= 0 ? s.slice(q + 1) : '';
+  const exp = Date.now() + Math.max(1000, ttlMs);
+  const sig = `${exp}.${staticSig(exp, pathname)}`;
+  return query ? `${pathname}?${query}&t=${sig}` : `${pathname}?t=${sig}`;
+}
+
+/** 校验静态资源的签名（路径必须命中白名单前缀，签名必须匹配且未过期） */
+export function isAuthorizedStaticRes(req: any): boolean {
+  const m = String((req && req.method) || '').toUpperCase();
+  if (m !== 'GET' && m !== 'HEAD') return false;
+  const p = String((req && req.path) || '');
+  // 目录前缀（以 / 结尾）用 startsWith；具体端点（如 /api/resume/file）用相等或带子路径
+  const allowed = SIGNED_PATH_PREFIXES.some((prefix) =>
+    prefix.endsWith('/') ? p.startsWith(prefix) : (p === prefix || p.startsWith(prefix + '/')),
+  );
+  if (!allowed) return false;
+
+  const raw = String((req && req.query && req.query.t) || '');
+  const dot = raw.indexOf('.');
+  if (dot <= 0) return false;
+  const exp = Number(raw.slice(0, dot));
+  const sig = raw.slice(dot + 1);
+  if (!Number.isFinite(exp) || exp <= 0) return false;
+  if (Date.now() > exp) return false;
+  return safeEqual(sig, staticSig(exp, p));
 }
