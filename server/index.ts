@@ -51,7 +51,7 @@ import { probePlatformHealthCached, summarizeHealth } from "./services/platformH
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, checkRequestOrigin } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
-import { getAuthToken, isAuthEnabled, isAuthorizedStrict } from "./services/authToken.js";
+import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
 import { locateByIp } from "./services/geo.js";
@@ -163,13 +163,26 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── 访问令牌（可选鉴权）：仅写方法校验 ──
+// ── 访问令牌（可选鉴权）──
 // 默认 HOST=127.0.0.1（回环）时关闭 → 本机自用零影响；
 // 一旦暴露到局域网（HOST=0.0.0.0）自动开启，或显式 REQUIRE_AUTH=1 强制开启。
+//
+// 带真实副作用的 GET：鉴权开启时**同样要令牌**（2026-09-29 补）。
+// 原本只拦写方法，理由是 GET 一般是只读的 —— 但下面这几个不是：
+// `GET /api/auto-reply/run?realSend=1` 会真的替你给 HR 发消息。
+// 而 GET 是「简单请求」：不触发 CORS 预检、curl 直连也不带 Origin，
+// requestGuard（那个是挡跨站浏览器页面的）拦不到它。
+// 于是非回环暴露时，任何能连到端口的人都能无令牌触发真实副作用。
+// 只读的 SSE（`/api/auto-apply/watch`）**不在**此列：它只订阅事件，不启动任何东西
+// （顺带避开 EventSource 无法自定义请求头的问题）。
+// 清单本身在 `services/authToken.ts`（单一真相源，合约测试直接 import 它）。
 const AUTH_ENABLED = isAuthEnabled(HOST);
 if (AUTH_ENABLED) {
   app.use((req, res, next) => {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    const m = String(req.method || '').toUpperCase();
+    if (m === 'OPTIONS') return next();
+    const readOnly = (m === 'GET' || m === 'HEAD') && !SIDE_EFFECT_GET_PATHS.includes(String(req.path || ''));
+    if (readOnly) return next();
     if (isAuthorizedStrict(req)) return next();
     res.status(401).json({ error: '缺少或无效的访问令牌（请在请求头带 X-Auth-Token，令牌见 data/.auth_token）' });
   });

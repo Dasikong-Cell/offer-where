@@ -1582,7 +1582,9 @@ $('#replyRun').addEventListener('click', async ()=>{
   const NL = String.fromCharCode(10);
   let sent=0, skipped=0, total=0;
   try{
-    const resp=await fetch(url);
+    // 鉴权开启时这条也要带令牌：它是 GET，但 realSend=1 会真的发消息，
+    // 而服务端已把它列进「带副作用的 GET」（裸 fetch 默认不带任何头）。
+    const resp=await fetch(url, {headers:authHeaders()});
     if(!resp.ok||!resp.body){ const t=await resp.text().catch(()=>''); out.textContent=t||('HTTP '+resp.status); $('#replyStatus').textContent='失败'; return; }
     const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
     while(true){

@@ -9,8 +9,9 @@
  *  - 开关：`REQUIRE_AUTH=1` 强制开、`=0` 强制关；未设时**仅当监听地址非回环**才自动开。
  *    → 默认 HOST=127.0.0.1 时鉴权关闭，控制台/脚本行为完全不变。
  *  - 令牌：`data/.auth_token`（首次启动自动生成 48 位 hex；data/ 已 gitignore）。
- *  - 校验：**仅写方法**（POST/PUT/PATCH/DELETE）要求 `X-Auth-Token`（或 `Authorization: Bearer`）。
- *    只读方法（GET/HEAD/OPTIONS）不校验（无副作用，保留探活便利）。
+ *  - 校验：写方法（POST/PUT/PATCH/DELETE）要求 `X-Auth-Token`（或 `Authorization: Bearer`）；
+ *    **外加 `SIDE_EFFECT_GET_PATHS` 里那些"带真实副作用的 GET"**（2026-09-29 补）。
+ *    其余只读 GET/HEAD/OPTIONS 不校验（无副作用，保留探活便利）。
  *  - 分发：控制台由服务端把令牌注入页面（同源，外部站点读不到）；
  *    同机脚本用 `scripts/lib/apiAuth.ts` 从同一文件读取。
  */
@@ -43,6 +44,23 @@ export function getAuthToken(): string {
     return cached;
   }
 }
+
+/**
+ * 带真实副作用的 GET —— 鉴权开启时**同样要求令牌**。
+ *
+ * 为什么要单独列：GET 是「简单请求」，不触发 CORS 预检，curl 直连也不带 `Origin`，
+ * requestGuard（那个只挡浏览器里的跨站页面）根本看不见它。而 `?realSend=1` 这种
+ * 参数一旦被外人触发，就是"替你给 HR 发消息"——不可撤销。
+ *
+ * 判据是「这个 GET 会不会改变外部世界」，不是「它叫什么」：
+ *  - `/api/auto-reply/run`：`realSend=1` 真的发消息 / 发信。
+ *  - `/api/apply/record`：驱动浏览器抽帧存证（外部可观测的动作）。
+ *  - **不**含 `/api/auto-apply/watch`：它只订阅事件推 SSE，不启动任何东西
+ *    （顺带避开 EventSource 无法自定义请求头这个问题）。
+ *
+ * 新增带副作用的 GET 时必须同步这里；合约测试会钉住这份清单非空且被服务端引用。
+ */
+export const SIDE_EFFECT_GET_PATHS = ['/api/auto-reply/run', '/api/apply/record'];
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 

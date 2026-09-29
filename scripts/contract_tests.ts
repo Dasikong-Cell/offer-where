@@ -25,7 +25,7 @@ import {
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins } from '../server/services/requestGuard.js';
-import { extractToken, safeEqual, isAuthEnabled } from '../server/services/authToken.js';
+import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS } from '../server/services/authToken.js';
 import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
 import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
 import { computeAbReport } from '../server/services/apply/applyAbTest.js';
@@ -56,6 +56,10 @@ import { collectBatFiles, inspectBatFile } from './bat_encoding.js';
 
 let pass = 0, fail = 0;
 const fails: string[] = [];
+// 模块级项目根 + 文本读取助手：所有把「仓库相对路径」当入参的断言都依赖它，
+// 必须在顶层定义（原第 1448 行的局部定义让 A2 段的顶层调用取不到它 → 崩溃）。
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const readText = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 function check(name: string, ok: boolean, detail = '') {
   ok ? pass++ : fail++;
   if (!ok) fails.push(name);
@@ -153,6 +157,24 @@ check('提取 Authorization: Bearer', extractToken({ headers: { authorization: '
 check('空请求头得到空令牌', extractToken({ headers: {} }) === '');
 check('常量时间比较：相等为真', safeEqual('tok123', 'tok123'));
 check('常量时间比较：不等为假', !safeEqual('tok123', 'tok124') && !safeEqual('tok123', 'tok1234'));
+// ── 带副作用的 GET 也要令牌（2026-09-29 补的缺口）────────────────────────────
+// 缺口形状：鉴权原本只拦写方法，而 `GET /api/auto-reply/run?realSend=1` 会真的发消息。
+// GET 是简单请求（无 CORS 预检）、curl 直连也不带 Origin ⇒ requestGuard 看不见它
+// ⇒ 非回环暴露时，任何能连到端口的人都能无令牌触发不可撤销的副作用。
+const idxSrc = readText('server/index.ts');
+check('带副作用的 GET 也要令牌（不是只拦写方法）',
+  SIDE_EFFECT_GET_PATHS.length > 0 && SIDE_EFFECT_GET_PATHS.includes('/api/auto-reply/run') &&
+    /SIDE_EFFECT_GET_PATHS\.includes\(/.test(idxSrc) && /const readOnly = \(m === 'GET' \|\| m === 'HEAD'\)/.test(idxSrc),
+  '只拦写方法 ⇒ ?realSend=1 这类 GET 无需令牌即可替用户发消息');
+check('该清单来自单一真相源（服务端 import，不在 index.ts 里另抄一份）',
+  /import \{[^}]*SIDE_EFFECT_GET_PATHS[^}]*\} from "\.\/services\/authToken\.js"/.test(idxSrc) &&
+    !/const SIDE_EFFECT_GET_PATHS\s*=/.test(idxSrc),
+  '两处各写一份 ⇒ 以后加新路由只改一处，另一处静默漏掉');
+// 控制台那条裸 fetch 必须带上令牌，否则「鉴权一开，自动回复就用不了」
+// （而它走的是 GET，正是这次要收紧的对象）。
+check('控制台调 /api/auto-reply/run 时带上令牌头',
+  /fetch\(url,\s*\{headers:\s*authHeaders\(\)\}\)/.test(readText('public/console.html')),
+  '裸 fetch 不带 X-Auth-Token ⇒ 鉴权开启后自动回复恒 401，用户会以为是登录态坏了');
 
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ A3. 回复话术的「事实边界」兜底（防编造个人信息） ══════');
@@ -1426,8 +1448,6 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
 //      `dist-app\offer-where.exe` ⇒ 条件**恒假**，桌面入口永远退回 start_all.bat：
 //      用户点完「安装」拿到的仍是黑框 + Chrome --app，原生外壳一次都没被用上。
 {
-  const ROOT = fileURLToPath(new URL('..', import.meta.url));
-  const readText = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
   const pack = readText('pack.ps1');
 
   // ── ① $must 必须钉住首跑安装脚本 ──────────────────────────────────
