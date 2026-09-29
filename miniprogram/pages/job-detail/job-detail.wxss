@@ -1,0 +1,108 @@
+.detail-title {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #1f2733;
+  flex: 1;
+  margin-right: 16rpx;
+}
+
+.detail-company {
+  font-size: 27rpx;
+  color: #6b7484;
+  margin-top: 10rpx;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 22rpx;
+}
+
+.tag {
+  font-size: 23rpx;
+  color: #6b7484;
+  background: #f7f8fa;
+  padding: 6rpx 18rpx;
+  border-radius: 8rpx;
+}
+
+.tag-brand {
+  background: #fff1ea;
+  color: #ff5e3a;
+}
+
+.jd-flag {
+  font-size: 22rpx;
+  color: #e8941a;
+  margin-left: 12rpx;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24rpx;
+  padding: 18rpx 0;
+  font-size: 26rpx;
+  border-bottom: 1rpx solid #eef1f5;
+}
+
+.kv:last-child { border-bottom: none; }
+.kv .k { color: #9aa3b2; flex: none; }
+.kv .v { color: #1f2733; text-align: right; flex: 1; }
+
+.kv .v.multiline {
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 25rpx;
+  line-height: 1.6;
+}
+
+/* ── JD 折叠：移动端读长文的标准做法 ─────────────────────────────────────── */
+.jd {
+  font-size: 26rpx;
+  color: #3d4653;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.jd-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  overflow: hidden;
+}
+
+.jd-actions {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 18rpx;
+}
+
+.jd-toggle {
+  flex: 1;
+  text-align: center;
+  font-size: 26rpx;
+  color: #3b7ef0;
+  padding: 14rpx 0;
+  background: #f7f8fa;
+  border-radius: 14rpx;
+}
+
+.err-text {
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: #e5484d;
+}
+
+.actions {
+  display: flex;
+  gap: 20rpx;
+}
+
+.actions .btn { flex: 1; }
+
+.mt24 { margin-top: 28rpx; }

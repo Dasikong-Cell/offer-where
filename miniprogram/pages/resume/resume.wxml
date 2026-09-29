@@ -1,0 +1,85 @@
+<view class="page">
+
+  <view class="card" wx:if="{{!configured}}">
+    <view class="card-title">还没连上后端</view>
+    <view class="card-sub">先填后端地址再查看简历。</view>
+    <button class="btn btn-primary wide" bindtap="goConnect">去连接后端</button>
+  </view>
+
+  <block wx:else>
+
+    <view class="loading" wx:if="{{loading}}">正在读取…</view>
+
+    <view class="card err-card" wx:elif="{{error}}">
+      <view class="card-title">读取失败</view>
+      <view class="err-text">{{error}}</view>
+      <button class="btn btn-primary wide" bindtap="refresh">重试</button>
+    </view>
+
+    <block wx:else>
+
+      <!-- 当前状态 -->
+      <view class="card hero">
+        <view class="row-between">
+          <view class="card-title">简历状态</view>
+          <view class="badge {{status === 'ready' ? 'badge-ok' : 'badge-warn'}}">
+            {{status === 'ready' ? '已就绪' : (status || '未知')}}
+          </view>
+        </view>
+        <view class="card-sub">小程序端只读。上传、解析、合规检查请在电脑控制台操作。</view>
+      </view>
+
+      <!-- 原始简历 -->
+      <view class="section-title">原始简历</view>
+      <view class="card version-card">
+        <view class="row-between">
+          <view class="ver-name">{{original.name}}</view>
+          <view class="badge {{original.exists ? 'badge-ok' : 'badge-muted'}}">
+            {{original.exists ? '存在' : '缺失'}}
+          </view>
+        </view>
+        <view class="ver-meta tiny muted2" wx:if="{{original.exists}}">
+          {{original.sizeText}} · {{original.timeText}}
+        </view>
+        <view class="ver-meta tiny muted2" wx:else>{{original.meta}}</view>
+
+        <view class="ver-actions" wx:if="{{original.exists}}">
+          <button class="btn small-btn" data-version="original" bindtap="onVersionTap">复制链接</button>
+          <button class="btn small-btn" data-version="original" bindtap="openNative">小程序内打开</button>
+        </view>
+      </view>
+
+      <!-- 优化简历 -->
+      <view class="section-title">定向优化版</view>
+      <view class="card version-card">
+        <view class="row-between">
+          <view class="ver-name">{{optimized.name}}</view>
+          <view class="badge {{optimized.exists ? 'badge-ok' : 'badge-muted'}}">
+            {{optimized.exists ? '存在' : '缺失'}}
+          </view>
+        </view>
+        <view class="ver-meta tiny muted2" wx:if="{{optimized.exists}}">
+          {{optimized.sizeText}} · {{optimized.timeText}}
+        </view>
+        <view class="ver-meta tiny muted2" wx:else>{{optimized.meta}}</view>
+
+        <view class="ver-actions" wx:if="{{optimized.exists}}">
+          <button class="btn small-btn" data-version="optimized" bindtap="onVersionTap">复制链接</button>
+          <button class="btn small-btn" data-version="optimized" bindtap="openNative">小程序内打开</button>
+        </view>
+      </view>
+
+      <!-- 说明 -->
+      <view class="section-title">说明</view>
+      <view class="card">
+        <view class="note-item">「复制链接」得到的是后端地址，需在**能访问该后端**的浏览器里打开（通常是电脑）。</view>
+        <view class="note-item">「小程序内打开」依赖微信的合法域名白名单。真机使用需在微信公众平台配置 downloadFile 合法域名，且必须是 HTTPS。</view>
+        <view class="note-item">简历涉及个人信息，链接不要转发给他人；后端开启了令牌鉴权时，链接同样需要令牌才能下载。</view>
+      </view>
+
+      <button class="btn btn-primary wide mt24" bindtap="refresh">刷新</button>
+
+    </block>
+  </block>
+
+</view>

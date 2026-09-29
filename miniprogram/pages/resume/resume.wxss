@@ -1,0 +1,52 @@
+.hero { padding-bottom: 24rpx; }
+
+.version-card { }
+
+.ver-name {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #1f2733;
+  flex: 1;
+  margin-right: 16rpx;
+}
+
+.ver-meta {
+  margin-top: 10rpx;
+}
+
+.ver-actions {
+  display: flex;
+  gap: 18rpx;
+  margin-top: 22rpx;
+}
+
+.small-btn {
+  flex: 1;
+  height: 68rpx;
+  line-height: 68rpx;
+  font-size: 26rpx;
+  border-radius: 16rpx;
+}
+
+.note-item {
+  font-size: 25rpx;
+  color: #6b7484;
+  line-height: 1.7;
+  padding: 8rpx 0;
+}
+
+.err-card { border-color: #f6c9ca; }
+
+.err-text {
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: #e5484d;
+  line-height: 1.6;
+}
+
+.btn.wide {
+  margin-top: 28rpx;
+  width: 100%;
+}
+
+.mt24 { margin-top: 28rpx; }

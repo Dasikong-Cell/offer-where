@@ -1,0 +1,193 @@
+/**
+ * 全局样式。
+ *
+ * 配色与圆角**直接照抄** public/console.html 的 :root 设计令牌，
+ * 这样控制台与小程序是同一套视觉语言；app.ico / manifest.theme_color
+ * 用的也是这里的 --brand（#ff7a45），三处同源。
+ *
+ * 小程序没有 CSS 变量在 wxss 里跨文件继承的完备支持（uni-app 之外），
+ * 所以这里只做「一份文档 + 逐处写字面值」，并在注释里标出对应令牌名。
+ */
+
+page {
+  /* --bg */
+  background: #f4f5f8;
+  /* --ink */
+  color: #1f2733;
+  font-size: 28rpx;
+  line-height: 1.55;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+view, text, button, input, textarea {
+  box-sizing: border-box;
+}
+
+/* ── 卡片：对应控制台 .card（--card / --line / --r / --shadow）──────────────
+   ⚠️ 微信小程序**不支持 box-shadow 的多重阴影**写法里的 rgba 过渡，
+   但支持单层；这里保留一层，观感足够且渲染成本低。 */
+.card {
+  background: #ffffff;
+  border: 1rpx solid #e8ebf0;
+  border-radius: 28rpx;
+  padding: 28rpx;
+  box-shadow: 0 2rpx 12rpx rgba(20, 30, 50, 0.05);
+}
+
+.card + .card {
+  margin-top: 24rpx;
+}
+
+.card-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #1f2733;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-sub {
+  font-size: 24rpx;
+  color: #9aa3b2;
+  margin-top: 6rpx;
+}
+
+/* ── 区块标题 ───────────────────────────────────────────────────────────── */
+.section-title {
+  font-size: 26rpx;
+  color: #9aa3b2;
+  margin: 32rpx 8rpx 16rpx;
+  letter-spacing: 1rpx;
+}
+
+/* ── 页面容器：给 tabBar 留底部安全区 ───────────────────────────────────── */
+.page {
+  min-height: 100vh;
+  padding: 24rpx 24rpx calc(40rpx + env(safe-area-inset-bottom));
+}
+
+/* ── 指标数字 ───────────────────────────────────────────────────────────── */
+.metric {
+  flex: 1;
+  text-align: center;
+}
+
+.metric-num {
+  font-size: 44rpx;
+  font-weight: 700;
+  color: #1f2733;
+  line-height: 1.2;
+}
+
+.metric-num.brand { color: #ff7a45; }
+.metric-num.ok { color: #1fab66; }
+.metric-num.warn { color: #e8941a; }
+.metric-num.bad { color: #e5484d; }
+.metric-num.info { color: #3b7ef0; }
+
+.metric-label {
+  font-size: 22rpx;
+  color: #9aa3b2;
+  margin-top: 6rpx;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ── 徽标：对应控制台的状态色（--ok/--warn/--bad/--info 及其 soft 底）─── */
+.badge {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 999rpx;
+  line-height: 1.5;
+}
+
+.badge-ok { background: #e8f7ef; color: #1fab66; }
+.badge-warn { background: #fdf3e3; color: #e8941a; }
+.badge-bad { background: #fdecec; color: #e5484d; }
+.badge-info { background: #eaf1fe; color: #3b7ef0; }
+.badge-muted { background: #eef1f5; color: #6b7484; }
+
+/* ── 按钮 ───────────────────────────────────────────────────────────────── */
+.btn {
+  border-radius: 20rpx;
+  font-size: 28rpx;
+  padding: 0 32rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  text-align: center;
+  background: #ffffff;
+  color: #1f2733;
+  border: 1rpx solid #e8ebf0;
+}
+
+.btn::after { border: none; }
+
+.btn-primary {
+  background: #ff7a45;
+  color: #ffffff;
+  border-color: #ff7a45;
+}
+
+.btn-primary[disabled] {
+  background: #ffc4a8;
+  border-color: #ffc4a8;
+  color: #ffffff;
+}
+
+.btn-ghost {
+  background: #fff1ea;
+  color: #ff5e3a;
+  border-color: #fff1ea;
+}
+
+/* ── 空态 / 加载 ─────────────────────────────────────────────────────────── */
+.empty {
+  padding: 80rpx 24rpx;
+  text-align: center;
+  color: #9aa3b2;
+  font-size: 26rpx;
+}
+
+.empty-title {
+  font-size: 30rpx;
+  color: #6b7484;
+  margin-bottom: 12rpx;
+}
+
+.loading {
+  padding: 60rpx 0;
+  text-align: center;
+  color: #9aa3b2;
+  font-size: 26rpx;
+}
+
+/* ── 列表行 ─────────────────────────────────────────────────────────────── */
+.list-item {
+  padding: 24rpx 0;
+  border-bottom: 1rpx solid #eef1f5;
+}
+
+.list-item:last-child {
+  border-bottom: none;
+}
+
+.title-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted { color: #6b7484; }
+.muted2 { color: #9aa3b2; }
+.small { font-size: 24rpx; }
+.tiny { font-size: 22rpx; }

@@ -1,0 +1,95 @@
+<view class="page">
+
+  <view class="card">
+    <view class="card-title">连接后端</view>
+    <view class="card-sub">小程序需要一个正在运行的后端才能工作。填一次，之后自动记住。</view>
+  </view>
+
+  <!-- 后端地址 -->
+  <view class="section-title">后端地址</view>
+  <view class="card">
+    <input class="input" type="text" placeholder="http://192.168.1.5:4400"
+           value="{{baseUrl}}" bindinput="onUrlInput" confirm-type="done" />
+    <view class="field-hint">
+      在电脑上运行 <text class="mono">start_lan.bat</text>，窗口里会打印手机/小程序要用的地址。
+      只填 <text class="mono">IP:端口</text> 也可以，会自动补上 http://。
+    </view>
+
+    <block wx:if="{{lanUrls.length > 0}}">
+      <view class="field-hint strong">后端报告的本机地址（点一下填入）：</view>
+      <view class="url-chip" wx:for="{{lanUrls}}" wx:key="*this"
+            data-url="{{item}}" bindtap="onPickLanUrl">{{item}}</view>
+    </block>
+  </view>
+
+  <!-- 访问令牌 -->
+  <view class="section-title">访问令牌（选填）</view>
+  <view class="card">
+    <view class="token-line">
+      <input class="input flex1" type="text" password="{{!tokenVisible}}"
+             placeholder="粘贴 data/.auth_token 里的 48 位字符"
+             value="{{token}}" bindinput="onTokenInput" confirm-type="done" />
+      <view class="eye" bindtap="toggleTokenVisible">{{tokenVisible ? '隐藏' : '显示'}}</view>
+    </view>
+    <view class="field-hint">
+      后端以局域网方式启动时会自动开启令牌鉴权。令牌在**运行后端那台电脑**的文件
+      <text class="mono">data/.auth_token</text> 里，用记事本打开复制即可。
+      只在本机回环地址下测试时通常不需要填。
+    </view>
+  </view>
+
+  <!-- 测试 -->
+  <view class="actions">
+    <button class="btn btn-primary" bindtap="test" loading="{{testing}}" disabled="{{testing}}">
+      {{testing ? '测试中…' : '测试连接'}}
+    </button>
+    <button class="btn" bindtap="onReset">清除配置</button>
+  </view>
+
+  <!-- 结果 -->
+  <block wx:if="{{result}}">
+    <view class="card result {{result.ok ? 'result-ok' : 'result-bad'}}">
+      <view class="row-between">
+        <view class="card-title">{{result.ok ? '连接成功' : '连接失败'}}</view>
+        <view class="badge {{result.ok ? 'badge-ok' : 'badge-bad'}}">{{result.ok ? 'OK' : '失败'}}</view>
+      </view>
+
+      <block wx:if="{{result.ok}}">
+        <view class="kv" wx:if="{{version}}">
+          <text class="k">后端版本</text>
+          <text class="v">{{version.version}} · {{version.commit}}</text>
+        </view>
+        <view class="kv">
+          <text class="k">已运行</text>
+          <text class="v">{{result.uptimeMs}} ms</text>
+        </view>
+        <view class="kv" wx:if="{{result.exposed}}">
+          <text class="k">局域网暴露</text>
+          <text class="v">已开启</text>
+        </view>
+
+        <view class="warn-box" wx:if="{{result.tokenMissing}}">
+          后端已开启令牌鉴权，但你还没填令牌。此时查看类页面可用，但**写操作会返回 401**。
+          请把 data/.auth_token 的内容填到上面。
+        </view>
+
+        <button class="btn btn-ghost wide" bindtap="goDashboard">进入看板</button>
+      </block>
+
+      <block wx:else>
+        <view class="err-text">{{result.error}}</view>
+      </block>
+    </view>
+  </block>
+
+  <!-- 排查提示 -->
+  <view class="section-title">连不上？按顺序检查</view>
+  <view class="card">
+    <view class="check-item">1. 电脑上的后端是否在运行（控制台能打开就说明在跑）。</view>
+    <view class="check-item">2. 手机与电脑是否连的同一个 Wi-Fi（不要一个连热点一个连宽带）。</view>
+    <view class="check-item">3. 地址里的 IP 是否电脑的局域网 IP，而不是 127.0.0.1。</view>
+    <view class="check-item">4. 开发者工具里是否勾了「不校验合法域名」（见 README）。</view>
+    <view class="check-item">5. 电脑防火墙是否放行了 4400 端口。</view>
+  </view>
+
+</view>

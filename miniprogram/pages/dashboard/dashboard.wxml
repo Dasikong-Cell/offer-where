@@ -1,0 +1,170 @@
+<view class="page">
+
+  <!-- 未配置后端 -->
+  <view class="card" wx:if="{{!configured}}">
+    <view class="card-title">还没连上后端</view>
+    <view class="card-sub">先填后端地址，之后所有页面才能取到数据。</view>
+    <button class="btn btn-primary wide" bindtap="goConnect">去连接后端</button>
+  </view>
+
+  <block wx:else>
+
+    <!-- 加载 -->
+    <view class="loading" wx:if="{{loading}}">正在读取…</view>
+
+    <!-- 错误 -->
+    <view class="card err-card" wx:elif="{{error}}">
+      <view class="card-title">读取失败</view>
+      <view class="err-text">{{error}}</view>
+      <view class="actions">
+        <button class="btn btn-primary" bindtap="refresh">重试</button>
+        <button class="btn" bindtap="goConnect">检查连接</button>
+      </view>
+    </view>
+
+    <block wx:else>
+
+      <!-- 顶部：核心数字 -->
+      <view class="card hero">
+        <view class="row-between">
+          <view class="card-title">投递总览</view>
+          <view class="tiny muted2">{{updatedAt}} 更新</view>
+        </view>
+
+        <view class="row metrics">
+          <view class="metric">
+            <view class="metric-num brand">{{funnel.total || 0}}</view>
+            <view class="metric-label">总记录</view>
+          </view>
+          <view class="metric">
+            <view class="metric-num ok">{{funnel.byStatus.applied || 0}}</view>
+            <view class="metric-label">已投递</view>
+          </view>
+          <view class="metric">
+            <view class="metric-num info">{{funnel.byStatus.candidate || 0}}</view>
+            <view class="metric-label">沟通中</view>
+          </view>
+        </view>
+
+        <view class="progress-line" wx:if="{{funnel.appliedRate >= 0}}">
+          <view class="progress-bar">
+            <view class="progress-fill" style="width:{{funnel.appliedRate}}%"></view>
+          </view>
+          <view class="tiny muted2 mt8">投递率 {{funnel.appliedRate}}%</view>
+        </view>
+      </view>
+
+      <!-- 配额与封禁：有封禁必须醒目 -->
+      <view class="card alert-card" wx:if="{{quota && quota.blocked}}">
+        <view class="row-between">
+          <view class="card-title">配额受限</view>
+          <view class="badge badge-bad">已封禁</view>
+        </view>
+        <view class="kv">
+          <text class="k">平台</text>
+          <text class="v">{{quota.platform || '全部'}}</text>
+        </view>
+        <view class="kv" wx:if="{{quota.blockedMinutesLeft}}">
+          <text class="k">预计恢复</text>
+          <text class="v">{{quota.blockedMinutesLeft}} 分钟后</text>
+        </view>
+        <view class="kv" wx:if="{{quota.blockedReason}}">
+          <text class="k">原因</text>
+          <text class="v">{{quota.blockedReason}}</text>
+        </view>
+      </view>
+
+      <view class="card" wx:elif="{{quota}}">
+        <view class="row-between">
+          <view class="card-title">今日配额</view>
+          <view class="badge {{quota.unlimited ? 'badge-ok' : 'badge-info'}}">
+            {{quota.unlimited ? '不限' : (quota.remaining + ' / ' + quota.limit)}}
+          </view>
+        </view>
+        <view class="card-sub" wx:if="{{quota.platform}}">平台：{{quota.platform}} · 已用 {{quota.used}}</view>
+      </view>
+
+      <!-- 近 7 天趋势 -->
+      <view class="card" wx:if="{{trend && trend.items.length}}">
+        <view class="row-between">
+          <view class="card-title">近 {{trend.days}} 天投递</view>
+          <view class="tiny muted2">峰值 {{trend.max}}</view>
+        </view>
+
+        <!-- 纯 SVG 折线，不引图表库；坐标由 js 预计算 -->
+        <view class="chart-wrap">
+          <svg class="chart" viewBox="0 0 300 80" preserveAspectRatio="none">
+            <polyline points="{{trendPoints}}" fill="none" stroke="#ff7a45" stroke-width="2"
+                      stroke-linejoin="round" stroke-linecap="round" />
+          </svg>
+          <!-- 柱状对照：折线看趋势，柱状看单日量，两者叠加更好读 -->
+          <view class="bars">
+            <view class="bar-item" wx:for="{{trend.items}}" wx:key="date">
+              <view class="bar-val tiny muted2" wx:if="{{item.count > 0}}">{{item.count}}</view>
+              <view class="bar-col" style="height:{{item.count / (trend.max || 1) * 100}}%"></view>
+            </view>
+          </view>
+        </view>
+        <view class="row-between mt8">
+          <view class="tiny muted2">{{trendLabels[0]}}</view>
+          <view class="tiny muted2">{{trendLabels[1]}}</view>
+        </view>
+      </view>
+
+      <!-- 状态分布 -->
+      <view class="section-title">状态分布</view>
+      <view class="card">
+        <view class="kv" wx:for="{{statusRows}}" wx:key="key">
+          <text class="k">{{item.label}}</text>
+          <text class="v">{{item.value}}</text>
+        </view>
+        <view class="kv" wx:if="{{funnel.quarantined}}">
+          <text class="k">已隔离</text>
+          <text class="v bad">{{funnel.quarantined}}</text>
+        </view>
+      </view>
+
+      <!-- 来源分布 -->
+      <block wx:if="{{topSources.length}}">
+        <view class="section-title">来源分布</view>
+        <view class="card">
+          <view class="src-row" wx:for="{{topSources}}" wx:key="name">
+            <text class="src-name">{{item.name}}</text>
+            <text class="src-count">{{item.count}}</text>
+          </view>
+        </view>
+      </block>
+
+      <!-- 匹配度 -->
+      <block wx:if="{{funnel.matchScore}}">
+        <view class="section-title">匹配度</view>
+        <view class="card">
+          <view class="kv">
+            <text class="k">已评分</text>
+            <text class="v">{{funnel.matchScore.scored}} / 覆盖率 {{funnel.matchScore.coverage}}%</text>
+          </view>
+          <view class="kv">
+            <text class="k">平均分</text>
+            <text class="v brand">{{funnel.matchScore.avg}}</text>
+          </view>
+          <view class="kv">
+            <text class="k">高分 / 中 / 低</text>
+            <text class="v">{{funnel.matchScore.high}} / {{funnel.matchScore.mid}} / {{funnel.matchScore.low}}</text>
+          </view>
+          <view class="kv">
+            <text class="k">真实 JD 率</text>
+            <text class="v">{{funnel.matchScore.realJdRate}}%</text>
+          </view>
+        </view>
+      </block>
+
+      <!-- 快捷入口 -->
+      <view class="actions mt24">
+        <button class="btn btn-primary" bindtap="goRecords">看职位记录</button>
+        <button class="btn" bindtap="refresh">刷新</button>
+      </view>
+
+    </block>
+  </block>
+
+</view>

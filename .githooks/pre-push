@@ -31,21 +31,31 @@ if [ ! -f node_modules/typescript/bin/tsc ]; then
   exit 0
 fi
 
-echo "▶ pre-push [1/3] 类型检查（tsc -b，含 server/）..."
+echo "▶ pre-push [1/4] 类型检查（tsc -b，含 server/）..."
 if ! "$NODE" node_modules/typescript/bin/tsc -b; then
   echo ""
   echo "❌ 类型检查失败。服务端 tsx 不做类型检查，这里失败 = 构建是坏的，必须修。"
   exit 1
 fi
 
-echo "▶ pre-push [2/3] 控制台内联 JS 语法检查..."
+echo "▶ pre-push [2/4] 控制台内联 JS 语法检查..."
 if ! "$NODE" node_modules/tsx/dist/cli.mjs scripts/check_console_syntax.ts; then
   echo ""
   echo "❌ public/console.html 内联脚本有语法错误（嵌套模板字面量最容易漏括号）。"
   exit 1
 fi
 
-echo "▶ pre-push [3/3] 全仓库 PII 扫描..."
+echo "▶ pre-push [3/4] 小程序静态自检（页面注册/tabBar/路由/事件绑定/模板变量）..."
+# 为什么放在推送前：小程序白屏与「点了没反应」绝大多数是**静态可查**的问题
+# （app.json 里写了不存在的页面、wxml 绑的方法没定义、switchTab 指向非 tabBar 页），
+# 而这类错误在微信开发者工具里只表现为界面不动，靠肉眼很难定位。
+if ! "$NODE" node_modules/tsx/dist/cli.mjs scripts/mp_check.ts; then
+  echo ""
+  echo "❌ 小程序静态自检失败，见上方 ✗ 项。"
+  exit 1
+fi
+
+echo "▶ pre-push [4/4] 全仓库 PII 扫描..."
 # 文件列表由 shell 喂进去（git ls-files 在 node 里 spawn 会 EBUSY，见 scripts/pii_guard.ts 文件头）。
 # core.quotePath=false：否则 CJK 路径会被输出成 "\344\275\277..." 转义，脚本按字面去找必然找不到。
 if ! git -c core.quotePath=false ls-files | "$NODE" node_modules/tsx/dist/cli.mjs scripts/pii_guard.ts --stdin; then

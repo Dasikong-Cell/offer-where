@@ -1,0 +1,52 @@
+{
+  "pages": [
+    "pages/dashboard/dashboard",
+    "pages/records/records",
+    "pages/resume/resume",
+    "pages/logs/logs",
+    "pages/connect/connect",
+    "pages/job-detail/job-detail"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTitleText": "投递 Agent",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f6f8"
+  },
+  "tabBar": {
+    "color": "#8a8f98",
+    "selectedColor": "#ff7a45",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/dashboard/dashboard",
+        "text": "看板",
+        "iconPath": "images/tab-dashboard.png",
+        "selectedIconPath": "images/tab-dashboard-active.png"
+      },
+      {
+        "pagePath": "pages/records/records",
+        "text": "职位",
+        "iconPath": "images/tab-records.png",
+        "selectedIconPath": "images/tab-records-active.png"
+      },
+      {
+        "pagePath": "pages/resume/resume",
+        "text": "简历",
+        "iconPath": "images/tab-resume.png",
+        "selectedIconPath": "images/tab-resume-active.png"
+      },
+      {
+        "pagePath": "pages/logs/logs",
+        "text": "日志",
+        "iconPath": "images/tab-logs.png",
+        "selectedIconPath": "images/tab-logs-active.png"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

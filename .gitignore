@@ -89,6 +89,13 @@ _tmp_*.ts
 scripts/*probe*.ts
 scripts/*_tmp*.ts
 
+# 小程序 ↔ 后端契约实测（**有意入库**，不是一次性探针）。
+# 命名带前导下划线只为表明「不参与 npm test 主流程」，但它必须长期存在：
+# 小程序页面读的是后端原始 snake_case 字段（position / apply_url / match_score），
+# 写错时 wxml 静默渲染空白、静态检查全绿 —— 它第一次跑就抓出了 title vs position。
+# 注意用 ! 放行，否则会被上面的 scripts/*probe*.ts 规则吃掉。
+!scripts/_mp_api_probe.mts
+
 # ── 编辑器 / 系统文件 ─────────────────────────────────
 .vscode/
 .idea/

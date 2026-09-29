@@ -1,0 +1,77 @@
+<view class="page">
+
+  <view class="loading" wx:if="{{loading}}">正在读取…</view>
+
+  <view class="card" wx:elif="{{error}}">
+    <view class="card-title">读取失败</view>
+    <view class="err-text">{{error}}</view>
+  </view>
+
+  <block wx:else>
+    <view class="card">
+      <view class="row-between">
+        <view class="detail-title">{{job.title || '未命名职位'}}</view>
+        <view class="badge {{job.statusCls}}">{{job.statusLabel}}</view>
+      </view>
+      <view class="detail-company">{{job.companyClean || job.company || '未知公司'}}</view>
+
+      <view class="tag-row">
+        <text class="tag" wx:if="{{job.city}}">{{job.city}}</text>
+        <text class="tag" wx:if="{{job.salary}}">{{job.salary}}</text>
+        <text class="tag" wx:if="{{job.source}}">{{job.source}}</text>
+        <text class="tag tag-brand" wx:if="{{job.remote}}">远程</text>
+        <text class="tag" wx:if="{{job.matchScore !== null && job.matchScore !== undefined}}">匹配 {{job.matchScore}}</text>
+      </view>
+
+      <view class="kv">
+        <text class="k">采集时间</text>
+        <text class="v">{{job.timeText || '—'}}</text>
+      </view>
+      <view class="kv" wx:if="{{job.deadline}}">
+        <text class="k">截止日期</text>
+        <text class="v">{{job.deadline}}</text>
+      </view>
+      <view class="kv" wx:if="{{job.jdSource}}">
+        <text class="k">JD 来源</text>
+        <text class="v">{{job.jdSource}}{{job.ocrStatus ? ' · OCR ' + job.ocrStatus : ''}}</text>
+      </view>
+      <view class="kv" wx:if="{{job.quarantined}}">
+        <text class="k">状态</text>
+        <text class="v bad">已隔离（不会投递）</text>
+      </view>
+      <view class="kv" wx:if="{{job.skipReason}}">
+        <text class="k">跳过原因</text>
+        <text class="v">{{job.skipReason}}</text>
+      </view>
+    </view>
+
+    <!-- 岗位要求（后端单独一列，比 JD 正文更短更结构化） -->
+    <block wx:if="{{job.requirements}}">
+      <view class="section-title">岗位要求</view>
+      <view class="card">
+        <view class="jd">{{job.requirements}}</view>
+      </view>
+    </block>
+
+    <!-- JD 正文 -->
+    <block wx:if="{{jdText}}">
+      <view class="section-title">职位描述<text class="jd-flag" wx:if="{{jdCleaned}}">已裁掉公司简介</text></view>
+      <view class="card">
+        <view class="jd {{jdExpanded ? '' : 'jd-collapsed'}}">{{jdText}}</view>
+        <view class="jd-actions">
+          <view class="jd-toggle" wx:if="{{jdLong}}" bindtap="toggleJd">
+            {{jdExpanded ? '收起' : '展开全文'}}
+          </view>
+          <view class="jd-toggle" bindtap="toggleCleanJd">
+            {{jdCleaned ? '恢复原文' : '清理噪音'}}
+          </view>
+        </view>
+      </view>
+    </block>
+
+    <view class="actions mt24">
+      <button class="btn" bindtap="copyUrl">复制职位链接</button>
+    </view>
+  </block>
+
+</view>

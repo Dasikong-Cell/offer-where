@@ -1,0 +1,138 @@
+.search-bar {
+  position: relative;
+  margin-bottom: 20rpx;
+}
+
+.search-input {
+  height: 80rpx;
+  line-height: 80rpx;
+  padding: 0 76rpx 0 26rpx;
+  background: #ffffff;
+  border: 1rpx solid #e8ebf0;
+  border-radius: 999rpx;
+  font-size: 27rpx;
+  color: #1f2733;
+  width: 100%;
+}
+
+.search-clear {
+  position: absolute;
+  right: 10rpx;
+  top: 0;
+  width: 64rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  text-align: center;
+  color: #9aa3b2;
+  font-size: 28rpx;
+}
+
+.filters {
+  white-space: nowrap;
+  margin-bottom: 6rpx;
+}
+
+.filter-chip {
+  display: inline-block;
+  padding: 10rpx 26rpx;
+  margin-right: 14rpx;
+  background: #ffffff;
+  border: 1rpx solid #e8ebf0;
+  border-radius: 999rpx;
+  font-size: 25rpx;
+  color: #6b7484;
+}
+
+.filter-chip.active {
+  background: #fff1ea;
+  border-color: #ffd0bb;
+  color: #ff5e3a;
+}
+
+.count-line {
+  padding: 14rpx 8rpx 6rpx;
+}
+
+/* ── 记录卡片 ───────────────────────────────────────────────────────────── */
+.job-card {
+  background: #ffffff;
+  border: 1rpx solid #e8ebf0;
+  border-radius: 24rpx;
+  padding: 24rpx;
+  margin-bottom: 20rpx;
+}
+
+.job-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 20rpx;
+}
+
+.avatar {
+  width: 76rpx;
+  height: 76rpx;
+  flex: none;
+  border-radius: 20rpx;
+  background: #eef1f5;
+  color: #6b7484;
+  font-size: 32rpx;
+  font-weight: 600;
+  text-align: center;
+  line-height: 76rpx;
+}
+
+.job-head-main {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4rpx;
+}
+
+.job-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #1f2733;
+}
+
+.job-company {
+  font-size: 25rpx;
+  color: #6b7484;
+  margin-top: 6rpx;
+}
+
+.job-meta {
+  margin-top: 18rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.meta-item {
+  font-size: 23rpx;
+  color: #6b7484;
+  background: #f7f8fa;
+  padding: 4rpx 16rpx;
+  border-radius: 8rpx;
+}
+
+.job-foot {
+  margin-top: 16rpx;
+}
+
+.load-more {
+  text-align: center;
+  padding: 28rpx 0;
+}
+
+.err-card { border-color: #f6c9ca; }
+
+.err-text {
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: #e5484d;
+  line-height: 1.6;
+}
+
+.btn.wide {
+  margin-top: 24rpx;
+  width: 100%;
+}

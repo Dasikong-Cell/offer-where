@@ -1,0 +1,9 @@
+{
+  "description": "OfferWhere 小程序 — sitemap 配置。本项目不含可被微信索引的公开页面，全部页面均依赖本地部署的后端，故不开放索引。",
+  "rules": [
+    {
+      "action": "disallow",
+      "page": "*"
+    }
+  ]
+}
