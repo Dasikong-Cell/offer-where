@@ -244,6 +244,53 @@ Function un.WipeInstallDirKeepData
 FunctionEnd
 
 ; ===========================================================================
+; Upgrade guard: is the installed copy still running?
+; ===========================================================================
+; Why (2026-09-30): upgrading means unpacking over a directory that already
+; exists. If the app is still running, tar cannot replace the locked files, exits
+; non-zero, and the first attempt is wasted -- the user has to run the installer
+; again. (Before the data fix in the same commit it also deleted their data.)
+; The cheapest fix for both is to not start at all: tell the user to quit the app,
+; and let them retry.
+;
+; Detection: try to append-open OUR OWN files. Windows locks the image section of
+; a running exe, so FileOpen fails exactly when it matters. Deliberately NOT a
+; tasklist scan: that would also match an unrelated node.exe elsewhere on the
+; machine and block a perfectly good install -- a false positive here is worse
+; than a missing check, because it teaches people to ignore the dialog.
+;
+; Measured with _tools/_lock_probe.py: a running exe -> FileOpen fails,
+; an idle exe -> succeeds, and **a non-existent path is CREATED by FileOpen** --
+; which is why the IfFileExists guard below is load-bearing, not decoration.
+;
+; Out: $R0 = "1" if a file under $INSTDIR is in use, else "0".
+Function IsInstallDirLocked
+  StrCpy $R0 "0"
+
+  ; The shell (launched by the Start Menu shortcut) ...
+  IfFileExists "$INSTDIR\${ENTRY_EXE}" 0 ild_next1
+    ClearErrors
+    FileOpen $R1 "$INSTDIR\${ENTRY_EXE}" "a"
+    IfErrors ild_locked
+    FileClose $R1
+  ild_next1:
+
+  ; ... and the bundled Node backend it spawns. Either one being held is enough:
+  ; the install would fail on that file anyway.
+  IfFileExists "$INSTDIR\node\node.exe" 0 ild_next2
+    ClearErrors
+    FileOpen $R1 "$INSTDIR\node\node.exe" "a"
+    IfErrors ild_locked
+    FileClose $R1
+  ild_next2:
+
+  Return
+
+  ild_locked:
+  StrCpy $R0 "1"
+FunctionEnd
+
+; ===========================================================================
 ; Install
 ; ===========================================================================
 Section "$(STR_SEC_CORE)" SEC_MAIN
@@ -263,6 +310,20 @@ Section "$(STR_SEC_CORE)" SEC_MAIN
     MessageBox MB_ICONSTOP "This installer needs the Windows built-in extractor, but it is missing:$\r$\n${TAR_EXE}$\r$\n$\r$\nThat means this Windows is older than version 1803 (April 2018), which ${APPNAME} cannot run on anyway.$\r$\n$\r$\nPlease use job-apply-agent-portable.zip instead, or a newer Windows." /SD IDOK
     Abort
   have_tar:
+
+  ; ---------------------------------------------------------------- upgrade guard
+  ; Refuse to unpack over a copy that is still running.
+  ; /SD IDCANCEL is what makes this work unattended: a MessageBox ignores /S, so
+  ; without /SD a scripted `OfferWhere-Setup.exe /S` would sit on a Retry/Cancel
+  ; box forever. With it, a silent run fails fast (non-zero exit) instead of
+  ; unpacking half a tree and then discovering the lock. Failing early also leaves
+  ; $INSTDIR completely untouched, which the keep-data branch below cannot promise.
+  guard_again:
+    Call IsInstallDirLocked
+    StrCmp $R0 "0" guard_ok
+    MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "${APPNAME} is still running, and it is holding files in:$\r$\n$INSTDIR$\r$\n$\r$\nQuit ${APPNAME} first -- including its tray icon -- and then click Retry.$\r$\n$\r$\nClick Cancel to stop installing instead." /SD IDCANCEL IDRETRY guard_again
+    Abort
+  guard_ok:
 
   ; ---------------------------------------------------------------- payload
   InitPluginsDir

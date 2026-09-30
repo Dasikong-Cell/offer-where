@@ -2577,6 +2577,26 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('卸载器的保留数据分支复用同一实现',
     /Call un\.WipeInstallDirKeepData/.test(nsi),
     '用户勾了「保留我的数据」却把它删掉 —— 这类回归最容易在改安装器时被带出来');
+  // ── ⑤-d 升级守卫：程序还在跑就别开始装（2026-09-30）────────────────────────
+  // 升级 = 覆盖一个已存在的 $INSTDIR。程序还在跑时 tar 无法替换被锁的文件，
+  // 必然失败 —— 用户白跑一趟。守卫把它变成「先说清楚，再让你重试」。
+  const nsiGuardAt = nsiMain.indexOf('Call IsInstallDirLocked');
+  const nsiTarAt = nsiMain.indexOf('nsExec::ExecToStack');
+  check('升级前先查安装目录是否被占用，且发生在解压之前',
+    nsiGuardAt >= 0 && nsiTarAt >= 0 && nsiGuardAt < nsiTarAt,
+    '不查 ⇒ 程序在跑时 tar 必然失败，用户白跑一次；查晚了则半棵树已经解开');
+  check('占用检测看的是自己的文件，不是全机同名进程',
+    nsi.includes('Function IsInstallDirLocked') &&
+      nsi.includes('FileOpen $R1 "$INSTDIR\\${ENTRY_EXE}" "a"') &&
+      !/tasklist/i.test(nsi),
+    'tasklist 会误报机器上无关的 node.exe，把好好的安装拦下来 —— 误报比漏报更伤，人会开始无视弹窗');
+  check('占用检测先确认文件存在（FileOpen 会创建不存在的文件）',
+    (nsi.match(/IfFileExists "\$INSTDIR[^"\n]*" 0 ild_next/g) || []).length === 2,
+    '实测（_tools/_lock_probe.py）：FileOpen "a" 对不存在的路径会直接创建它 ⇒ 首次安装会被凭空造出空文件');
+  check('守卫弹窗带 /SD IDCANCEL（静默部署要早失败，而不是卡死）',
+    /MessageBox MB_ICONEXCLAMATION\|MB_RETRYCANCEL[^\n]*\/SD IDCANCEL IDRETRY/.test(nsi),
+    '没有 /SD ⇒ 静默安装挂在没人能点的 Retry 上；有了它则非 0 退出，且 $INSTDIR 一个字节都不动');
+
   check('安装器的中止弹窗都带 /SD（无人值守不挂在对话框上）',
     (nsi.match(/MB_ICONSTOP "[^"]*"\s*\/SD IDOK/g) || []).length === 3,
     'MessageBox 不理会 /S：静默部署撞上错误会永远等一个没人能点的按钮，比失败更糟');
