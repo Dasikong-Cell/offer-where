@@ -279,6 +279,29 @@ check('docs/使用说明-给朋友.md 仍存在（两版同步）', fs.existsSyn
   check('#nav 的点击绑定仍是 navigate(a.dataset.view)（上述排除的依据）',
     /\$\$\('#nav a'\)\.forEach\(a=>a\.addEventListener\('click',\s*\(\)=>navigate\(a\.dataset\.view\)\)\)/.test(con),
     '若绑定改成只挑 [data-view]，那条「不许放进 nav」就该重新评估而不是继续挂着');
+
+  // ②c Pages（一个链接就能发给朋友）—— 发布**内容**必须被限定，否则是安全问题而不是体验问题。
+  //     部署仓库根 = 把 server/、src-tauri/ 的源码当成静态站点公开出去，
+  //     而这一步做错之后站点**看起来完全正常**（说明书照样打得开），没人会去查。
+  const pagesPath = path.join(ROOT, '.github', 'workflows', 'pages.yml');
+  if (!fs.existsSync(pagesPath)) {
+    check('.github/workflows/pages.yml 存在（说明书有对外链接）', false,
+      '没有它，说明书只能靠 GitHub 的下载页，朋友看不到图文说明');
+  } else {
+    // 剥 YAML 注释再断言：这个文件的注释里成段讨论过「别发布仓库根」，不剥会被自己的说明满足。
+    const pages = fs.readFileSync(pagesPath, 'utf8')
+      .split(/\r?\n/).map((l) => l.replace(/(^|\s)#.*$/, '$1')).join('\n');
+    // 结构匹配：必须落在 upload-pages-artifact 的 with.path 上，且恰好是 public/guide。
+    // 不能只判 includes('public/guide') —— 注释里提一句就满足了。
+    check('Pages 只发布 public/guide（发布仓库根会把 server/ 源码暴露成静态站点）',
+      /upload-pages-artifact@v\d+\s*\n\s*with:\s*\n\s*path:\s*public\/guide\s*$/m.test(pages),
+      '要的是 upload-pages-artifact 的 with.path 恰好等于 public/guide');
+    check('Pages 不装依赖（说明书发布不该有 20 分钟的失败面）',
+      !/npm\s+(ci|install)\b/.test(pages), '这一页是自包含的，不需要构建');
+    check('Pages 有并发组（连推两次不会互相覆盖）',
+      /^concurrency:/m.test(pages) && /^\s+group:\s*pages\s*$/m.test(pages));
+    check('Pages 有 workflow_dispatch（改完能手动重发一次）', /^\s*workflow_dispatch:/m.test(pages));
+  }
 }
 
 // ── 结果 ────────────────────────────────────────────────────────────────────

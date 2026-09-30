@@ -227,6 +227,10 @@ jobs:
           # 「应用和功能」里的卸载项 / /S 无人值守），不是宣传话术 —— 上一版文案里的
           # `--extract-only` 与「再双击会直接启动」都是自解压外壳的行为，换成 NSIS 后不再成立。
           $notes = "## 推荐：下载一个文件，双击就能装`n`n"
+          # 先把「图文说明书」摆在下手处：下载页是收件人唯一会认真读的一页，
+          # 而 Release 说明再全也只是纯文字 —— 那页说明书有每一步的截图，手机上也读得舒服。
+          # 地址来自仓库 Pages（workflow 见 .github/workflows/pages.yml，发布 public/guide/）。
+          $notes += "**图文说明书（手机友好，含每一步截图）：https://dasikong-cell.github.io/offer-where/**`n`n"
           $notes += "下载 **OfferWhere-Setup.exe**（约 $setupMB MB）并双击：`n`n"
           $notes += "1) 弹出安装程序（标题「OfferWhere 安装」）。默认装到 %LOCALAPPDATA%\OfferWhere`n"
           $notes += "   按用户安装，不需要管理员权限`n"

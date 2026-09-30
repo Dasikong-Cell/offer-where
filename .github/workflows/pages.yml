@@ -1,0 +1,92 @@
+name: Pages（使用说明页）
+
+# 目的：给朋友「一个链接就能看」的图文说明书，手机上也读得舒服。
+#
+# 发布内容**只有 `public/guide/`**，而且**跳过所有构建步骤**：那一页是自包含的
+# （内联 CSS，配图在同目录 `img/`），本来就不需要打包。跳过 npm ci 也让这条链路
+# 不被依赖安装的偶发失败牵连 —— 一份说明书的发布不该有 20 分钟的失败面。
+#
+# 为什么不用「从分支 / 目录发布」那种老模式：
+#   * 它只能从仓库 `/` 或 `/docs` 发布。从 `/` 会把 server/、src-tauri/ 的源码
+#     整个当成静态站点暴露出去；从 `/docs` 则会把内部评估报告一并公开。
+#   * 从 Actions 发布会把「发布内容」限定到一个目录，并且每次发布都留下可复核的 run。
+#
+# Action 版本策略与 ci.yml / release.yml 一致：用当前大版本（v6/v5 均跑在 Node 24），
+# 避免 Node 20 的弃用告警把日志刷满。
+
+on:
+  push:
+    branches: [main]
+    # 与说明书无关的提交不该触发发布 —— 否则每推一次代码就多一条 Pages run。
+    paths:
+      - 'public/guide/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read   # checkout
+  pages: write     # 发布到 Pages
+  id-token: write  # deploy-pages 用 OIDC 换取一次性凭据
+
+# 同一个 concurrency group：连推两次时旧的自动取消，不会出现两次发布互相覆盖。
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: 发布说明页
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pages 没启用时，`actions/configure-pages` 会以一句 "Get Pages site failed" 失败 ——
+      # 那句话不指向真正的原因（仓库设置里那个开关），而这条 run 很可能半年才跑一次，
+      # 到时没人记得。所以先探一次，把「该去哪儿点什么」直接打出来。
+      - name: 检查 Pages 是否已启用
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pages")
+          if [ "$code" != "200" ]; then
+            echo "::error::Pages 尚未启用（GET /repos/${{ github.repository }}/pages 返回 $code）"
+            echo "仓库 Settings -> Pages -> Build and deployment -> Source 选「GitHub Actions」，然后重跑本 workflow。"
+            exit 1
+          fi
+          echo "Pages 已启用"
+
+      - uses: actions/configure-pages@v6
+
+      # 只上传 public/guide/。它成为站点根 ⇒ 页面里的相对路径（img/*.png、app.ico）
+      # 照常解析，不需要改写任何引用。
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public/guide
+
+      - id: deploy
+        uses: actions/deploy-pages@v5
+
+      - name: 回读发布结果
+        shell: bash
+        run: |
+          echo "说明页地址：${{ steps.deploy.outputs.page_url }}"
+          # 刚发布完 CDN 可能还没生效，所以重试几次再判定 —— 一次 404 就报失败会变成假红。
+          url="${{ steps.deploy.outputs.page_url }}"
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /tmp/guide.html -w '%{http_code}' "$url")
+            if [ "$code" = "200" ] && grep -q "OfferWhere 使用说明" /tmp/guide.html; then
+              echo "✅ $url 返回 200 且是说明书正文"
+              exit 0
+            fi
+            echo "第 $i 次：http=$code，等待 CDN 生效…"
+            sleep 15
+          done
+          echo "::error::发布后回读失败：$url 未在 90 秒内返回说明书正文"
+          exit 1
