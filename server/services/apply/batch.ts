@@ -19,7 +19,7 @@
  */
 import { randomUUID } from 'crypto';
 import * as db from '../../db.js';
-import { runApply, isSupported, SUPPORTED_PLATFORMS } from './index.js';
+import { runApply, isSupported, SUPPORTED_PLATFORMS, isWangshenUrl, classifyDelivery } from './index.js';
 import { collectBossToDb } from './engine.js';
 import { toApplyProfile, tryScreenshot } from './common.js';
 import { startRecording, stopRecording } from './screencast.js';
@@ -184,7 +184,7 @@ export type BatchEvent =
 
 const PLATFORM_LABEL: Record<string, string> = {
   boss: 'BOSS直聘', zhilian: '智联招聘', job51: '前程无忧', nowcoder: '牛客网', offerbiu: '企业官网',
-  liepin: '猎聘', iguopin: '国聘', yupao: '鱼泡直聘',
+  liepin: '猎聘', iguopin: '国聘', yupao: '鱼泡直聘', wangshen: '网申(企业官网)',
 };
 
 /** 域名 → 投递平台（用于「按链接自动路由」模式） */
@@ -204,6 +204,51 @@ export function platformFromUrl(url?: string | null): ApplyPlatform | null {
     for (const d of PLATFORM_DOMAINS)     if (d.re.test(host)) return d.platform;
   } catch { /* 非法 URL */ }
   return null;
+}
+
+/**
+ * 批量「auto」模式的路由预览：不投递，只统计当前候选池里每个岗位会被分到哪个通道，
+ * 让用户在开投前看到「会有哪些岗位自动走网申通道」。判定逻辑与 runBatchApply 的 'auto' 分支完全一致：
+ *   platformFromUrl 命中聚合平台 → 该平台；否则 isWangshenUrl 命中 → 'wangshen'；其余 → auto 模式会跳过。
+ */
+export interface BatchRoutingPreview {
+  /** 候选池总数（已排除下线/已投递） */
+  total: number;
+  /** 各通道岗位数（wangshen = 会自动走网申通道；其余聚合平台 = 对应引擎；skipped = auto 模式会跳过的外部链接） */
+  byPlatform: Record<string, number>;
+  /** 会被自动路由到网申通道的岗位清单（用户最关心的一栏） */
+  wangshenJobs: { company: string | null; position: string | null; url: string | null; reason: string }[];
+  /** auto 模式会因「无法自动路由」而跳过的外部链接数 */
+  skippedExternal: number;
+}
+
+export async function previewBatchRouting(input: {
+  platform?: ApplyPlatform | 'auto';
+  source?: string;
+}): Promise<BatchRoutingPreview> {
+  const source = input.source || (input.platform && input.platform !== 'auto' ? input.platform : undefined);
+  let jobs = db.listJobs({ source });
+  jobs = jobs.filter((j) => j.status !== 'unavailable');
+  // 与 runBatchApply 默认一致：排除已投递岗位
+  jobs = jobs.filter((j) => j.status !== 'applied');
+  const byPlatform: Record<string, number> = {};
+  const wangshenJobs: BatchRoutingPreview['wangshenJobs'] = [];
+  let skippedExternal = 0;
+  for (const j of jobs) {
+    const routed = platformFromUrl(j.apply_url);
+    let platform: string;
+    if (routed) platform = routed;
+    else if (isWangshenUrl(j.apply_url)) platform = 'wangshen';
+    else platform = 'skipped';
+    byPlatform[platform] = (byPlatform[platform] || 0) + 1;
+    if (platform === 'wangshen') {
+      const cls = classifyDelivery(j.apply_url);
+      wangshenJobs.push({ company: j.company ?? null, position: j.position ?? null, url: j.apply_url ?? null, reason: cls.reason });
+    } else if (platform === 'skipped') {
+      skippedExternal++;
+    }
+  }
+  return { total: jobs.length, byPlatform, wangshenJobs, skippedExternal };
 }
 
 /** 候选池低于该数量时触发自动补充（仅 BOSS） */
@@ -374,7 +419,8 @@ export async function runBatchApply(
   }
   if (struct) {
     for (const j of jobs) {
-      if (j.match_score == null) {
+      // `<=0` 也算「未评分」：老库 match_score 列默认 0，未算分的岗位会落成 0（同 greetDecision 的注释）
+      if (j.match_score == null || j.match_score <= 0) {
         // AI 语义匹配；失败时 matchResumeToJobAi 内部回退规则匹配。
         // 单条打分异常（偶发 AI 响应异常）绝不能拖垮整批：try/catch 兜底为「不评分」，
         // 该岗位按「无匹配分」处理（若设了 minScore 则自然被分数闸门过滤掉）。
@@ -426,8 +472,18 @@ export async function runBatchApply(
   const kwMatch = (j: any) => kw.some(k => kwTokens(k).some(t => blobOf(j).includes(t)));
   const filtered = kw.length ? baseFiltered.filter(kwMatch) : baseFiltered;
 
-  // 5) 排序：匹配分降序
-  filtered.sort((a, b) => (b.match_score ?? -1) - (a.match_score ?? -1));
+  // 5) 排序：**未评估过的岗位优先，再按匹配分降序**。
+  // ⚠️ 2026-09-30 修「边投递边找」卡死：此前纯按分降序，而被打招呼闸门判「匹配度过低」的岗位
+  //    状态仍是 candidate（只多了 skip_reason），于是它们每轮都被重新挑中、又每轮被同样理由跳过；
+  //    新采集的岗位（无 match_score，排序里 -1 垫底）永远轮不到 ⇒ 批量表现为「持续在跑、一个也投不出去」。
+  //    把「已带 skip_reason 的岗」排到最后，池子就会前进：先消化真正待评估的新岗（产品语义：
+  //    无界面分时不启用匹配度闸门、宁可打招呼），全部评估完才轮到旧岗。
+  filtered.sort((a, b) => {
+    const aSkipped = a.skip_reason ? 1 : 0;
+    const bSkipped = b.skip_reason ? 1 : 0;
+    if (aSkipped !== bSkipped) return aSkipped - bSkipped;
+    return (b.match_score ?? -1) - (a.match_score ?? -1);
+  });
 
   const limit = Math.max(1, Math.min(Number(input.limit) || 10, 100));
   const picked = filtered.slice(0, limit);
@@ -469,17 +525,22 @@ export async function runBatchApply(
     let platform: ApplyPlatform;
     if (input.platform === 'auto') {
       const routed = platformFromUrl(job.apply_url);
-      if (!routed) {
+      if (routed) {
+        platform = routed;
+      } else if (isWangshenUrl(job.apply_url)) {
+        // 网申型链接（企业 ATS / 校招网申系统 / 企业自建招聘子域）：自动走独立「网申」通道投递
+        // （用户诉求：遇到需要网申的岗位就自动调用网申功能，而不是回落到官网聚合或被跳过）
+        platform = 'wangshen';
+      } else {
         skipped++;
         results.push({
           jobId: job.id, company: job.company, position: job.position, platform: 'auto',
           status: 'skipped',
-          message: `外部官网/微信文章链接，无法自动路由到已知平台（${job.apply_url}），请手动投递`,
+          message: `外部官网/微信文章链接，无法自动路由到已知平台或网申通道（${job.apply_url}），请手动投递`,
         });
         onEvent?.({ type: 'result', index: i, jobId: job.id, status: 'skipped', message: '外部链接，已跳过（请手动投递）' });
         continue;
       }
-      platform = routed;
     } else {
       platform = input.platform || sourceToPlatform(job.source);
     }
@@ -678,7 +739,8 @@ export async function runBatchApply(
           city: job.city || '',
           job_url: job.apply_url || '',
           status: 'applied',
-          login_method: 'email',
+          // 网申走企业官网表单提交（非邮箱），与单岗接口（server/index.ts）口径一致；其余记邮箱投递
+          login_method: platform === 'wangshen' ? 'website' : 'email',
           message: `由批量连投完成（${PLATFORM_LABEL[platform] || platform}）；匹配分 ${job.match_score ?? '—'}`,
         });
         db.updateJob(job.id, { status: 'applied' });

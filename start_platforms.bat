@@ -6,9 +6,9 @@ title JobApply - Platform Launcher
 REM ============================================================
 REM  Extra platform launcher (per-platform CDP Chrome window)
 REM  Usage:
-REM     start_platforms.bat                 -> open the 9 new platforms
+REM     start_platforms.bat                 -> open the 10 new platforms (incl. wangshen)
 REM     start_platforms.bat job58 yupao     -> open only the listed ones
-REM     start_platforms.bat all             -> open all 14 registered platforms
+REM     start_platforms.bat all             -> open all 16 registered platforms
 REM  Each platform gets its OWN Chrome profile + debug port.
 REM  Log in inside each window; then use the console health check.
 REM ============================================================
@@ -21,10 +21,10 @@ if not defined CHROME (
 )
 
 set "SEL=%*"
-if "%SEL%"=="" set "SEL=easyzhipin job58 chinahr dianzhang yupao maimai ganji iguopin yingjiesheng"
+if "%SEL%"=="" set "SEL=easyzhipin job58 chinahr dianzhang yupao maimai ganji iguopin yingjiesheng wangshen"
 
 REM id:port:x:y  (3 columns x 3 rows, window 620x340 so a 1080p screen fits all)
-set "NEWTBL=easyzhipin:9228:0:0 job58:9229:640:0 chinahr:9230:1280:0 dianzhang:9231:0:360 yupao:9232:640:360 maimai:9233:1280:360 ganji:9234:0:720 iguopin:9235:640:720 yingjiesheng:9236:1280:720"
+set "NEWTBL=easyzhipin:9228:0:0 job58:9229:640:0 chinahr:9230:1280:0 dianzhang:9231:0:360 yupao:9232:640:360 maimai:9233:1280:360 ganji:9234:0:720 iguopin:9235:640:720 yingjiesheng:9236:1280:720 wangshen:9238:1920:0"
 set "ALLTBL=boss:9223:0:0 liepin:9224:640:0 job51:9225:1280:0 zhilian:9226:0:360 nowcoder:9237:0:720 official:9227:640:720 %NEWTBL%"
 
 if /i "%SEL%"=="all" set "SEL=ALL"

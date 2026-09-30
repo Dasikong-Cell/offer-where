@@ -401,6 +401,7 @@
             <button data-tab="batch" class="active">批量投递</button>
             <button data-tab="reply">自动回复</button>
             <button data-tab="email">邮箱直投</button>
+            <button data-tab="wangshen">网申</button>
           </div>
 
           <!-- batch -->
@@ -451,6 +452,7 @@
               <label class="toggle"><input type="checkbox" id="batchRecord" /> 记录操作录像</label>
               <label class="toggle"><input type="checkbox" id="batchPreview" /> 仅预览（不真正投递）</label>
               <button class="btn primary" id="batchRun">开始投递</button>
+              <button class="btn" id="batchRoutePreview" type="button" title="按当前来源/平台预估候选池会被分到哪些通道（含自动走网申的岗位）">分析路由</button>
             </div>
             <div class="note small" style="margin-top:6px">勾选「仅预览」会走完登录态校验、岗位页加载、下线检测与 JD 抓取，并探测投递按钮是否可用，<b>但不点击、不产生任何真实投递</b> —— 用于先验证链路再实投。</div>
             <div class="progress"><i id="batchBar"></i></div>
@@ -493,6 +495,23 @@
             </div>
             <div class="note warn">邮箱直投走 offerbiu 微信推文 / 官网表单通道，<b>无需登录平台</b>。真实发送前请先预览，并人工剔除「跨公司串号」候选（个人 QQ / HR-SaaS 平台邮箱已自动隔离）。</div>
             <div class="progress"><i id="emailBar"></i></div>
+          </div>
+
+          <!-- wangshen：独立「网申」平台，复用企业官网投递引擎（端口 9238 / 上下文 'wangshen'） -->
+          <div class="tabpane" id="tab-wangshen" style="display:none">
+            <p class="note small">网申 = 直接向<b>企业官网招聘系统 / 校招网申系统</b>投递。粘贴目标链接（每行一个），先「预览」只读探测投递入口与表单字段（不提交），确认无误后再「确认投递」真实提交。常规流程：在 9238 调试窗口打开官网 → 预览 → 人工补填必填项 →「记住当前表单」→ 确认投递。</p>
+            <label class="f">企业官网 / 校招网申链接（每行一个）</label>
+            <textarea id="wangshenUrls" class="area" placeholder="https://career.example.com/campus/apply/xxx&#10;https://job.example.com/social/apply/yyy" style="min-height:140px;margin-top:6px"></textarea>
+            <div class="row2" style="margin-top:10px;align-items:center">
+              <div style="display:flex;gap:8px">
+                <button class="btn primary sm" id="wangshenPreview">预览（只读探测）</button>
+                <button class="btn danger sm" id="wangshenApply">确认投递</button>
+                <button class="btn sm" id="wangshenRemember">记住当前表单</button>
+              </div>
+              <div class="muted small">「记住当前表单」把 9238 窗口当前页已填字段按域名存入记忆，下次同站自动填写（需先在窗口里人工补填）。</div>
+            </div>
+            <div class="progress"><i id="wangshenBar"></i></div>
+            <div class="out" id="wangshenOut" style="margin-top:10px;max-height:360px;white-space:pre-wrap"></div>
           </div>
         </div>
       </section>
@@ -804,6 +823,7 @@ const PLATFORMS = [
   {id:'ganji', name:'赶集招聘', color:'#f5a623', tier:'pending'},
   {id:'iguopin', name:'国聘', color:'#d32f2f', tier:'apply'},
   {id:'yingjiesheng', name:'应届生求职网', color:'#5e35b1', tier:'apply'},
+  {id:'wangshen', name:'网申', color:'#7c3aed', tier:'apply'},
 ];
 const TIER_LABEL = { full:'全套', apply:'可投递', pending:'待接入' };
 const TIER_TIP = {
@@ -1703,7 +1723,7 @@ $('#batchLocate').addEventListener('click', async ()=>{
 $('#deliverTabs').addEventListener('click', e=>{
   const b = e.target.closest('button'); if(!b) return;
   $$('#deliverTabs button').forEach(x=>x.classList.toggle('active', x===b));
-  ['batch','reply','email'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
+  ['batch','reply','email','wangshen'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
   // 切到「自动回复」页时顺手探一次登录态，避免用户盲跑
   if(b.dataset.tab==='reply') checkReplyLogin();
 });
@@ -1776,6 +1796,32 @@ $('#batchRun').addEventListener('click', async ()=>{
     loadQuota();
   }catch(e){ $('#batchOut').textContent='错误：'+e.message; }
   btn.disabled=false; btn.textContent='开始投递';
+});
+
+/* 批量「auto」路由预览：开投前先看候选池会被分到哪些通道，尤其是哪些会自动走网申通道 */
+$('#batchRoutePreview').addEventListener('click', async ()=>{
+  const btn=$('#batchRoutePreview'); btn.disabled=true; const old=btn.textContent; btn.textContent='分析中…';
+  try{
+    const platform = $('#batchPlatform').value || 'auto';
+    const source = $('#batchSource').value || '';
+    const r = await api('/api/apply/classify-batch?platform='+encodeURIComponent(platform)+'&source='+encodeURIComponent(source));
+    if(!r || r.error){ $('#batchOut').textContent='路由分析失败：'+(r&&r.error||'未知'); return; }
+    const order = ['wangshen','boss','zhilian','job51','nowcoder','liepin','iguopin','yupao','chinahr','yingjiesheng','offerbiu','skipped'];
+    const labels = {wangshen:'网申（自动走网申通道）', boss:'BOSS', zhilian:'智联', job51:'51job', nowcoder:'牛客', liepin:'猎聘', iguopin:'国聘', yupao:'鱼泡', chinahr:'英才', yingjiesheng:'应届生', offerbiu:'offerbiu', skipped:'auto 跳过（外部链接）'};
+    let s = '';
+    if(platform!=='auto') s += '当前已指定平台「'+platform+'」，以下为按 auto 模式的路由预估（实际将统一走 '+platform+'）：\n\n';
+    s += '【路由分析】候选池 '+r.total+' 个岗位将按以下通道分流：\n';
+    const keys = new Set([...order, ...Object.keys(r.byPlatform||{})]);
+    for(const k of keys){ if(r.byPlatform && r.byPlatform[k]) s += '  • '+(labels[k]||k)+'：'+r.byPlatform[k]+'\n'; }
+    if(r.wangshenJobs && r.wangshenJobs.length){
+      s += '\n▶ 自动走网申通道的岗位（'+r.wangshenJobs.length+' 个）：\n';
+      for(const j of r.wangshenJobs.slice(0,30)) s += '   - '+(j.company||'?')+' · '+(j.position||'?')+'  ['+(j.reason||'')+']\n     '+(j.url||'')+'\n';
+      if(r.wangshenJobs.length>30) s += '   …（其余 '+(r.wangshenJobs.length-30)+' 个省略）\n';
+    }
+    if(r.skippedExternal) s += '\n⚠️ 另有 '+r.skippedExternal+' 个外部链接 auto 模式无法自动路由（非网申/非已知平台），将跳过，需手动投递。';
+    $('#batchOut').textContent = s;
+  }catch(e){ $('#batchOut').textContent='路由分析出错：'+e.message; }
+  btn.disabled=false; btn.textContent=old;
 });
 
 /* 今日投递配额 + 平台风控封锁（只读展示，避免投到封号才发现） */
@@ -1917,6 +1963,47 @@ $('#emailApply').addEventListener('click', async ()=>{
   if(!confirm('确认真实发送邮箱直投？请先预览并人工剔除串号候选。')) return;
   await emailStream('/api/offerbiu/email-apply', {channel:'email', realSend:true, tailor:true}, $('#emailStep3'), $('#emailBar'))
     .catch(e=>$('#emailStep3').textContent='错误：'+e.message);
+});
+
+/* ---------- 网申（独立平台，复用企业官网投递引擎；端口 9238 / 上下文 'wangshen'）---------- */
+async function wangshenRun(mode){
+  const urls = ($('#wangshenUrls').value||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if(!urls.length){ $('#wangshenOut').textContent='请先粘贴至少一个企业官网 / 校招网申链接。'; return; }
+  const preview = mode==='preview';
+  const real = mode==='real';
+  if(real && !confirm('确认向 '+urls.length+' 个企业官网真实投递？请先预览并人工补齐必填项。')) return;
+  const btn = preview ? $('#wangshenPreview') : $('#wangshenApply');
+  btn.disabled=true; const old=btn.textContent; btn.textContent = preview?'预览中…':'投递中…';
+  $('#wangshenBar').style.width='0%'; $('#wangshenOut').textContent='';
+  try{
+    for(let i=0;i<urls.length;i++){
+      $('#wangshenOut').textContent += (i>0?'\n':'') + '▶ '+urls[i]+'\n';
+      const r = await api('/api/apply', {method:'POST', body:JSON.stringify({
+        platform:'wangshen', jobUrl:urls[i],
+        preview, dryRun:preview, realSend:real
+      })});
+      const line = (r&&r.message) ? r.message : JSON.stringify(r);
+      $('#wangshenOut').textContent += '  ' + line + '\n';
+      if(r&&r.preview&&Array.isArray(r.preview.formFields)&&r.preview.formFields.length){
+        $('#wangshenOut').textContent += '  表单字段：'+r.preview.formFields.map(f=>f.label+(f.value?'='+f.value:'')).join('、')+'\n';
+      }
+      $('#wangshenBar').style.width = Math.round((i+1)/urls.length*100)+'%';
+    }
+    $('#wangshenBar').style.width='100%';
+  }catch(e){ $('#wangshenOut').textContent += '\n错误：'+e.message; }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
+$('#wangshenPreview').addEventListener('click', ()=>wangshenRun('preview'));
+$('#wangshenApply').addEventListener('click', ()=>wangshenRun('real'));
+$('#wangshenRemember').addEventListener('click', async ()=>{
+  const b=$('#wangshenRemember'); b.disabled=true; const old=b.textContent; b.textContent='记录中…';
+  try{
+    const r = await api('/api/offerbiu/remember-form', {method:'POST', body:JSON.stringify({ctx:'wangshen'})});
+    $('#wangshenOut').textContent = (r&&r.ok)
+      ? '已记录「'+(r.site||'未知域名')+'」的 '+(r.saved||0)+' 个表单字段（下次同站自动填写）。'
+      : '记录失败：'+((r&&r.error)||'未知');
+  }catch(e){ $('#wangshenOut').textContent='记录失败：'+e.message; }
+  finally{ b.disabled=false; b.textContent=old; }
 });
 
 /* ---------- records ---------- */

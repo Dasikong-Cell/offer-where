@@ -32,7 +32,7 @@ import { computeAbReport } from '../server/services/apply/applyAbTest.js';
 import { decideGreet, isExcludeHit, alreadyApplied } from '../server/services/apply/greetDecision.js';
 import { detectRiskSignal, shouldAbortBatch, riskStatusOf } from '../server/services/riskSignals.js';
 import { isPipeNoise, isClosingRelatedError } from '../server/services/safeOp.js';
-import { SUPPORTED_PLATFORMS, PENDING_PLATFORMS, REGISTERED_PLATFORMS } from '../server/services/apply/index.js';
+import { SUPPORTED_PLATFORMS, PENDING_PLATFORMS, REGISTERED_PLATFORMS, classifyDelivery, isWangshenUrl, aggregatorPlatformOf } from '../server/services/apply/index.js';
 import { PLATFORM_PAGE } from '../server/services/platformHealth.js';
 import { DELIVERY_PLATFORMS } from '../server/services/connection.js';
 import { DEFAULT_CDP_PORTS } from '../server/services/platformPorts.js';
@@ -1029,6 +1029,137 @@ console.log('\n══════ F. 安全不变量：preview 必须透传 ═�
     });
   }
   check(`runApply 调用点全部透传 preview（共 ${sites} 处）`, sites > 0 && missing === 0, missing ? `${missing} 处缺失` : '全部透传');
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ F2. 网申自动路由分类器（遇到需要网申的就自动走 wangshen） ══════');
+// 用户诉求（2026-09-30）：岗位池里凡是「需要网申」的（投递链接指向企业 ATS / 校招网申系统 /
+// 企业自建招聘子域），应当**自动**调用独立「网申」通道（wangshen）投递，而不是回落 offerbiu 或被跳过。
+// 这是「按 apply_url 自动分流到对应投递通道」的判定，被 runApply 与 runBatchApply('auto') 共用。
+{
+  // 已知聚合平台 → 各自引擎，且**不算网申**
+  const aggregators: Array<[string, string]> = [
+    ['https://www.zhipin.com/job_detail/abc.html', 'boss'],
+    ['https://we.51job.com/pc/search?keyword=x', 'job51'],
+    ['https://www.zhaopin.com/jobs?kw=x', 'zhilian'],
+    ['https://www.nowcoder.com/jobs/abc', 'nowcoder'],
+    ['https://www.liepin.com/zhaopin/abc', 'liepin'],
+    ['https://www.iguopin.com/job/abc', 'iguopin'],
+    ['https://www.yupao.com/job/abc', 'yupao'],
+    ['https://www.chinahr.com/job/abc', 'chinahr'],
+    ['https://www.yingjiesheng.com/job/abc', 'yingjiesheng'],
+  ];
+  let aggOk = true;
+  for (const [url, p] of aggregators) {
+    const c = classifyDelivery(url);
+    if (c.platform !== p || c.needsWangshen) { aggOk = false; console.log(`   ⚠️ ${url} → ${c.platform}(wangshen=${c.needsWangshen})，期望 ${p}`); }
+  }
+  check('已知聚合平台链接全部路由到各自引擎且不算网申', aggOk);
+
+  // 企业自建子域（zhaopin.company.com 这类）不应被误判为智联，而应判网申
+  check('zhaopin.company.com 不被误判为智联聚合平台', aggregatorPlatformOf('https://zhaopin.example.com/jobs/1') === null);
+  check('zhaopin.company.com 被判定为需要网申', isWangshenUrl('https://zhaopin.example.com/jobs/1'));
+
+  // ATS / 网申系统域名 → wangshen
+  const ats: string[] = [
+    'https://boards.greenhouse.io/company/jobs/1',
+    'https://jobs.lever.co/company/abc',
+    'https://company.wd1.myworkdayjobs.com/External',
+    'https://jobs.ashbyhq.com/company/abc',
+    'https://company.italent.cn/recruit/abc',
+    'https://talent.mokahr.com/position/abc',
+  ];
+  let atsOk = true;
+  for (const url of ats) {
+    const c = classifyDelivery(url);
+    if (c.platform !== 'wangshen' || !c.needsWangshen) { atsOk = false; console.log(`   ⚠️ ${url} → ${c.platform}(wangshen=${c.needsWangshen})，期望 wangshen`); }
+  }
+  check('国内外 ATS/网申系统域名全部路由到 wangshen', atsOk);
+
+  // 企业自建招聘/校招子域 → wangshen
+  const subs: string[] = [
+    'https://careers.google.com/jobs/1',
+    'https://jobs.apple.com/position/1',
+    'https://campus.tencent.com/apply/1',
+    'https://join.bytedance.com/position/1',
+    'https://recruit.baidu.com/job/1',
+    'https://招聘.alibaba.com/social/1',
+    'https://校招.huawei.com/apply/1',
+  ];
+  let subOk = true;
+  for (const url of subs) {
+    const c = classifyDelivery(url);
+    if (c.platform !== 'wangshen' || !c.needsWangshen) { subOk = false; console.log(`   ⚠️ ${url} → ${c.platform}(wangshen=${c.needsWangshen})，期望 wangshen`); }
+  }
+  check('企业自建招聘/校招子域（含中文子域）全部路由到 wangshen', subOk);
+
+  // 微信推文 → 邮箱通道（不算网申）
+  const wx = classifyDelivery('https://mp.weixin.qq.com/s/abc123');
+  check('微信招聘推文走邮箱通道且不算网申', wx.method === 'email' && !wx.needsWangshen && wx.platform === 'offerbiu');
+
+  // 普通公司官网/新闻页 → 回落通用官网投递（不算网申，不误投）
+  const generic = classifyDelivery('https://www.example-company.com/about/culture');
+  check('普通公司官网链接回落通用官网投递且不算网申', generic.platform === 'offerbiu' && generic.method === 'official' && !generic.needsWangshen);
+
+  // 空链接 → 回落，不抛错
+  check('空链接不抛错且回落通用官网投递', classifyDelivery('').platform === 'offerbiu' && classifyDelivery(null).platform === 'offerbiu');
+
+  // classifyDelivery 与 isWangshenUrl 结论一致（单点真相）
+  const consistent = ['https://jobs.lever.co/x/y', 'https://www.zhipin.com/x', 'https://www.example.com/x']
+    .every((u) => classifyDelivery(u).needsWangshen === isWangshenUrl(u));
+  check('classifyDelivery.needsWangshen 与 isWangshenUrl 结论一致', consistent);
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ F3. 监视器「边投递边找」（0 投递时主动搜索采集） ══════');
+// 背景（2026-09-30 实测）：被打招呼质量闸门拦下的低分岗**状态仍是 candidate**，不会被消耗 ⇒ 候选池
+// 永远降不到 runBatchApply 内部 autoRefill 的 MIN_POOL=3 阈值以下 ⇒ 监视器会永久 0 投递、且永不搜索
+// （实测：43 个剩余候选分全 <40，每轮「applied=0 skipped=10」死循环）。
+// 故在 watcher 层补：本轮「0 投递 + 有跳过」时主动 collectBossToDb 实时搜索采集新岗位。
+{
+  const w = stripComments(readText('server/services/apply/autoApplyWatcher.ts'));
+  check(
+    '监视器引入 BOSS 采集器 collectBossToDb',
+    /import\s*\{[^}]*collectBossToDb[^}]*\}\s*from\s*['"]\.\/engine\.js['"]/.test(w),
+    '没引入 collectBossToDb ⇒ 「找」无从谈起',
+  );
+  check(
+    '监视器在「本轮 0 投递」时主动调用 collectBossToDb 搜索采集（而非只依赖池<3的 autoRefill）',
+    /applied\s*===\s*0[\s\S]{0,300}collectBossToDb\s*\(/.test(w),
+    '0 投递时不主动搜索 ⇒ 低分岗占池导致永久卡死',
+  );
+  check(
+    '监视器支持可选的匹配分闸门(minScore，默认关)并透传给每轮投递',
+    /minScore\s*:\s*config\.minScore/.test(w) && /minScore\s*:\s*0/.test(w),
+    'minScore 需默认 0（未配 AI 时开 >0 会把岗位全误杀）',
+  );
+  // 闭合「边投递边找」的第二半：批量必须让池子前进 —— 已带 skip_reason 的岗位排到最后，
+  // 否则它们每轮被反复挑中、新岗永远轮不到（实测 43 个低分岗占池，每轮 applied=0 skipped=10 死循环）。
+  const b = stripComments(readText('server/services/apply/batch.ts'));
+  check(
+    '批量投递把「已带 skip_reason 的岗位」排到最后（未评估/新岗优先，池子才会前进）',
+    /filtered\.sort\(\(a,\s*b\)\s*=>\s*\{[\s\S]{0,220}skip_reason[\s\S]{0,220}match_score/.test(b),
+    '缺这条 ⇒ 「边投递边找」卡在每轮投同一批、全部跳过',
+  );
+  // 真凶（2026-09-30）：老库 jobs.match_score 列默认值是 0，新采集岗落成 0；打招呼闸门把 0 当「评了 0 分」
+  // ⇒ 每个新岗都被判「匹配度过低（界面匹配分 0 < 40）」跳过 ⇒ 「边投递边找」永远 0 投递。
+  const g = stripComments(readText('server/services/apply/greetDecision.ts'));
+  check(
+    '打招呼闸门把「0 分」视为未评分（只有 >0 才启用匹配度闸门）',
+    /storedScore\s*>\s*0/.test(g),
+    'score=0 被当有效分 ⇒ 新采集岗位全被「匹配度过低」误杀',
+  );
+  check(
+    '批量算分把「0 分」也当作未评分（match_score<=0 也去算分）',
+    /match_score\s*==\s*null\s*\|\|\s*j\.match_score\s*<=\s*0/.test(b),
+    '0 分不进算分分支 ⇒ 开 minScore 时旧 0 分岗仍被误杀',
+  );
+  const d = stripComments(readText('server/db.ts'));
+  check(
+    'upsertJob 显式写 match_score（未评分落 NULL，不落老库默认的 0）',
+    /INSERT INTO jobs \([^)]*match_score[^)]*\)/.test(d) && /match_score:\s*job\.match_score\s*\?\?\s*null/.test(d),
+    '不显式写 NULL ⇒ 新岗 match_score=0 ⇒ 被闸门误杀',
+  );
 }
 
 // ═══════════════════════════════════════════════════════════

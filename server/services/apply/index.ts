@@ -11,7 +11,9 @@ import { runIguopin } from './iguopin.js';
 import { runYupao } from './yupao.js';
 import { runChinahr } from './chinahr.js';
 import { runYingjiesheng } from './yingjiesheng.js';
+import { runWangshen } from './wangshen.js';
 import { runEngine } from './engine.js';
+import { isWangshenUrl, classifyDelivery } from './deliveryClassify.js';
 import type { ApplyInput, ApplyPlatform, ApplyResult } from './types.js';
 
 export const SUPPORTED_PLATFORMS: ApplyPlatform[] = [
@@ -20,6 +22,8 @@ export const SUPPORTED_PLATFORMS: ApplyPlatform[] = [
   'iguopin', 'yupao',
   // 2026-09-21 接入：中华英才网（无 URL 搜索，/job/ 推荐列表 → 详情页投递）、应届生求职网（51job 城市码 → 频道页卡片 → 详情页投递）
   'chinahr', 'yingjiesheng',
+  // 2026-09-30 接入：独立「网申」平台（企业官网/校招网申系统，复用官网引擎，独立上下文与端口）
+  'wangshen',
 ];
 
 /**
@@ -82,6 +86,11 @@ export async function runApply(input: ApplyInput): Promise<ApplyResult> {
     if (input.channel === 'email' || /mp\.weixin\.qq\.com/.test(url)) {
       return runOfferbiuEmail(input);
     }
+    // 网申型链接（企业 ATS / 校招网申系统 / 企业自建招聘子域）：自动走独立「网申」通道（9238 窗口），
+    // 与 offerbiu 官网聚合通道（9227）隔离，登录态/表单记忆互不污染。这是「遇到需要网申的就自动网申」的核心路由。
+    if (isWangshenUrl(url)) {
+      return runWangshen(input);
+    }
     return runOfferbiu(input);
   }
   switch (input.platform) {
@@ -103,6 +112,8 @@ export async function runApply(input: ApplyInput): Promise<ApplyResult> {
       return runChinahr(input);
     case 'yingjiesheng':
       return runYingjiesheng(input);
+    case 'wangshen':
+      return runWangshen(input);
     default:
       // 已登记但投递实现待接入：给出可执行的下一步，而不是笼统的"不支持"
       if (isPendingPlatform(String(input.platform))) {
@@ -125,3 +136,7 @@ export async function runApply(input: ApplyInput): Promise<ApplyResult> {
 }
 
 export * from './types.js';
+export { isWangshenUrl, classifyDelivery, aggregatorPlatformOf } from './deliveryClassify.js';
+export type { DeliveryMethod, DeliveryClassification } from './deliveryClassify.js';
+export { previewBatchRouting } from './batch.js';
+export type { BatchRoutingPreview } from './batch.js';

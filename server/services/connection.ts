@@ -24,6 +24,8 @@ export const DELIVERY_PLATFORMS = [
   'boss', 'job51', 'liepin', 'zhilian', 'offerbiu', 'nowcoder',
   // 2026-09-21 新增登记（窗口/巡检已就绪，采集与投递实现待各自实机校准）
   'easyzhipin', 'job58', 'chinahr', 'dianzhang', 'yupao', 'maimai', 'ganji', 'iguopin', 'yingjiesheng',
+  // 2026-09-30 独立「网申」平台（企业官网/校招网申系统，复用官网引擎，独立上下文 'wangshen'/端口 9238）
+  'wangshen',
 ];
 
 /**

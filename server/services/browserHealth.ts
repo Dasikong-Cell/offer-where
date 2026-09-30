@@ -74,6 +74,7 @@ export const FALLBACK_PORT_PROFILES: Record<string, string> = {
   '9235': 'C:/chrome-cdp-profile-iguopin',
   '9236': 'C:/chrome-cdp-profile-yingjiesheng',
   '9237': 'C:/chrome-cdp-profile-nowcoder',
+  '9238': 'C:/chrome-cdp-profile-wangshen',
 };
 
 /** 读取 browserLaunch.json（带缓存）。缺失时用内置兜底映射，保证服务不依赖该文件也能跑。 */

@@ -221,7 +221,10 @@ export async function decideGreet(ctx: GreetContext): Promise<GreetDecision> {
     //    词典往往只筛出「责任心/团队协作」这类软技能，命中率天然趋近 0 → 必然误杀。
     //    现在的语义：**用户看到多少分就按多少分判定**；没有界面分时不启用该闸门（宁可打招呼），
     //    规则匹配结果仅作为证据展示（命中/缺失项），不作为拦截依据。
-    let score: number | null = typeof ctx.storedScore === 'number' && Number.isFinite(ctx.storedScore)
+    // ⚠️ 2026-09-30：`0` 必须视为「未评分」而不是「评了 0 分」。老库 jobs.match_score 列默认值是 0，
+    //    新采集/未算分的岗位会落成 0；若把 0 当有效分，`0 < min` 会把它们全部判「匹配度过低」跳过
+    //    ⇒ 「边投递边找」永远 0 投递。只有 >0 的分才启用匹配度闸门（符合注释里的产品语义：没分就宁可打招呼）。
+    let score: number | null = typeof ctx.storedScore === 'number' && Number.isFinite(ctx.storedScore) && ctx.storedScore > 0
       ? ctx.storedScore
       : null;
     if (ctx.profile) {

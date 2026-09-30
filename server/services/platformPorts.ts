@@ -54,6 +54,8 @@ export const DEFAULT_CDP_PORTS: Record<string, number> = {
   iguopin: 9235,
   yingjiesheng: 9236,
   nowcoder: 9237,
+  // 2026-09-30 独立「网申」平台：企业官网/校招网申系统，复用官网引擎，独立上下文与端口
+  wangshen: 9238,
 };
 
 /** 默认端点的 http 形式（供需要在 UI/日志里展示的调用方使用）。 */

@@ -27,7 +27,9 @@ export type ApplyPlatform =
   | 'maimai'        // 脉脉高聘（maimai.cn）
   | 'ganji'         // 赶集招聘（www.ganji.com，58 同集团）
   | 'iguopin'       // 国聘（www.iguopin.com）
-  | 'yingjiesheng'; // 应届生求职网（www.yingjiesheng.com）
+  | 'yingjiesheng' // 应届生求职网（www.yingjiesheng.com）
+  // ── 2026-09-30 新增登记：独立「网申」平台（企业官网/校招网申系统，复用 offerbiu 官网引擎，独立上下文 'wangshen'/端口 9238）──
+  | 'wangshen';   // 网申（企业官网 / 校招网申系统，URL 由用户粘贴，无独立首页）
 
 /** 投递动作：一键/批量自动/关键词搜索投递/仅搜索收集/HR复聊/求职信 */
 export type ApplyAction = 'hello' | 'auto' | 'keyword' | 'search' | 'again' | 'letter';

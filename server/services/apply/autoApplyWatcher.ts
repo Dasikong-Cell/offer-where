@@ -15,6 +15,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import { runBatchApply } from './batch.js';
+import { collectBossToDb } from './engine.js';
 import { isSupported } from './index.js';
 import type { ApplyPlatform } from './types.js';
 
@@ -33,6 +34,13 @@ export interface ApplyWatchConfig {
   intervalSec: number;
   /** 两次投递间隔（毫秒） */
   intervalMs: number;
+  /**
+   * 匹配分闸门（0=不启用，**默认 0**）。>0 时每轮会先给**未评分**的岗位算分（AI，失败回退规则），
+   * 再只投匹配分达标的岗位。
+   * ⚠️ 仅在配置了 LLM（LLM_BASE_URL/LLM_MODEL/LLM_API_KEY）时才建议开启：未配置 AI 时算分会回退到
+   * 规则词表，分天然趋近 0 ⇒ 开 >0 会把所有岗位误杀成「0 投递」。默认关，靠 pick 排序（未评估优先）投新岗。
+   */
+  minScore: number;
 }
 
 const DEFAULT_CONFIG: ApplyWatchConfig = {
@@ -42,6 +50,7 @@ const DEFAULT_CONFIG: ApplyWatchConfig = {
   limit: 10,
   intervalSec: 600,
   intervalMs: 20000,
+  minScore: 0,
 };
 
 let config: ApplyWatchConfig = { ...DEFAULT_CONFIG };
@@ -105,6 +114,8 @@ async function tick(): Promise<void> {
         criteria: {
           excludeApplied: true,
           keywords: config.keyword ? [config.keyword] : [],
+          // 先给未评分新岗算分，只投达标的（详见 ApplyWatchConfig.minScore 注释）
+          ...(config.minScore > 0 ? { minScore: config.minScore } : {}),
         },
       };
       const r = await runBatchApply(input, (ev: unknown) =>
@@ -118,6 +129,23 @@ async function tick(): Promise<void> {
       lastRun[p] = { at: new Date().toISOString(), applied: 0, skipped: 0, error: msg };
       logLine(`tick ${p} ERROR: ${msg}`);
       watchEmitter.emit('tick', { kind: 'platform-error', platform: p, error: msg, at: lastRun[p].at });
+    }
+
+    // 「边投递边找」核心补齐：本轮 **0 投递** = 现有候选已没有能投的（低分岗被闸门拦下后仍是 candidate、不会被
+    // 消耗；新岗又需先算分）。若只依赖 runBatchApply 内部的 autoRefill（阈值 MIN_POOL=3），池子永远降不到 3
+    // 以下 ⇒ 监视器会永久卡在 0 投递、也永远不搜索。故此处主动实时搜索采集新岗位，下轮再算分+投。
+    // 仅 BOSS 支持服务端采集（其余平台需人工登录）。
+    const last = lastRun[p];
+    if (p === 'boss' && !last?.error && last?.applied === 0) {
+      try {
+        const added = await collectBossToDb(Math.max(config.limit * 4, 20));
+        logLine(`tick ${p}: applied=0&skipped=${last.skipped} → 自动搜索采集 ${added} 个新岗位`);
+        watchEmitter.emit('tick', { kind: 'collect', platform: p, added, at: new Date().toISOString() });
+      } catch (e: unknown) {
+        const msg = String((e as Error)?.message || e);
+        logLine(`tick ${p}: 自动采集失败 ${msg}`);
+        watchEmitter.emit('tick', { kind: 'collect-error', platform: p, error: msg });
+      }
     }
   }
   running = false;

@@ -41,12 +41,14 @@ set "LIE_PIN_PORT=9224"
 set "JOB51_PORT=9225"
 set "ZHILIAN_PORT=9226"
 set "OFFICIAL_PORT=9227"
+set "WANGSHEN_PORT=9238"
 
 set "BOSS_PROFILE=%PROFILE%"
 set "LIE_PIN_PROFILE=%PROFILE%-liepin"
 set "JOB51_PROFILE=%PROFILE%-job51"
 set "ZHILIAN_PROFILE=%PROFILE%-zhilian"
 set "OFFICIAL_PROFILE=%PROFILE%-official"
+set "WANGSHEN_PROFILE=%PROFILE%-wangshen"
 
 REM Window layout: 640x700 grid so all 5 windows fit on a 1920x1080 screen
 set "WIN_W=640"
@@ -56,6 +58,7 @@ set "LIE_PIN_POS=660,0"
 set "JOB51_POS=1320,0"
 set "ZHILIAN_POS=0,720"
 set "OFFICIAL_POS=660,720"
+set "WANGSHEN_POS=1320,720"
 
 REM 1) Start one isolated Chrome window per platform (Zhideya-style)
 REM    Pre-check each debug port: if already listening, reuse it instead of
@@ -86,6 +89,7 @@ call :launch_platform liepin %LIE_PIN_PORT% "%LIE_PIN_PROFILE%" %LIE_PIN_POS%
 call :launch_platform job51 %JOB51_PORT% "%JOB51_PROFILE%" %JOB51_POS%
 call :launch_platform zhilian %ZHILIAN_PORT% "%ZHILIAN_PROFILE%" %ZHILIAN_POS%
 call :launch_platform official %OFFICIAL_PORT% "%OFFICIAL_PROFILE%" %OFFICIAL_POS%
+call :launch_platform wangshen %WANGSHEN_PORT% "%WANGSHEN_PROFILE%" %WANGSHEN_POS%
 timeout /t 3 >nul
 goto :after_launch
 

@@ -875,6 +875,13 @@ export function upsertJob(job: {
    * jd/card_text/position/requirements/company 文本上自动推断（所有采集器零改动即得远程标记）。
    */
   remote?: number | null;
+  /**
+   * 匹配分（AI/规则算出的界面匹配分）。**未评分时必须传 undefined/NULL，不要传 0**：
+   * 老库 jobs.match_score 列默认值是 0（见 upsertJob INSERT 注释），若不显式写 NULL，
+   * 新采集的岗位会落成 0，而打招呼闸门把「0 分」当成「已评 0 分」→ 全部被匹配度闸门拦下
+   * （2026-09-30「边投递边找」0 投递死循环的真凶）。
+   */
+  match_score?: number | null;
 }): JobRow {
   // 写库口统一清洗（见 sanitizeJobText 注释）
   // ⚠️ 只清洗**调用方真正传了的字段**：upsertJob 是「部分更新」语义（投递流程补 JD 时只传
@@ -918,13 +925,15 @@ export function upsertJob(job: {
   const setSql = [...providedCols.map((c) => `${c} = excluded.${c}`), 'updated_at = excluded.updated_at'].join(',\n      ');
 
   db.prepare(`
-    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, remote, status, created_at, updated_at)
-    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, @remote, 'candidate', @created_at, @updated_at)
+    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, match_score, remote, status, created_at, updated_at)
+    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, @match_score, @remote, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       ${setSql}
   `).run({
     id,
     source: job.source || 'manual',
+    // ⚠️ 显式写 NULL：老库该列默认值是 0，不写就落成 0 ⇒ 未评分被当成「0 分」被闸门误杀
+    match_score: job.match_score ?? null,
     company: job.company ?? null,
     position: job.position ?? null,
     city: job.city ?? null,

@@ -32,7 +32,7 @@ import { getExchangeActions, setExchangeActions, runExchangeActions, summarizeEx
 import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMAGE_INPUTS } from "./services/apply/chatResumeImage.js";
 import { locateJobById } from "./services/apply/jobLocate.js";
 import { tryScreenshot } from "./services/apply/common.js";
-import { runApply, isSupported, SUPPORTED_PLATFORMS } from "./services/apply/index.js";
+import { runApply, isSupported, SUPPORTED_PLATFORMS, classifyDelivery, isWangshenUrl, previewBatchRouting } from "./services/apply/index.js";
 import { computeAbReport, backfillLegacyStrategy } from "./services/apply/applyAbTest.js";
 import { checkResumeCompliance } from "./services/apply/resumeCompliance.js";
 import { toApplyProfile, recordFrames } from "./services/apply/common.js";
@@ -1374,9 +1374,11 @@ app.post("/api/offerbiu/collect", async (req, res) => {
 });
 
 // 记录「当前官网页面」的表单字段到记忆（按域名）：人工补填后调用，下次同站自动填写
-app.post("/api/offerbiu/remember-form", async (_req, res) => {
+// ctx 指定读取哪个浏览器上下文的当前页：'official'（offerbiu 官网窗口，默认）/ 'wangshen'（网申窗口）
+app.post("/api/offerbiu/remember-form", async (req, res) => {
   try {
-    const r = await rememberCurrentForm();
+    const ctx = (req.body && req.body.ctx) || 'official';
+    const r = await rememberCurrentForm(ctx);
     res.json({ ok: true, site: r.site, saved: r.saved, fields: r.fields, logs: r.logs });
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error?.message || '记录失败' });
@@ -2119,7 +2121,7 @@ app.post("/api/apply/batch", async (req, res) => {
     } = req.body || {};
 
     if (platform && platform !== 'auto' && !isSupported(platform)) {
-      return res.status(400).json({ error: `不支持的平台：${platform}（支持：boss / zhilian / job51 / nowcoder / offerbiu，或 auto 自动路由）` });
+      return res.status(400).json({ error: `不支持的平台：${platform}（支持：boss / zhilian / job51 / nowcoder / liepin / iguopin / yupao / offerbiu / wangshen，或 auto 自动路由；auto 会把网申型链接自动分到 wangshen）` });
     }
 
     // 修复：引擎是按 source 过滤岗位库的（db.listJobs({source})），不是按 platform。
@@ -2285,7 +2287,7 @@ app.post("/api/auto-apply/watch/stop", (_req, res) => {
 app.post("/api/auto-apply/watch/config", (req, res) => {
   const body = req.body || {};
   const patch: Record<string, unknown> = {};
-  for (const k of ['enabled', 'platforms', 'keyword', 'limit', 'intervalSec', 'intervalMs'] as const) {
+  for (const k of ['enabled', 'platforms', 'keyword', 'limit', 'intervalSec', 'intervalMs', 'minScore'] as const) {
     if (body[k] !== undefined) patch[k] = body[k];
   }
   setApplyWatchConfig(patch as any);
@@ -2357,6 +2359,7 @@ app.post("/api/apply", async (req, res) => {
     if (result.status === 'applied' && (jobId || job)) {
       const PLATFORM_LABEL: Record<string, string> = {
         boss: 'BOSS直聘', zhilian: '智联招聘', job51: '前程无忧', liepin: '猎聘', nowcoder: '牛客网', offerbiu: '企业官网(Offerbiu)',
+        wangshen: '网申(企业官网)',
       };
       try {
         const appId = uuidv4();
@@ -2369,7 +2372,8 @@ app.post("/api/apply", async (req, res) => {
           city: job?.city || '',
           job_url: targetUrl || '',
           status: 'applied',
-          login_method: 'email',
+          // 网申走企业官网表单提交（非邮箱），其余仍按原口径记为邮箱投递
+          login_method: platform === 'wangshen' ? 'website' : 'email',
           message: `由专用投递脚本完成（${PLATFORM_LABEL[platform] || platform}）；匹配分 ${job?.match_score ?? '—'}`,
         });
         // 2026-09-29 补：单岗投递此前**不落证据截图**，而批量投递（batch.ts）会落
@@ -2392,6 +2396,28 @@ app.post("/api/apply", async (req, res) => {
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error?.message || '投递失败' });
+  }
+});
+
+// 投递通道分类：给定岗位投递链接，返回应当走的平台与方式（控制台/批量「自动路由」复用同一判定）
+app.get("/api/apply/classify", (req, res) => {
+  try {
+    const url = typeof req.query.url === 'string' ? req.query.url : '';
+    res.json(classifyDelivery(url));
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || '分类失败' });
+  }
+});
+
+// 批量「auto」模式的路由预览：不投递，只统计候选池各岗位会被分到哪个通道（含会自动走网申的清单）
+app.get("/api/apply/classify-batch", async (req, res) => {
+  try {
+    const source = typeof req.query.source === 'string' ? req.query.source : undefined;
+    const platform = (typeof req.query.platform === 'string' ? req.query.platform : 'auto') as string;
+    const r = await previewBatchRouting({ platform: platform as any, source });
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || '路由预览失败' });
   }
 });
 
