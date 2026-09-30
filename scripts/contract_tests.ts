@@ -1922,6 +1922,30 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('pack.ps1 的 $must 钉住 create_desktop_shortcut.bat',
     mustBlock.includes('"create_desktop_shortcut.bat"'));
 
+  // ── ①b $must 必须钉住「给朋友的说明书」（2026-09-30）────────────────
+  // 分发模型是「朋友各装一份、各用各的数据」，所以朋友装机后**没有**任何外部文档可看：
+  // Release 说明只在下载时看一次，而 public/guide/ 那一页才是他后面回头查
+  // 「哪个勾选框才是真正的仅预览」「怎么彻底删掉」的地方。
+  // 它进包目前只是「public 被整目录收进 $dirs」的副产品 ⇒ 哪天 public 改成按文件枚举
+  // （server/ 与 shared/ 就是这么做的），说明书会从产物里静默消失，而四道门禁全绿：
+  // 包里少一个 .html，构造上没有任何断言会变红。
+  check('pack.ps1 的 $must 钉住使用说明页 public/guide/index.html',
+    mustBlock.includes('"public/guide/index.html"'),
+    '漏钉 ⇒ 说明页可以从产物里消失，而 npm test / verify / pack 一个都不会红');
+  // $must 断言的是**归档列表**，所以还得独立确认 public 真的进了成员表 —— 否则这条
+  // 要到 5 分钟后的打包最后一步才报错，而不是在这里秒级拦住。
+  // ⚠️ 不许写成 dirsBlock.includes('public')：那会被 `public/guide/...` 这类**任意**
+  //    含 public 的文本满足（本仓库「静态断言被文本满足」的经典坑），
+  //    `$splitDirs = @("server","shared")` 里也没有，但注释里随便提一句就有了。
+  const dirsStart = pack.indexOf('$dirs  = @(');
+  const dirsBlock = pack.slice(dirsStart, pack.indexOf(')', dirsStart));
+  const dirsList = [...dirsBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  check('pack.ps1 的 $dirs 整目录包含 public（说明页才有机会进包）',
+    dirsList.includes('public'), `实际：${dirsList.join(', ')}`);
+  // 源码树里真得有这一页。少了它，上面两条会变成「钉住一个不存在的东西」。
+  check('待打包的说明页确实存在于源码树',
+    fs.existsSync(path.join(ROOT, 'public', 'guide', 'index.html')));
+
   // ── ② 桌面入口必须指向包里真实存在的落位（dist-app/）─────────────
   // ⚠️ 只判**代码行**：这个文件的 REM 注释里为了说明缺陷，本身就写着那个错误路径
   // （`%PKG%offer-where.exe`）—— 拿整份文本判会把我自己的说明文字当成违规。

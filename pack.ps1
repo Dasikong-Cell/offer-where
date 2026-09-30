@@ -664,6 +664,17 @@ $must = @(
   "node_modules/better-sqlite3/package.json",
   "node_modules/@napi-rs/canvas/package.json",
   "public/console.html",
+  # In-product manual, pinned 2026-09-30. public/guide/ is the ONLY manual a recipient
+  # ever gets: the release notes are read once, at download time, while this page is
+  # what they re-read later ("which checkbox stops real applications?"). It ships only
+  # because `public` happens to be archived as a whole directory in $dirs -- so the day
+  # public/ is switched to file-by-file enumeration (the way server/ and shared/ are),
+  # the manual disappears from the artifact with every gate still green: a missing html
+  # file breaks no assertion by construction.
+  # Only PRESENCE is pinned here. Reachability (the server mounts public/ as CONSOLE_DIR,
+  # so GET /guide/ returns this file) is asserted twice and independently: in
+  # scripts/guide_check.ts and in scripts/contract_tests.ts.
+  "public/guide/index.html",
   "server/index.ts",
   "server/services/platformPorts.ts",
   "shared/agentPrompt.ts",

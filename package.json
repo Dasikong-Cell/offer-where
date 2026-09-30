@@ -37,6 +37,7 @@
     "app:build": "tauri build --no-bundle",
     "app:bundle": "tauri build",
     "guide:check": "tsx scripts/guide_check.ts",
+    "guide:e2e": "tsx scripts/guide_e2e.ts",
     "relay:e2e": "tsx scripts/relay_e2e.ts"
   },
   "dependencies": {

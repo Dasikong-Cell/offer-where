@@ -281,6 +281,14 @@
       <div><span class="dot" id="svcDot"></span><span id="svcTxt">后端连接中…</span></div>
       <div style="margin-top:6px">v1.0 · job-apply-agent</div>
       <div id="lanHint" style="margin-top:6px;display:none;word-break:break-all;line-height:1.5"></div>
+      <!-- 使用说明入口。刻意放在 .side-foot 里、**不放进 #nav**：
+           #nav 里的每个 <a> 都被 `$$('#nav a')` 统一绑到 navigate(a.dataset.view)，
+           一个没有 data-view 的锚点会被当成「切到 undefined 视图」——链接点了不但不跳转，
+           还可能把当前视图清掉。这条在页面上看起来完全正常，只有真点一次才发现。
+           目标 /guide/ 由后端 express.static(public/) 直接托管（见 scripts/guide_check.ts 第 9 节），
+           是 GET 无副作用路径，鉴权开启时也不需要令牌。 -->
+      <div style="margin-top:8px"><a href="/guide/" target="_blank" rel="noopener"
+        style="color:#9ecbff;text-decoration:none">使用说明 / 常见问题 ↗</a></div>
     </div>
   </aside>
   <!-- 移动端抽屉遮罩：点它收起侧栏 -->

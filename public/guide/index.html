@@ -238,6 +238,11 @@ footer a{color:var(--ink2)}
   </div>
 
   <div class="note tip"><strong>更方便的做法</strong>：安装向导最后那一页可以勾「运行 OfferWhere」，等于装完立刻启动。</div>
+
+  <div class="note tip"><strong>这一页以后在哪儿看？</strong>装好后打开控制台，<strong>左侧栏最下面</strong>有一项「使用说明 / 常见问题」，
+    点开就是这一页 —— 不用再回来找这个链接。
+    <br>用便携 zip 的：这一页也随包发出来了，就在解压目录的 <code>public\guide\index.html</code>，
+    双击即可（配图在同目录的 <code>img\</code> 里，别只单独拷走那个 html）。</div>
 </section>
 
 <!-- 三 -->
@@ -508,8 +513,33 @@ footer a{color:var(--ink2)}
       <ul>
         <li>简历文件在你电脑的安装目录里</li>
         <li>招聘网站的登录状态存在你电脑的 Chrome 配置里</li>
-        <li><strong>不经过任何服务器</strong>，也不会传给其他人</li>
+        <li><strong>没有「我们的服务器」</strong>—— 这个工具不上传、不中转、也不存到任何云端</li>
       </ul>
+      <p>三件你会问的事，说清楚（默认装完就是这样，不需要你做任何设置）：</p>
+      <ul>
+        <li>你投出去的简历和打招呼内容，当然会发给<strong>招聘网站本身</strong>（否则投不了），
+          但只有它们能看到</li>
+        <li>控制台上的「检查更新」按钮会去查一次最新版本号，<strong>只在你点它的时候</strong>发生，
+          不点就不联网</li>
+        <li><strong>可选</strong>的「AI 智能匹配 / 文案撰写」需要你自己填一个大模型网关地址才会启用；
+          不填就完全没有这一步，匹配走本地规则</li>
+      </ul>
+    </div>
+  </details>
+
+  <details>
+    <summary>用久了会不会很占磁盘？</summary>
+    <div class="body">
+      <p><strong>会占一两个 GB，但不会一直涨。</strong>安装目录下的 <code>data\</code> 记录你的登录态与投递痕迹。
+        <strong>每次启动都会自动清理</strong>，不用你管：</p>
+      <ul>
+        <li>投递截图：留 <strong>14 天</strong>，更早的自动删</li>
+        <li>运行日志：留 <strong>30 天</strong></li>
+        <li>数据库备份：只留最近几份</li>
+      </ul>
+      <p>真正不会自动清的是 <code>data\browser</code> —— 那是你的<strong>登录态</strong>（约 500 MB），
+        <strong>别手动删</strong>，删了每个平台都得重新扫码登录。</p>
+      <div class="note tip">C 盘紧张的话，安装时把位置改到 D 盘（安装程序里能改），数据就跟着落在 D 盘。</div>
     </div>
   </details>
 

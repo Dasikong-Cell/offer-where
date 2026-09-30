@@ -17,11 +17,17 @@
  *   5. 关键内容与小节标题齐备（章节序号 + 关键指引语句）
  *   6. 平台数量与能力标签和 console.html 的 PLATFORMS 逐项一致（单一真相源对账）
  *   7. 与 docs/使用说明-给朋友.md 的存在性对齐（两份都存在，避免只改一份）
+ *   8. 事实性陈述不得比事实知道得更多（三处会出网的内容 + 磁盘保留天数与源码对账）
+ *   9. 装到朋友机器后这一页仍可达：public/ 随包分发、后端静态挂载 /guide/、控制台侧栏有入口
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './lib/stripComments.js';
+// 直接调用服务端真正在用的判据，而不是在这里再抄一份放行规则 ——
+// 抄一份的典型后果是「静态检查说放行了、运行时其实没放行」，两份一起绿。
+import { isGuideAsset } from '../server/services/authToken.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const GUIDE = path.join(ROOT, 'public', 'guide');
@@ -144,6 +150,136 @@ check('4 个「全套」平台名都在页面里', names.every((n) => html.inclu
 
 // ── 7. 与 docs 版说明共存 ───────────────────────────────────────────────────
 check('docs/使用说明-给朋友.md 仍存在（两版同步）', fs.existsSync(DOC_MD));
+
+// ── 8. 面向朋友的「事实性陈述」不得比事实知道得更多（2026-09-30 补）──────────
+// 背景：这份说明书的每一句都是在替产品做承诺，而它是朋友**唯一**的依据。
+// 原先隐私条目只写了「不经过任何服务器」—— 而事实上确有三处内容会离开本机：
+//   ① 投出去的简历/打招呼内容（当然要发给招聘网站，否则投不了）
+//   ② 用户**主动点击**时的更新检查
+//   ③ 用户**自己配置**了大模型网关后才启用的 AI 匹配/文案
+// 少写这三条 ⇒ 朋友对「数据在不在自己手里」形成错误预期。而这一条恰恰是本项目
+// 已经确立的分发模型（各自本地安装、各用各的数据）赖以成立的前提。
+//
+// 同族缺陷本项目已犯过一次：控制台提示「请执行 npx playwright install chromium」，
+// 而包内 node/ 只有 node.exe、根本没有 npx ⇒ 给的指引在受众机器上跑不了。
+// 所以下面同时钉住「不许依赖包里没有的工具」。
+{
+  const PRIVACY = [
+    ['投出去的内容会发给招聘网站', '招聘网站本身'],
+    ['更新检查只在你点击时发生', '只在你点它的时候'],
+    ['AI 要自己配网关才启用（默认没有这一步）', '大模型网关'],
+  ];
+  const mdSrc = fs.readFileSync(DOC_MD, 'utf8');
+  for (const [label, needle] of PRIVACY) {
+    check(`隐私说明写清了「${label}」`, html.includes(needle), `网页缺少「${needle}」`);
+    check(`md 版隐私说明同一处也写清了（两版不许只改一份）`, mdSrc.includes(needle),
+      `md 缺少「${needle}」`);
+  }
+
+  // 清理天数必须与代码默认值一致 —— 写死一份必然漂移，所以从源码读真值再对账
+  const dcSrc = fs.readFileSync(path.join(ROOT, 'server', 'services', 'dataCleanup.ts'), 'utf8');
+  const shotDays = /screenshotDays\s*\?\?\s*(\d+)/.exec(dcSrc)?.[1];
+  const logDays = /runLogDays\s*\?\?\s*(\d+)/.exec(dcSrc)?.[1];
+  check('从 dataCleanup.ts 解析出清理保留天数', !!shotDays && !!logDays,
+    `截图=${shotDays} 天，日志=${logDays} 天`);
+  check('说明页写的截图保留天数与代码一致',
+    html.includes(`留 <strong>${shotDays} 天</strong>`) && mdSrc.includes(`留 **${shotDays} 天**`),
+    `代码=${shotDays} 天`);
+  check('说明页写的运行日志保留天数与代码一致',
+    html.includes(`留 <strong>${logDays} 天</strong>`) && mdSrc.includes(`留 **${logDays} 天**`),
+    `代码=${logDays} 天`);
+  // 「data/browser 不要手动删」是这条里唯一会造成实际损失的一句（删了要全部重新扫码）
+  check('说明了 data\\browser 是登录态、不要手动删',
+    /data\\browser/.test(html) || html.includes('data\\browser'), '缺这条 ⇒ 有人会把它当缓存删掉');
+
+  // 🔴 受众指引不得依赖包里没有的工具。包内 node/ 只有 node.exe（无 npm/npx），
+  //    任何写成 `npm run xxx` 的指引在朋友机器上都跑不了 —— 而它看起来完全合理。
+  check('受众指引不依赖 npm/npx（包内只有 node.exe）',
+    !/\bnpm\b|\bnpx\b/.test(html) && !/\bnpm\b|\bnpx\b/.test(mdSrc),
+    '包内无 npm ⇒ 这类指引在朋友机器上跑不了（本项目已犯过一次同类缺陷）');
+}
+
+// ── 9. 分发到朋友机器之后，这一页还打不打得开（2026-09-30 补）────────────────
+// 分发模型是「朋友各装一份、各用各的数据」：朋友手上除了安装包什么都没有。
+// 所以在上面「这一页本身写得对不对」之外，还得钉住三件事：
+//   ① 这一页真的随包发出去（pack.ps1 把 public 整目录收进 $dirs，并被 $must 钉住）
+//   ② 装好之后在软件里点得到（后端把 public/ 当静态目录 ⇒ GET /guide/ 命中它）
+//   ③ 说明书自己也告诉了读者「以后在哪儿看」——否则他只有返回聊天记录找链接这一条路
+// 这一节只判 ②③（产品内可达性）；① 的打包侧断言在 scripts/contract_tests.ts，
+// 两侧各自独立读源码，避免「改一处同时移动指针和靶子」。
+{
+  // ② 后端确实把 public/ 作为静态目录挂载。
+  // ⚠️ 必须剥注释：server/index.ts 的注释里成段讨论过这个目录与 /guide/ 的关系，
+  //    不剥的话断言会被自己的说明文字满足（本仓库的经典假阴性）。
+  const srv = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'index.ts'), 'utf8'));
+  const consoleDirOk = /CONSOLE_DIR\s*=\s*path\.join\([^)]*'public'\s*\)/.test(srv);
+  check('后端把 public/ 定为静态目录（CONSOLE_DIR）', consoleDirOk,
+    '找不到 CONSOLE_DIR = path.join(..., \'public\') ⇒ /guide/ 无从命中');
+  // 必须写成**不带 options** 的裸调用：serve-static 的默认 index 才会把
+  // `GET /guide/`（目录请求）解析到 index.html。加个 { index:false } 就只剩
+  // `/guide/index.html` 能开，而侧栏链接写的正是 `/guide/` —— 会 404。
+  // ⚠️ 实际写法是 `app.use(express.static(CONSOLE_DIR));` —— 右括号有两个，
+  //    第一版要求 `CONSOLE_DIR)` 紧跟 `;`，于是**断言自己**红了（不是代码错）。
+  check('express.static(CONSOLE_DIR) 是裸调用（目录请求才会落到 index.html）',
+    /express\.static\(CONSOLE_DIR\)\s*\)*\s*;/.test(srv),
+    '带 options 时若关掉 index，侧栏那个 /guide/ 会 404 —— 静态断言看不出，只有真请求才知道');
+
+  // ②b 鉴权打开时这一页还得能匿名打开 —— 否则侧栏入口在 LAN 模式下直接 401。
+  //     这里**调用服务端真正在用的那个函数**，而不是再抄一份规则：
+  //     抄一份的后果是「测试说放行了、运行时没放行」，两者一起绿。
+  //     实际判据与理由见 server/services/authToken.ts 的 isGuideAsset。
+  check('鉴权开启时 /guide/ 匿名放行（目录请求）', isGuideAsset('GET', '/guide/'));
+  check('鉴权开启时 /guide/index.html 匿名放行', isGuideAsset('GET', '/guide/index.html'));
+  check('鉴权开启时说明页配图匿名放行（裂图是静默的，没人会来报）',
+    isGuideAsset('GET', '/guide/img/d-home.png'));
+  check('只读放行不外溢到写方法', !isGuideAsset('POST', '/guide/') && !isGuideAsset('DELETE', '/guide/'));
+  check('说明页子树里的数据文件仍然发不出去（按扩展名挡住）',
+    !isGuideAsset('GET', '/guide/data.csv') && !isGuideAsset('GET', '/guide/../.env'),
+    '前缀判断挡不住路径穿越 —— 真正的边界是扩展名白名单');
+  check('放行面没有扩大到 public/ 的其它文件',
+    !isGuideAsset('GET', '/console.html') && !isGuideAsset('GET', '/app.ico'),
+    '那些由 CONSOLE_ASSETS 精确匹配负责，不是这一条');
+  // 规则定得再对，中间件没调用也等于没有 —— 这是「单一真相源」缺的那一半。
+  // ⚠️ 精确到**调用参数**，不匹配函数名：本文件的注释里就会写到这个名字。
+  check('后端鉴权中间件确实调用了 isGuideAsset',
+    /isGuideAsset\(m,\s*String\(req\.path \|\| ''\)\)/.test(srv),
+    'authToken 里定义得再对，index.ts 不调用也等于没放行');
+
+  // ③ 页面与 md 都告诉读者「装好后在哪儿打开这一页」。
+  // 用完整词组而不是「说明」这类泛词，否则随便一处残留文本就满足了。
+  const NAV_HINT = '左侧栏最下面';
+  const mdSrc2 = fs.readFileSync(DOC_MD, 'utf8');
+  check('网页写明了装好后从哪儿打开这一页', html.includes(NAV_HINT), `缺少「${NAV_HINT}」`);
+  check('md 版同一处也写了（两版不许只改一份）', mdSrc2.includes(NAV_HINT));
+  // 便携 zip 用户没有侧栏可点 —— 他们的路径是解压目录里的文件，指错了等于没指。
+  // 两版都要有：只改一份正是这一节要防的事。
+  check('网页写明了 zip 用户看哪份文件',
+    html.includes('public\\guide\\index.html'), '缺少解压目录下的实际路径');
+  check('md 版也写明了 zip 用户的文件路径',
+    mdSrc2.includes('public\\guide\\index.html'), '两版不许只改一份');
+
+  // ② 的入口本身：控制台侧栏要有链接，且**必须不在 #nav 里**。
+  // 理由不是审美：#nav 里每个 <a> 都被 `$$('#nav a')` 统一绑到 navigate(a.dataset.view)，
+  // 一个没有 data-view 的锚点会被当成「切到 undefined 视图」—— 点了不跳转，还可能把
+  // 当前视图清掉。这条在页面上看起来完全正常，静态断言之外只有真点一次才发现。
+  const con = fs.readFileSync(CONSOLE, 'utf8');
+  const asideBlock = /<aside class="side"[\s\S]*?<\/aside>/.exec(con)?.[0] ?? '';
+  const navBlock = /<nav\b[\s\S]*?<\/nav>/.exec(con)?.[0] ?? '';
+  const GUIDE_LINK = /<a[^>]+href="\/guide\/"/;
+  check('控制台侧栏能解析出 <aside> 与 <nav>（解析失败会让本节静默空转）',
+    asideBlock.length > 0 && navBlock.length > 0,
+    `aside=${asideBlock.length} 字符，nav=${navBlock.length} 字符`);
+  const afterNav = asideBlock.slice(asideBlock.indexOf('</nav>'));
+  check('控制台侧栏底部有「使用说明」入口（指向 /guide/）', GUIDE_LINK.test(afterNav),
+    '朋友装完只有一个入口能找到说明书，少了它就只能回去翻聊天记录');
+  check('该入口不在 #nav 列表里（放进去会被 navigate(undefined) 吃掉）',
+    !GUIDE_LINK.test(navBlock),
+    '#nav 的 <a> 统一绑到 navigate(a.dataset.view) ⇒ 没有 data-view 的链接点了不跳转');
+  // 上面那条排除的理由本身也得成立，否则它变成一条没有依据的禁令。
+  check('#nav 的点击绑定仍是 navigate(a.dataset.view)（上述排除的依据）',
+    /\$\$\('#nav a'\)\.forEach\(a=>a\.addEventListener\('click',\s*\(\)=>navigate\(a\.dataset\.view\)\)\)/.test(con),
+    '若绑定改成只挑 [data-view]，那条「不许放进 nav」就该重新评估而不是继续挂着');
+}
 
 // ── 结果 ────────────────────────────────────────────────────────────────────
 console.log('');

@@ -138,6 +138,38 @@ export function isConsoleAsset(method: string, pathname: string): boolean {
   return CONSOLE_ASSETS.has(String(pathname || ''));
 }
 
+/**
+ * 使用说明页（`public/guide/`）的匿名放行 —— 与 CONSOLE_ASSETS 并列，但判据不同。
+ *
+ * 为什么必须单独有一条（2026-09-30）：控制台侧栏底部加了「使用说明 / 常见问题」入口，
+ * 指向 `/guide/`。而上面那张表是**精确匹配**，`/guide/` 不在里面 ⇒ 鉴权一开
+ * （`start_lan.bat` 的 HOST=0.0.0.0，或任何人手动 REQUIRE_AUTH=1）侧栏那个链接直接 401。
+ * 这与本项目已经踩过的那次是同一个坑：第一版只放行 `/api/*`，`GET /` 401、控制台白屏，
+ * 而 curl 测 `/api/*` 全部「符合预期」—— 只有真浏览器跑一次才暴露。
+ *
+ * 为什么不是把 `/guide/` 加进 CONSOLE_ASSETS：那一页除 index.html 外还有 9 个配图
+ * （`img/*.png` + 图标），逐个列会随「下次多截一张图」静默失效 —— 表现是裂图，
+ * 而收件人只会觉得「这说明书做得糙」，不会来报 bug。
+ *
+ * 为什么也不是「放行整个 `/guide/` 子树」：那等于让任何人把导出物丢进 `public/guide/`
+ * 就自动公开。所以这里用**双条件**：必须在该子树内，**且**扩展名属于文档类白名单。
+ * 新增截图自动可用；而 `.csv` / `.json` / `.pdf` 这类数据文件即使被放进这个目录也发不出去
+ * （只读 ≠ 无隐私，这条判据和 PUBLIC_READ_GET_PATHS 的白名单理由是同一条）。
+ * 目录请求本身没有扩展名（`/guide`、`/guide/`），单独放行 —— 那正是落到 index.html 的请求。
+ */
+const GUIDE_ROOT = '/guide/';
+const GUIDE_EXT = new Set(['.html', '.htm', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.css']);
+export function isGuideAsset(method: string, pathname: string): boolean {
+  const m = String(method || '').toUpperCase();
+  if (m !== 'GET' && m !== 'HEAD') return false;
+  const p = String(pathname || '');
+  if (p === '/guide' || p === '/guide/') return true;      // 目录请求 → express.static 落到 index.html
+  if (!p.startsWith(GUIDE_ROOT)) return false;
+  // 只按**最外层**扩展名判：`/guide/../.env` 的 extname 是 `.env`，不在白名单 ⇒ 挡住。
+  // 这是这一条里唯一真正的边界防线（前缀判断本身挡不住路径穿越）。
+  return GUIDE_EXT.has(path.extname(p).toLowerCase());
+}
+
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 
 /** 是否启用鉴权：显式 env 优先；否则「非回环监听」即自动启用 */

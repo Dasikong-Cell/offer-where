@@ -52,7 +52,7 @@ import { probePlatformHealthCached, summarizeHealth } from "./services/platformH
 import { cleanupData } from "./services/dataCleanup.js";
 import { buildAllowedOrigins, canInjectToken, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
-import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isAuthorizedStaticRes, signStaticPath, isConsoleAsset } from "./services/authToken.js";
+import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isAuthorizedStaticRes, signStaticPath, isConsoleAsset, isGuideAsset } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
 import { locateByIp } from "./services/geo.js";
@@ -225,6 +225,12 @@ if (AUTH_ENABLED) {
     if (m === 'OPTIONS') return next();
     if (isPublicReadGet(m, String(req.path || ''))) return next();
     if (isConsoleAsset(m, String(req.path || ''))) return next();
+    // 使用说明页（public/guide/）—— 判据见 authToken.ts 的 isGuideAsset。
+    // 少了这一行，控制台侧栏底部那个「使用说明」入口在鉴权开启时直接 401：
+    // 收件人自己桌面（HOST 回环、鉴权关）没事，恰恰是 `start_lan.bat` 开了
+    // HOST=0.0.0.0 之后、他在手机上看控制台时点不动 —— 而手机上看控制台
+    // 正是说明书第七节推荐的做法。**浏览器取资源的方式**这类缺陷 curl 测不出来。
+    if (isGuideAsset(m, String(req.path || ''))) return next();
     // 静态资源（证据截图 / 录制帧 / 定制简历）走 URL 上的短时签名：
     // 浏览器里 `<img src>`、`<a href>`、`window.open` 都**无法附加请求头**，
     // 只认请求头就会让控制台里那些图全变裂图（`onerror` 还会把它们隐藏掉，
