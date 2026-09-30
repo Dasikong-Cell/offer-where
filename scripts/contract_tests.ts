@@ -2464,8 +2464,11 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     !/\bRename\b/.test(nsi),
     'Rename 跨卷必失败：装在别的盘时那条「保留数据」的分支会去删数据');
   check('卸载器改为枚举删除，显式跳过 data\\',
+    // 2026-09-30：这段枚举抽成了共享宏 WIPE_INSTDIR_KEEP_DATA（安装器与卸载器共用一份），
+    // 所以锚点跟着挪到宏体。三条缺一不可 —— 少了 FindFirst 就没有枚举，少了 data 跳过
+    // 就会连用户数据一起删。
     nsi.includes('FindFirst $Fh $Fn "$INSTDIR\\*.*"') &&
-      nsi.includes('StrCmp $Fn "data" un_keep_next') &&
+      nsi.includes('StrCmp $Fn "data" wd_keep_next') &&
       nsi.includes('FindClose $Fh'),
     '只 RMDir /r 整个 $INSTDIR 会把要保留的 data\\ 一起删掉');
   check('自测报出这次跑的卷关系（同卷则跨卷那条路根本没被走过）',
@@ -2547,6 +2550,36 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('发布说明同步了「桌面图标可选」与 /NODESKTOP（改了安装器就要改说明）',
     relYml.includes('选择组件') && relYml.includes('/NODESKTOP'),
     '安装器已多出「选择组件」一页，说明不写 ⇒ 用户不知道那个勾选框是干什么的');
+
+  // ── ⑤-c 覆盖安装不得删用户数据（2026-09-30 修复的机械护栏）────────────────
+  // 背景：老用户升级 = 拿新安装包**覆盖**已存在的 $INSTDIR，而 $INSTDIR\data 里是用户的
+  // 简历、采集的 JD 与投递历史。两条错误分支原来都写 `RMDir /r "$INSTDIR"` ——
+  // 首次安装时这是对的（把半成品目录清干净），但升级时它变成了「删用户数据」。
+  // 触发条件很平常：**开着 OfferWhere 双击新版安装包**。tar 无法替换被锁的
+  // node\node.exe，退出码 1（Can't unlink already-existing object: Permission denied），
+  // 随后命中删除分支。真跑实测 + 破坏性对照见 _tools/_nsi_verify.py 与 _nsi_control.py
+  // （回退这两处写法时 A1/A2/A3 三条核心断言确实打红）。
+  const nsiMainStart = nsi.indexOf('Section "$(STR_SEC_CORE)" SEC_MAIN');
+  const nsiMainEnd = nsi.indexOf('SectionEnd', nsiMainStart);
+  const nsiMain = nsiMainStart >= 0 && nsiMainEnd > nsiMainStart ? nsi.slice(nsiMainStart, nsiMainEnd) : '';
+  check('安装段不裸删整个安装目录（$INSTDIR\\data 就在它下面）',
+    nsiMain.length > 0 && !/RMDir\s+\/r\s+"\$INSTDIR"/i.test(nsiMain),
+    '一条 `RMDir /r "$INSTDIR"` 就把用户的简历与投递历史一起删了；安装失败不是丢数据的理由');
+  check('「保留 data 的清理」只有一份实现（安装器与卸载器共用）',
+    (nsi.match(/!macro WIPE_INSTDIR_KEEP_DATA/g) || []).length === 1 &&
+      nsi.includes('Function WipeInstallDirKeepData') &&
+      nsi.includes('Function un.WipeInstallDirKeepData') &&
+      (nsi.match(/!insertmacro WIPE_INSTDIR_KEEP_DATA/g) || []).length === 2,
+    '两份手维护的副本正是本项目踩过的坑（ResolveEntry 的注释就是为此写的）');
+  check('安装段两条错误分支都走「保留 data」的清理',
+    (nsiMain.match(/Call WipeInstallDirKeepData/g) || []).length === 2,
+    '解压失败 / 缺入口点各有一处清理；漏一处等于只修了一半');
+  check('卸载器的保留数据分支复用同一实现',
+    /Call un\.WipeInstallDirKeepData/.test(nsi),
+    '用户勾了「保留我的数据」却把它删掉 —— 这类回归最容易在改安装器时被带出来');
+  check('安装器的中止弹窗都带 /SD（无人值守不挂在对话框上）',
+    (nsi.match(/MB_ICONSTOP "[^"]*"\s*\/SD IDOK/g) || []).length === 3,
+    'MessageBox 不理会 /S：静默部署撞上错误会永远等一个没人能点的按钮，比失败更糟');
 
   // ── ⑤-b makensis 候选路径清单：两处必须一致（2026-09-29 事故的机械护栏）────────
   // 事故形状：release.yml 装完 NSIS 后**只用 `Get-Command makensis` 复查** —— choco 改的是

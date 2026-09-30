@@ -175,10 +175,73 @@ VIAddVersionKey "LegalCopyright" "See LICENSE in the installed package"
 Var TarRC
 Var TarOut
 Var KeepData
-; Uninstall-side enumeration (see the "keep data" branch). Declared at file scope
-; because NSIS has no block-scoped variables.
+; $Fh/$Fn are the FindFirst enumeration handles used by WIPE_INSTDIR_KEEP_DATA
+; (shared by the installer and the uninstaller). Declared at file scope because
+; NSIS has no block-scoped variables.
 Var Fh
 Var Fn
+
+; ===========================================================================
+; Shared: clear $INSTDIR, but never touch data\
+; ===========================================================================
+; CONTRACT: $INSTDIR\data holds the user's resume, the job descriptions they
+; collected and their apply history. It survives EVERY path that clears the
+; install directory -- uninstall (unless the user explicitly asks for deletion)
+; and, since 2026-09-30, a FAILED INSTALL as well.
+;
+; The failed-install half is not hypothetical. Upgrading means running this
+; installer over a directory that already exists, and if the app is still
+; running, tar cannot replace the locked files: it exits 1 with
+; "Can't unlink already-existing object: Permission denied". The old code then
+; ran `RMDir /r "$INSTDIR"`, which took data\ with it -- one forgotten tray icon
+; and the user's resume and apply history were gone. Measured 2026-09-30
+; (see _tools/_lock_test.py for the probe). The user's data is not ours to
+; delete on an error path.
+;
+; Why a macro expanded into two functions instead of one function: the
+; uninstaller runs in a separate process and can only call `Function un.*`; a
+; plain Function is invisible to it. Two hand-maintained copies is exactly how
+; this repo has shipped the same bug twice before (see ResolveEntry above), so
+; the body lives once, here.
+;
+; Why enumerate-and-skip instead of "Rename data out of the way, delete the
+; rest, rename back": Rename cannot cross volumes. With $INSTDIR on D: and the
+; temp folder on C: the rename fails, the error branch fires, and the code that
+; exists to PRESERVE the user's resume silently deletes it instead. Measured
+; 2026-09-28 with a two-mode probe (u2.nsi): MODE=1 (Rename) -> "data KEPT=False"
+; when installed to another drive; MODE=2 -> KEPT=True on both same and other
+; volume.
+;
+; Labels are function-scoped in NSIS, so expanding this twice is safe.
+!macro WIPE_INSTDIR_KEEP_DATA
+  FindFirst $Fh $Fn "$INSTDIR\*.*"
+  wd_keep_loop:
+    StrCmp $Fn "" wd_keep_done
+    StrCmp $Fn "."  wd_keep_next
+    StrCmp $Fn ".." wd_keep_next
+    StrCmp $Fn "data" wd_keep_next
+    ; IfFileExists with a wildcard is the only way to ask "is this a folder?"
+    ; without pulling in a FileFunc header.
+    IfFileExists "$INSTDIR\$Fn\*.*" 0 wd_keep_file
+      RMDir /r "$INSTDIR\$Fn"
+      Goto wd_keep_next
+    wd_keep_file:
+    Delete "$INSTDIR\$Fn"
+    Goto wd_keep_next
+  wd_keep_next:
+    FindNext $Fh $Fn
+    Goto wd_keep_loop
+  wd_keep_done:
+  FindClose $Fh
+!macroend
+
+Function WipeInstallDirKeepData
+  !insertmacro WIPE_INSTDIR_KEEP_DATA
+FunctionEnd
+
+Function un.WipeInstallDirKeepData
+  !insertmacro WIPE_INSTDIR_KEEP_DATA
+FunctionEnd
 
 ; ===========================================================================
 ; Install
@@ -191,7 +254,13 @@ Section "$(STR_SEC_CORE)" SEC_MAIN
   ; Unusable without an extractor, and there is no point unpacking 125000 files
   ; before saying so. Windows 10 1803+ always has tar.exe.
   IfFileExists "${TAR_EXE}" have_tar
-    MessageBox MB_ICONSTOP "This installer needs the Windows built-in extractor, but it is missing:$\r$\n${TAR_EXE}$\r$\n$\r$\nThat means this Windows is older than version 1803 (April 2018), which ${APPNAME} cannot run on anyway.$\r$\n$\r$\nPlease use job-apply-agent-portable.zip instead, or a newer Windows."
+    ; /SD IDOK: every abort dialog in this file needs a silent-mode return value.
+    ; A MessageBox ignores /S, so without /SD an unattended `OfferWhere-Setup.exe /S`
+    ; that hits an error sits on a dialog nobody can see -- forever. That is worse
+    ; than failing: a scripted or CI deployment hangs instead of returning an error.
+    ; /SD costs nothing when a human IS watching; the box still appears normally.
+    ; (The uninstaller's keep-data prompt has had the same treatment since 2026-09-28.)
+    MessageBox MB_ICONSTOP "This installer needs the Windows built-in extractor, but it is missing:$\r$\n${TAR_EXE}$\r$\n$\r$\nThat means this Windows is older than version 1803 (April 2018), which ${APPNAME} cannot run on anyway.$\r$\n$\r$\nPlease use job-apply-agent-portable.zip instead, or a newer Windows." /SD IDOK
     Abort
   have_tar:
 
@@ -216,16 +285,22 @@ Section "$(STR_SEC_CORE)" SEC_MAIN
   StrCmp $TarRC "0" unpack_ok
     DetailPrint "extractor returned $TarRC"
     DetailPrint "$TarOut"
-    RMDir /r "$INSTDIR"
-    MessageBox MB_ICONSTOP "Could not unpack ${APPNAME} into:$\r$\n$INSTDIR$\r$\n$\r$\nThe extractor reported error $TarRC and the folder has been removed.$\r$\n$\r$\nIf this keeps happening, download job-apply-agent-portable.zip instead and extract it with tar or 7-Zip."
+    ; Was `RMDir /r "$INSTDIR"`. Right for a first install (returns the tree to a
+    ; clean state), WRONG for an upgrade: data\ lives under $INSTDIR, so a failed
+    ; overwrite deleted the user's resume and apply history along with the
+    ; half-written program files. See WIPE_INSTDIR_KEEP_DATA above.
+    Call WipeInstallDirKeepData
+    MessageBox MB_ICONSTOP "Could not unpack ${APPNAME} into:$\r$\n$INSTDIR$\r$\n$\r$\nThe extractor reported error $TarRC. The half-written program files have been removed, and your data folder was kept.$\r$\n$\r$\nIf ${APPNAME} is still running, quit it first -- including the tray icon -- and then run this installer again.$\r$\n$\r$\nIf this keeps happening, download job-apply-agent-portable.zip instead and extract it with tar or 7-Zip." /SD IDOK
     Abort
   unpack_ok:
 
   ; Fail closed: an installer that "succeeds" without the entry point is worse
   ; than one that fails, because the shortcut it just wrote would dangle.
   IfFileExists "$INSTDIR\${ENTRY_BAT}" entry_ok
-    RMDir /r "$INSTDIR"
-    MessageBox MB_ICONSTOP "The package unpacked but does not contain ${ENTRY_BAT}, so it cannot be started.$\r$\n$\r$\nThe folder has been removed. Please report this build: the payload zip is incomplete."
+    ; Same rule as the unpack-failure branch above: throwing away a broken
+    ; payload must not throw away data\.
+    Call WipeInstallDirKeepData
+    MessageBox MB_ICONSTOP "The package unpacked but does not contain ${ENTRY_BAT}, so it cannot be started.$\r$\n$\r$\nThe program files have been removed and your data folder was kept. Please report this build: the payload zip is incomplete." /SD IDOK
     Abort
   entry_ok:
 
@@ -380,37 +455,12 @@ Section "Uninstall"
   StrCmp $KeepData "1" 0 un_wipe
 
   IfFileExists "$INSTDIR\data" 0 un_wipe
-    ; "Keep my data" has to survive the user choosing another drive, and the
-    ; obvious implementation does not. The obvious one is Rename the subtree out
-    ; of the way, delete the rest, Rename it back. Rename cannot cross volumes:
-    ; with $INSTDIR on D: and $LOCALAPPDATA on C: it fails, IfErrors sends us to
-    ; un_wipe, and the branch that exists to PRESERVE the user's resume silently
-    ; deletes it instead. Verified with a two-mode probe (u2.nsi): MODE=1
-    ; (Rename) -> "data KEPT=False" when installed to another drive; MODE=2 ->
-    ; KEPT=True on both the same volume and a different one.
-    ; So: enumerate $INSTDIR and delete every top-level entry except data\.
-    ; data\ is where it always was, nothing is moved, and the volume layout
-    ; stops mattering. This also removes the temporary "OfferWhere-data" folder
-    ; that a cross-volume Rename would have left behind.
-    FindFirst $Fh $Fn "$INSTDIR\*.*"
-    un_keep_loop:
-      StrCmp $Fn "" un_keep_done
-      StrCmp $Fn "."  un_keep_next
-      StrCmp $Fn ".." un_keep_next
-      StrCmp $Fn "data" un_keep_next
-      ; IfFileExists with a wildcard is the only way to ask "is this a folder?"
-      ; without pulling in a FileFunc header.
-      IfFileExists "$INSTDIR\$Fn\*.*" 0 un_keep_file
-        RMDir /r "$INSTDIR\$Fn"
-        Goto un_keep_next
-      un_keep_file:
-      Delete "$INSTDIR\$Fn"
-      Goto un_keep_next
-    un_keep_next:
-      FindNext $Fh $Fn
-      Goto un_keep_loop
-    un_keep_done:
-    FindClose $Fh
+    ; Delegated to the shared function so the installer's "keep data" rule and
+    ; the uninstaller's cannot drift apart. The long comment that used to live
+    ; here -- Rename cannot cross volumes, and the fallback silently deleted the
+    ; data it existed to preserve -- moved onto the macro with the code.
+    ; See WIPE_INSTDIR_KEEP_DATA near the top of this file.
+    Call un.WipeInstallDirKeepData
     DetailPrint "Kept your data in: $INSTDIR\data"
     Goto un_fin
 
