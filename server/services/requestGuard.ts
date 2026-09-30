@@ -85,3 +85,87 @@ export function checkRequestOrigin(input: OriginCheckInput): OriginCheckResult {
   }
   return { ok: true };
 }
+
+// ── 「令牌能否注入页面」的判据 ────────────────────────────────────────────────
+/**
+ * 把 IP 归一化成可比较的形式（处理 IPv6 映射前缀与端口/方括号）。
+ * `::ffff:192.168.1.5` -> `192.168.1.5`
+ */
+export function normalizeIp(raw: string): string {
+  let s = String(raw || '').trim().toLowerCase();
+  if (!s) return '';
+  // 去掉可能的端口（IPv4:port）与 IPv6 方括号
+  s = s.replace(/^\[|\]$/g, '');
+  const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return mapped[1];
+  return s;
+}
+
+/** 是否回环地址 */
+export function isLoopbackIp(raw: string): boolean {
+  const ip = normalizeIp(raw);
+  return ip === '127.0.0.1' || ip === '::1' || ip.startsWith('127.');
+}
+
+/** 是否私有 / 链路本地地址（RFC1918 + 169.254） */
+export function isPrivateIp(raw: string): boolean {
+  const ip = normalizeIp(raw);
+  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false; // 纯 IPv6 不在此列（IPv6 有 fe80:: 等，另行处理）
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+/** 是否是 IPv6 链路本地 / 唯一本地地址 */
+export function isPrivateIpv6(raw: string): boolean {
+  const ip = normalizeIp(raw);
+  return ip.startsWith('fe80:') || ip.startsWith('fc') || ip.startsWith('fd');
+}
+
+/**
+ * 🔴 是否允许把访问令牌注入首页 HTML。
+ *
+ * 背景（2026-09-30 实测）：`GET /` 原本在鉴权开启时无条件注入令牌，理由是
+ * 「同源，外部站点读不到」。但 **CORS 只挡跨源 JS 读取，挡不住任何人直接用浏览器
+ * 打开这个 URL 看源码**。实测（REQUIRE_AUTH=1）：
+ *   匿名 GET /                    -> 200，响应体里带完整 48 位令牌
+ *   用该令牌 GET /api/resume/file -> 200，348KB 简历被完整下载
+ *   ⇒ 一旦暴露到公网，等于**鉴权被完全绕过**，任何人都能触发不可撤销的真实投递。
+ *
+ * 修法：只在「确实来自本机或内网直连」时才注入 ——
+ *   1) 对端地址必须是回环或私有网段；
+ *   2) **且** 不带任何转发头（X-Forwarded-For / X-Real-IP / Forwarded / X-Forwarded-Host）。
+ *      反代 / 隧道转发时必然带这些头 ⇒ 一律不注入（这正是公网暴露的那条路径）。
+ *
+ * 为什么保留注入：控制台靠它免填令牌。本机与同一 Wi-Fi 的手机都要用它，
+ * 而这两条路径都是「用户自己的设备 + 自己的网络」，注入不构成新增暴露面。
+ */
+export interface TokenInjectInput {
+  /** `req.socket.remoteAddress` */
+  remoteAddress?: string;
+  /** 请求头（只需大小写不敏感地取这几个转发头） */
+  headers?: Record<string, unknown>;
+}
+
+export function canInjectToken(input: TokenInjectInput): boolean {
+  const ip = String(input.remoteAddress || '');
+  const local = isLoopbackIp(ip) || isPrivateIp(ip) || isPrivateIpv6(ip);
+  if (!local) return false;
+
+  // ⚠️ 头部名统一转小写再比对：Node 运行时给的是小写，但纯函数必须对调用方的大小写不敏感
+  //    （单测里写 `Forwarded` 大写就漏判 —— 实测踩过）。
+  const h = (input.headers || {}) as Record<string, unknown>;
+  const lower: Record<string, unknown> = {};
+  for (const k of Object.keys(h)) lower[k.toLowerCase()] = h[k];
+
+  const forwarded = ['x-forwarded-for', 'x-real-ip', 'forwarded', 'x-forwarded-host']
+    .some((k) => {
+      const v = lower[k];
+      return v !== undefined && String(v).trim() !== '';
+    });
+  return !forwarded;
+}

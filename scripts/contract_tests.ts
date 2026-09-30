@@ -24,7 +24,7 @@ import {
 } from '../server/services/apply/platformsChat.js';
 import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
-import { checkRequestOrigin, buildAllowedOrigins, lanOriginsFromIps } from '../server/services/requestGuard.js';
+import { checkRequestOrigin, buildAllowedOrigins, canInjectToken, lanOriginsFromIps } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isConsoleAsset } from '../server/services/authToken.js';
 import { getConversation, upsertConversation, exec, getJob, upsertJob, kvSet, detectRemote } from '../server/db.js';
 import { checkResumeCompliance } from '../server/services/apply/resumeCompliance.js';
@@ -53,6 +53,10 @@ import {
 import type { ChatDriver, ConvSummary } from '../server/services/apply/chatTypes.js';
 import { parseDenyList, parseFileList, findDenyHits, maskToken } from './pii_guard.js';
 import { collectBatFiles, inspectBatFile } from './bat_encoding.js';
+// 🔴 剥注释必须用状态机版：那个「斜杠+星号 … 星号+斜杠」的朴素正则不区分
+//    「注释」与「代码里的字符串」，本仓库实测被 `server/index.ts` 注释里的一句 `/api/*`
+//    误导，删掉 60 行后 3968 字符的真实代码 ⇒ 静态断言**假阴性**。
+import { stripComments, countMatches } from './lib/stripComments.js';
 
 let pass = 0, fail = 0;
 const fails: string[] = [];
@@ -89,7 +93,7 @@ function skip(n: number, reason: string) {
   const CT_ROOT = fileURLToPath(new URL('..', import.meta.url));
   const src = fs.readFileSync(path.join(CT_ROOT, 'scripts/selftest.ts'), 'utf8');
   // 先剥注释再匹配：本块自己的说明文字里就带着这些字样，不剥会被「自己的注释」满足。
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const code = stripComments(src);
   const hardcoded = /skip\s*\+=\s*\d/.test(code);
   check(
     'selftest: 跳过条数由数组长度决定（不写死常数，加断言不会让分母静默缩水）',
@@ -154,11 +158,265 @@ check('写请求 + 无 Origin 本机脚本放行', checkRequestOrigin({ method: 
     '漏并白名单 ⇒ 手机端「能打开、一保存就 403」');
 }
 {
+  // 🔴 令牌注入范围（2026-09-30 修的严重漏洞）
+  // 修前：鉴权开启时 `GET /` **无条件**把令牌写进 HTML。实测匿名 GET / 拿到完整 48 位令牌，
+  //       再用它 GET /api/resume/file 拿到 348KB 简历 ⇒ 公网暴露时鉴权被完全绕过。
+  // 因为是「公开分发 + 可暴露到公网」的产品，这条必须有合约测试钉住，否则会被改回去。
+  check('本机直连（回环 + 无转发头）允许注入令牌',
+    canInjectToken({ remoteAddress: '127.0.0.1', headers: {} }) === true);
+  check('IPv6 回环允许注入',
+    canInjectToken({ remoteAddress: '::1', headers: {} }) === true);
+  check('IPv6 映射的 IPv4 回环允许注入',
+    canInjectToken({ remoteAddress: '::ffff:127.0.0.1', headers: {} }) === true);
+
+  check('局域网手机（私有网段 + 无转发头）允许注入',
+    canInjectToken({ remoteAddress: '192.168.1.20', headers: {} }) === true,
+    '手机 PWA 走局域网，禁掉会让用户每次手填令牌');
+  check('10/8 私有段允许注入',
+    canInjectToken({ remoteAddress: '10.0.0.7', headers: {} }) === true);
+  check('172.16/12 私有段允许注入',
+    canInjectToken({ remoteAddress: '172.20.3.4', headers: {} }) === true);
+
+  check('🔴 公网 IP 一律不注入',
+    canInjectToken({ remoteAddress: '203.0.113.9', headers: {} }) === false);
+  check('🔴 带 X-Forwarded-For（反代/隧道）不注入 —— 这正是公网暴露那条路径',
+    canInjectToken({ remoteAddress: '127.0.0.1', headers: { 'x-forwarded-for': '203.0.113.9' } }) === false,
+    '漏这条 ⇒ 隧道把请求从回环送进来，又会把令牌注入给任何人');
+  check('🔴 带 X-Real-IP 不注入',
+    canInjectToken({ remoteAddress: '127.0.0.1', headers: { 'x-real-ip': '203.0.113.9' } }) === false);
+  check('🔴 带 Forwarded 不注入',
+    canInjectToken({ remoteAddress: '127.0.0.1', headers: { Forwarded: 'for=203.0.113.9' } }) === false);
+  check('🔴 带 X-Forwarded-Host 不注入',
+    canInjectToken({ remoteAddress: '127.0.0.1', headers: { 'x-forwarded-host': 'abc.example.com' } }) === false);
+  check('空 remoteAddress 不注入（拿不到来源就不给令牌）',
+    canInjectToken({ remoteAddress: '', headers: {} }) === false);
+}
+{
+  // 服务端必须**真的调用** canInjectToken（静态断言防「函数写了没接线」）
+  // ⚠️ 这条曾因注释剥离器缺陷**假阴性**：`server/index.ts` 注释里的一句 `/api/*`
+  //    让朴素正则删掉 3968 字符真实代码（含这里的调用点），代码正确却报失败。
+  const idx = fs.readFileSync(path.join(fileURLToPath(new URL('..', import.meta.url)), 'server', 'index.ts'), 'utf8');
+  const idxCode = stripComments(idx);
+  check('server/index.ts 在注入令牌前调用 canInjectToken 判定',
+    /canInjectToken\s*\(\s*\{[^}]*remoteAddress/.test(idxCode),
+    '只定义不调用 ⇒ 漏洞照旧');
+  // 「恰好 1 次」而不是「有过」：注入点必须唯一。出现 2 处意味着有第二条注入路径没人审计。
+  check('令牌注入判定点恰好 1 处（不允许多出一条未审计的注入路径）',
+    countMatches(idxCode, /canInjectToken\s*\(/g) === 1,
+    `实际 ${countMatches(idxCode, /canInjectToken\s*\(/g)} 处`);
+
+  // 控制台必须有手填令牌的兜底：否则经反代的用户拿到「静默 401 且无法修复」的页面
+  const html = fs.readFileSync(path.join(fileURLToPath(new URL('..', import.meta.url)), 'public', 'console.html'), 'utf8');
+  const htmlCode = stripComments(html);
+  check('控制台支持从 localStorage 读取令牌（反代场景的兜底）',
+    /localStorage\.getItem\(\s*AUTH_TOKEN_STORE\s*\)/.test(htmlCode),
+    '没有兜底 ⇒ 公网用户无令牌可填，页面全 401');
+  check('控制台在 401 时提示补令牌',
+    /res\.status\s*===\s*401/.test(htmlCode) && /promptForToken\s*\(/.test(htmlCode));
+  check('控制台令牌改用 let（可在填完后更新）',
+    /let\s+AUTH_TOKEN\s*=/.test(htmlCode));
+}
+{
   // 移动端可用性：控制台必须有抽屉导航（原先手机上 .side{display:none} ⇒ 没有任何导航入口）
   const html = fs.readFileSync(path.join(fileURLToPath(new URL('..', import.meta.url)), 'public', 'console.html'), 'utf8');
   check('控制台含移动端抽屉导航（汉堡 + 遮罩 + 展开类）',
     html.includes('id="menuBtn"') && html.includes('id="navBackdrop"') && /\.side\.open\s*\{/.test(html),
     '缺任一 ⇒ 手机上无法切换视图（原实现直接隐藏侧栏）');
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A1.4 注释剥离器（静态断言的地基，2026-09-30） ══════');
+{
+  // 为什么单独给它一块测试：**这个函数错了，别人的绿就是假的**。
+  // 朴素正则（「斜杠+星号 … 星号+斜杠」）不区分「注释」与「字符串字面量」，
+  // 实测被 server/index.ts 注释里的一句 `/api/*` 误导，删掉 3968 字符真实代码 ⇒
+  // 上面那条 canInjectToken 断言代码明明正确却报失败（假阴性），排查了半天。
+  // 反向的坑同样存在：剥不干净 ⇒ 断言被自己的注释满足（假阳性）。
+  // 这两个方向都要钉住，否则「全绿」本身不可信。
+
+  // ① 原始 bug：注释里出现 斜杠+星号 不得吞掉后面的真实代码
+  // ⚠️ 这个用例的第一版**没牙**：我只写了注释 + 后续代码，但没在后面放「星号+斜杠」的
+  //    收尾符号 ⇒ 朴素正则找不到配对的收尾，于是什么都不删，用例照样绿。
+  //    真实文件里之所以中招，正是因为**后面还有别的块注释**（那个收尾符号被借用了）。
+  //    ⇒ 必须把「后面还有一个块注释」也写进来，才复现得了。
+  const trap = [
+    '// 第一版只放行 /api/* ，结果 GET / 直接 401',
+    'app.get("/", (req, res) => { return canInjectToken(req); });',
+    '/* 下面是另一段逻辑 */',
+    'const other = 1;',
+  ].join('\n');
+  check('注释里的「斜杠+星号」不会吞掉后续真实代码（原始假阴性 bug）',
+    /canInjectToken\s*\(/.test(stripComments(trap)) && /const other/.test(stripComments(trap)),
+    '朴素正则会把两行真实代码一起删掉（后面那个块注释的收尾符号被借用了）');
+
+  // ② URL 的 // 必须保留（console.html 里全是 https://）
+  check('URL 的 // 不被当成行注释',
+    stripComments('const u = "https://example.com/a"; const k = 1;').includes('const k = 1;') &&
+    stripComments('see https://example.com/x then const z=1;').includes('const z=1;'));
+
+  // ③ 字符串里的注释符号必须保留，真注释必须删掉
+  check('字符串内的注释符号保留、真注释删除',
+    stripComments('const a = "http://x/*y"; // 真注释').includes('http://x/*y') &&
+    !stripComments('const b = 1; // 真注释').includes('真注释') &&
+    !stripComments('const c = 1; /* 真注释 */ const d = 2;').includes('真注释'));
+
+  // ④ 块注释删除后保留换行 ⇒ 报错行号不漂
+  check('块注释删除后行号不漂（保留换行）',
+    stripComments('a\n/* x\ny\n*/b').split('\n').length === 4,
+    `实际 ${stripComments('a\n/* x\ny\n*/b').split('\n').length} 行`);
+
+  // ⑤ countMatches 是「恰好 N 次」的载体 —— 裸 includes 会被残留文本满足
+  check('countMatches 按完整词组精确计数（裸子串会多数）',
+    countMatches('<p>仅预览</p><p>仅预览（不真正投递）</p>', /仅预览（不真正投递）/g) === 1 &&
+    countMatches('<p>仅预览</p><p>仅预览（不真正投递）</p>', /仅预览/g) === 2);
+
+  // ⑥ 实文件不塌陷：剥离后长度若骤降，说明「剥多了」，所有下游断言都在骗人
+  const mpSrc = fs.readFileSync(path.join(fileURLToPath(new URL('..', import.meta.url)), 'public', 'console.html'), 'utf8');
+  check('console.html 剥离注释后正文未塌陷（<60% 视为剥多了）',
+    stripComments(mpSrc).length > mpSrc.length * 0.6,
+    `${stripComments(mpSrc).length} / ${mpSrc.length}`);
+}
+{
+  // 门禁脚本自身必须用可靠剥离器（否则门禁自己也可能是假绿/假红）
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  // ⚠️ 这条检查**刻意不调用 stripComments**：它要守的就是 stripComments 本身，
+  //    若依赖它，「剥离器坏了」会连累这条也报错，而报出的却是
+  //    「contract_tests.ts 用了朴素正则」——**误导维护者去改一个没坏的文件**。
+  //    （实测踩过：破坏 stripper 后这条跟着红，信息指向完全错误的地方。）
+  // ⇒ 直接扫原文。为了不让本文件自己的**说明文字**命中（自指假阳性），
+  //   ① 上面相关注释一律用文字描述，不写裸序列；
+  //   ② 针脚拆成两段拼接，源码里没有连续形态。
+  const NEEDLE = '[\\s\\S]*?' + '\\*' + '\\/';
+  for (const f of ['scripts/contract_tests.ts', 'scripts/mp_check.ts', 'scripts/guide_check.ts']) {
+    const raw = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    check(`${f} 不使用朴素正则剥块注释（改用 scripts/lib/stripComments.ts）`,
+      !raw.includes(NEEDLE),
+      '朴素正则不分「注释」与「字符串字面量」⇒ 门禁假阴性（代码对却报失败）或假阳性（注释满足断言）');
+  }
+  // 单一真相源：剥离器只有一份实现，且门禁确实在用它（不是又抄了一份）
+  const lib = fs.readFileSync(path.join(ROOT, 'scripts/lib/stripComments.ts'), 'utf8');
+  check('剥注释实现单一真相源（只有 lib/stripComments.ts 导出它）',
+    /export\s+function\s+stripComments\s*\(/.test(lib));
+  check('contract_tests 真的 import 该实现（没有本地另抄一份）',
+    /import\s*\{[^}]*\bstripComments\b[^}]*\}\s*from\s*['"]\.\/lib\/stripComments\.js['"]/.test(
+      fs.readFileSync(path.join(ROOT, 'scripts/contract_tests.ts'), 'utf8')),
+    '另抄一份 ⇒ 两处必然漂移，且改一处不会让另一处生效');
+  check('mp_check 也 import 同一实现（不各自维护一份）',
+    /import\s*\{[^}]*\bstripComments\b[^}]*\}\s*from\s*['"]\.\/lib\/stripComments\.js['"]/.test(
+      fs.readFileSync(path.join(ROOT, 'scripts/mp_check.ts'), 'utf8')));
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A1.45 反向隧道（公网暴露的护栏，2026-09-30） ══════');
+{
+  // 静态部分：钉住「不能少的几行」。行为部分由 `npm run relay:e2e` 真跑整条链路
+  // （那个会 spawn 子进程，刻意不进本文件 —— 本文件要能在无 Chrome、无网络的 CI 里稳定跑）。
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const read = (f: string) => stripComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  // ⚠️ 必须剥注释：这两个文件的注释里正面写着 x-forwarded-for / 令牌 这些词，
+  //    不剥的话断言会被**自己的说明文字**满足 —— 本仓库反复踩的坑。
+  const relay = read('relay/relay.mjs');
+  const client = read('relay/client.mjs');
+
+  check('隧道中继与客户端都在仓库里（不是只存在于某台机器上）',
+    relay.length > 500 && client.length > 500);
+
+  // ── 安全不变量 ①：转发头必须补齐 ──
+  check('🔴 中继转发前补齐转发头（不靠 nginx 配置正确）',
+    /ensureForwardingHeaders\s*\(/.test(relay) && countMatches(relay, /ensureForwardingHeaders\s*\(/g) >= 2,
+    '缺这条 ⇒ 公网请求被后端当成「本机直连」⇒ 令牌注入到公网可读的页面');
+  check('🔴 隧道客户端无条件设置 x-forwarded-for',
+    /headers\[\s*['"]x-forwarded-for['"]\s*\]\s*=/.test(client),
+    '缺这条 ⇒ 同上的令牌泄露（实测：停用两层补头后隧道真的吐出了完整 48 位令牌）');
+  check('🔴 隧道客户端无条件设置 x-real-ip',
+    /headers\[\s*['"]x-real-ip['"]\s*\]\s*=/.test(client));
+
+  // ── 安全不变量 ②：后端未开鉴权时拒绝启动 ──
+  check('🔴 客户端探测后端鉴权状态，未开启（非 401/403）就拒绝启动',
+    /probe\.status\s*!==\s*401\s*&&\s*probe\.status\s*!==\s*403/.test(client) &&
+    /--allow-no-auth/.test(client),
+    '默认 HOST=127.0.0.1 时鉴权是关的；忘了设 REQUIRE_AUTH=1 就把不可撤销的投递能力挂上公网');
+  check('客户端在拒绝启动前把「怎么修」打印出来（不是只说一句失败）',
+    /REQUIRE_AUTH=1/.test(client) && /EXTRA_ORIGINS/.test(client),
+    '只说失败 ⇒ 用户不知道要加哪两个环境变量');
+
+  // ── 安全不变量 ③：密钥卫生 ──
+  check('🔴 中继用常量时间比较隧道密钥（防时序侧信道）',
+    /timingSafeEqual/.test(relay) && /timingSafeStrEq\s*\(/.test(relay));
+  check('客户端拒绝从命令行接收密钥（argv 会进进程列表 / 日志）',
+    /process\.argv\.includes\(\s*['"]--secret['"]\s*\)/.test(client),
+    'argv 里的密钥等于公开');
+  // ⚠️ 这条前两版都太钝，值得记下来：
+  //    ① 版禁「console 里出现 TUNNEL_SECRET」→ 把「打印密钥**文件路径**」（有用的报错）误判；
+  //    ② 版加负向断言排除 _FILE → 又被**示例文案**里的 `TUNNEL_SECRET=xxx` 误判。
+  //    ⇒ 真正要禁的不是「提到变量名」，而是「把**值**送进 console」这一形态。
+  //      变量名出现在帮助文案里是好事（用户需要知道要设哪个变量）。
+  check('客户端不把密钥**值**送进日志（提到变量名的帮助文案不算）',
+    !/console\.(log|error)\([^)]*\$\{TUNNEL_SECRET\}/.test(client) &&
+    !/console\.(log|error)\([^)]*,\s*TUNNEL_SECRET\s*[,)]/.test(client) &&
+    !/\+\s*TUNNEL_SECRET\b/.test(client),
+    '`${TUNNEL_SECRET}` / 作为实参 / 字符串拼接 —— 任一形态都会把密钥写进日志');
+  // 🔴 更隐蔽的一条：连中继的 URL 上挂着 ?secret=<密钥>。
+  //    若日志里打 url.toString() / url.href，密钥就跟着进日志了。
+  check('🔴 客户端打印中继地址时不带查询串（?secret= 不能进日志）',
+    /\$\{url\.origin\}/.test(client) &&
+    !/console\.(log|error)?[^;]*url\.(toString|href)/.test(client) &&
+    !/log\([^)]*url\.searchParams/.test(client),
+    'url.toString() 会带上 ?secret=<密钥>');
+  check('中继不记录 URL / 请求体（明文不过日志）',
+    !/console\.(log|error)\([^)]*req\.url/.test(relay) &&
+    !/console\.(log|error)\([^)]*bodyB64/.test(relay),
+    '中继能看到明文（TLS 在本机终止）⇒ 记日志等于把简历内容写进磁盘');
+
+  // ── 协议卫生：逐跳首部必须剥掉 ──
+  check('两端都剥逐跳首部（RFC 7230 §6.1）',
+    /HOP_BY_HOP/.test(relay) && /HOP_BY_HOP/.test(client) &&
+    /'transfer-encoding'/.test(relay) && /'transfer-encoding'/.test(client),
+    '转发 transfer-encoding / connection ⇒ 响应体错乱或连接挂住');
+
+  // ── 可用性：几条「会让人查半天」的兜底 ──
+  check('中继在隧道未连接时返回 502 + 可读原因（不是挂住）',
+    /隧道未连接/.test(relay) && /502/.test(relay));
+  check('客户端断线指数退避重连（不是狂重连打爆中继）',
+    /backoff/.test(client) && /BACKOFF_MAX/.test(client));
+  check('客户端对响应体也有上限（防单条隧道请求把内存吃光）',
+    /MAX_BODY/.test(client) && /res\.on\(\s*['"]data['"]/.test(client));
+
+  // ── 端到端自检脚本必须存在（这是唯一能证明链路真的通的东西）──
+  check('存在反向隧道端到端自检脚本（真 spawn 两端跑一遍）',
+    fs.existsSync(path.join(ROOT, 'scripts/relay_e2e.ts')),
+    '静态断言证明不了「链路真的通、且真的不泄露令牌」');
+  const e2e = read('scripts/relay_e2e.ts');
+  check('端到端自检用**真实的** canInjectToken 判定（不是自己重写一份）',
+    /import\s*\{[^}]*canInjectToken[^}]*\}\s*from\s*['"][^'"]*requestGuard\.js['"]/.test(e2e),
+    '自己重写一份 ⇒ 测的是测试自己的逻辑，线上那份改坏了也照样绿');
+  check('端到端自检含「本机直连仍注入令牌」的反向对照',
+    /TOKEN:/.test(e2e) && /NO-TOKEN/.test(e2e),
+    '只测「不注入」的话，把注入功能整个删掉也是绿的 —— 过度纠正照样过');
+
+  // ── 文档必须存在且和代码对得上（本仓库「文档漂移」是复发型故障）──
+  const docPath = path.join(ROOT, 'relay/README.md');
+  check('存在 tunnel 部署说明 relay/README.md', fs.existsSync(docPath));
+  if (fs.existsSync(docPath)) {
+    const doc = fs.readFileSync(docPath, 'utf8');
+    // 说明里承诺的三个环境变量，必须真的是代码里认的那几个
+    check('文档写的后端环境变量与实际代码一致（REQUIRE_AUTH / EXTRA_ORIGINS / HOST）',
+      doc.includes('REQUIRE_AUTH=1') && doc.includes('EXTRA_ORIGINS') &&
+      /isAuthEnabled/.test(read('server/services/authToken.ts')) &&
+      /EXTRA_ORIGINS/.test(read('server/index.ts')),
+      '文档说一个、代码认一个 ⇒ 用户照着做还是 403');
+    // ⚠️ 中继侧要查的是**小写** `headers.host` —— Node 会把头部名归一化成小写，
+    //    第一版这里写了大写 `Host` 于是恒为 false（断言自己错了，不是文档错了）。
+    check('文档点明了 nginx 必须保留 Host 头（否则中继选不到隧道）',
+      /proxy_set_header\s+Host/.test(doc) &&
+      /headers\.host\b|headers\[\s*['"]host['"]\s*\]/.test(relay),
+      '中继靠 Host 首段选隧道，Host 被改写 ⇒ 全部 502');
+    // 最要紧的一条：文档必须把「朋友自用是负收益」说在显眼处，
+    // 否则用户会照着把后端挂上公网，只为让朋友用他们本来能自己装的东西。
+    check('文档明确写了「朋友自用 = 负收益，应各自本地安装」',
+      doc.includes('负收益') && /各自本地安装|本地安装/.test(doc),
+      '这条不写清 ⇒ 用户会为一个不需要的场景承担公网暴露风险');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1802,7 +2060,7 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   // ⚠️ 先剥 C 注释再匹配。这一段新代码的注释里**恰好**写着 IFileDialog /
   // SHBrowseForFolderW / cmd_path 这些名字（说明它为什么这么做），
   // 不剥注释的话断言会被自己的说明文字满足 —— 与 §⑥ 那条同一个坑。
-  const stripC = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const stripC = (s: string) => stripComments(s);
   const sfxCode = stripC(sfxC);
   check('stub 用真对话框问安装位置（路径可改），不是只能点确定的 MessageBox',
     sfxCode.includes('DialogBoxIndirectParamW') && sfxCode.includes('ask_install_dir'),

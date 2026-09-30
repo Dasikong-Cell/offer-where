@@ -805,11 +805,42 @@ const TIER_TIP = {
 };
 const pfName = id => (PLATFORMS.find(p=>p.id===id)||{}).name || id;
 
-const AUTH_TOKEN = (typeof window!=='undefined' && window.__AUTH_TOKEN__) || '';
+/* 令牌来源（优先级）：
+   1) 服务端注入的 window.__AUTH_TOKEN__ —— **仅本机 / 同一 Wi-Fi 直连**时才有；
+   2) localStorage —— 经反代 / 隧道访问时服务端**刻意不注入**，用户首次手填一次即可。
+
+   ⚠️ 2026-09-30：此前只有第 1 条，且服务端**无条件**注入。实测（REQUIRE_AUTH=1）：
+   匿名 GET / 就能在页面源码里拿到完整 48 位令牌，再用它下载 348KB 简历 ——
+   一旦暴露到公网，鉴权等于没有。服务端已改为「仅本机/内网直连才注入」，
+   这里补上用户侧的手填兜底，否则经反代的用户会拿到一个「静默 401 且无法修复」的页面。 */
+const AUTH_TOKEN_STORE = 'ow_auth_token';
+function readStoredToken(){
+  try{ return localStorage.getItem(AUTH_TOKEN_STORE) || ''; }catch(_){ return ''; }
+}
+let AUTH_TOKEN = (typeof window!=='undefined' && window.__AUTH_TOKEN__) || readStoredToken();
 const authHeaders = () => (AUTH_TOKEN ? {'X-Auth-Token': AUTH_TOKEN} : {});
+function saveToken(t){
+  AUTH_TOKEN = String(t||'').trim();
+  try{ localStorage.setItem(AUTH_TOKEN_STORE, AUTH_TOKEN); }catch(_){ /* 隐私模式 */ }
+}
+/** 401 时提示补令牌（每次载入只提示一次，避免连发请求时反复弹窗） */
+let authPrompted = false;
+function promptForToken(){
+  if(authPrompted) return;
+  authPrompted = true;
+  const cur = AUTH_TOKEN ? '当前令牌无效。' : '';
+  const t = window.prompt(
+    '需要访问令牌\n\n' + cur +
+    '令牌在「跑后端的那台电脑」上：安装目录 → data → .auth_token\n' +
+    '用记事本打开，把里面那串字符复制过来。只需填一次，之后自动记住。',
+    ''
+  );
+  if(t && String(t).trim()){ saveToken(t); location.reload(); }
+}
 async function api(path, opts={}){
   const res = await fetch(path, Object.assign({headers:Object.assign({'Content-Type':'application/json'}, authHeaders())}, opts));
   let data=null; try{ data = await res.json(); }catch(e){}
+  if(res.status===401){ promptForToken(); throw new Error('未授权：请填写访问令牌'); }
   if(!res.ok) throw new Error((data&&data.error)||('HTTP '+res.status));
   return data;
 }

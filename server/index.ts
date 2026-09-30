@@ -50,7 +50,7 @@ import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuC
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealthCached, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
-import { buildAllowedOrigins, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
+import { buildAllowedOrigins, canInjectToken, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
 import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isAuthorizedStaticRes, signStaticPath, isConsoleAsset } from "./services/authToken.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
@@ -306,10 +306,23 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(CONSOLE_DIR));
-app.get("/", (_req, res) => {
+app.get("/", (req, res) => {
   const file = path.join(CONSOLE_DIR, 'console.html');
   if (!AUTH_ENABLED) { res.sendFile(file); return; }
-  // 鉴权开启：把令牌注入页面（同源，外部站点读不到），控制台 fetch 自动携带
+  // 🔴 鉴权开启时把令牌注入页面 —— 但**只能注入给「本机 / 内网直连」**。
+  //
+  // 2026-09-30 实测（REQUIRE_AUTH=1）：
+  //   匿名 GET /                    -> 200，响应体带完整 48 位令牌
+  //   用该令牌 GET /api/resume/file -> 200，348KB 简历被完整下载
+  // 原注释写的「同源，外部站点读不到」是错的：CORS 只挡跨源 JS **读取**，
+  // 挡不住任何人直接用浏览器打开这个 URL 看源码 ⇒ 暴露到公网 = 鉴权被完全绕过。
+  //
+  // 现在：对端必须是回环/私有网段，且不带任何转发头（反代/隧道必然带）才注入。
+  // 公网经反代进来时地址是回环但带 X-Forwarded-For ⇒ 不注入，页面会提示手填令牌。
+  if (!canInjectToken({ remoteAddress: req.socket?.remoteAddress, headers: req.headers })) {
+    res.sendFile(file);
+    return;
+  }
   try {
     const html = fs.readFileSync(file, 'utf8').replace(
       '</head>',

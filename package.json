@@ -36,7 +36,8 @@
     "app:dev": "tauri dev",
     "app:build": "tauri build --no-bundle",
     "app:bundle": "tauri build",
-    "guide:check": "tsx scripts/guide_check.ts"
+    "guide:check": "tsx scripts/guide_check.ts",
+    "relay:e2e": "tsx scripts/relay_e2e.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.80",

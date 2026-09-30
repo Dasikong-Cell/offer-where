@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './lib/stripComments.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MP = path.join(ROOT, 'miniprogram');
@@ -58,11 +59,8 @@ function readText(rel) {
 }
 
 /** 剥掉注释再匹配，避免断言被自己的注释满足（本仓库反复踩过的坑）。 */
-function stripComments(s) {
-  return s
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
-}
+// ⚠️ 用状态机版而非朴素正则：后者不区分「注释」与「字符串字面量」，
+//    会把真实的 URL / 含 `/*` 的字符串误当注释删掉（console.html / server/index.ts 都踩过）。
 
 console.log('小程序自检 (miniprogram)');
 console.log('');
