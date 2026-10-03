@@ -139,6 +139,37 @@ export function isConsoleAsset(method: string, pathname: string): boolean {
 }
 
 /**
+ * 配对相关路径 —— **必须匿名可达**（2026-10-01 加入一次性配对码时新增）。
+ * ==========================================================================
+ * 为什么必须放行：配对页 `/pair` 与「用配对码换设备凭证」的 `POST /api/pair`
+ * **本身就是取得授权的手段**，挡在门后就是死循环 —— 要令牌才能拿令牌。
+ * （本项目已经踩过一次同形状的坑：第一版只放行 `/api/*`，`GET /` 直接 401，
+ *  控制台白屏而 curl 测 `/api/*` 全部「符合预期」。）
+ *
+ * 为什么放行它们是安全的：
+ *  - `GET /pair` 只是一个表单页面，不含任何数据；
+ *  - `POST /api/pair` 要**同时**满足「配对码正确」才发凭证，而配对码是
+ *    6 位数字 + **一次性** + 失败限速（单 IP 5 次 / 全局 30 次，每 5 分钟）——
+ *    爆破不成立；且它唯一能换到的东西是"被允许注入令牌"的资格本身。
+ *
+ * ⚠️ 这是**显式清单**，不是前缀放行。不要往这里加别的东西。
+ */
+export const PAIR_PAGE_PATHS = ['/pair', '/pair.html'];
+export const PAIR_ANON_POST_PATHS = ['/api/pair'];
+/** 仅**回环**可读的配对元信息（当前配对码）—— 这里放行，再由路由自己判回环 */
+export const PAIR_LOOPBACK_ONLY_PATHS = ['/api/pair/code'];
+
+export function isPairAnonRequest(method: string, pathname: string): boolean {
+  const m = String(method || '').toUpperCase();
+  const p = String(pathname || '');
+  const isRead = m === 'GET' || m === 'HEAD';
+  if (isRead && PAIR_PAGE_PATHS.includes(p)) return true;
+  if (isRead && PAIR_LOOPBACK_ONLY_PATHS.includes(p)) return true;
+  if (m === 'POST' && PAIR_ANON_POST_PATHS.includes(p)) return true;
+  return false;
+}
+
+/**
  * 使用说明页（`public/guide/`）的匿名放行 —— 与 CONSOLE_ASSETS 并列，但判据不同。
  *
  * 为什么必须单独有一条（2026-09-30）：控制台侧栏底部加了「使用说明 / 常见问题」入口，

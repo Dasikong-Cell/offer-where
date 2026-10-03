@@ -2,6 +2,9 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
+// 发布时间入库前的收敛（把「今天」「更新9月2日」等文案统一成 YYYY-MM-DD）。
+// 该模块零依赖、零 IO，不会给 db.ts 的加载引入副作用。
+import { normalizePostedDate, parsePostedAt, postedAtFromLabeled } from './services/parsePostedAt.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,6 +129,12 @@ db.exec(`
     jd_images TEXT,
     -- 'text' = jd 列有真岗位描述；'image' = JD 为长图(见 jd_images)；'none'/NULL = 无 JD。
     jd_source TEXT,
+    -- 🔴 「岗位发布时间」(YYYY-MM-DD，**平台口径**)，与 created_at「我们入库的时间」是两回事。
+    --    此前只有 created_at，于是「查当天新开的岗位」只能退化成「查当天采集到的岗位」：
+    --    一条 9 月 1 日发布、10 月 2 日才被我们采集到的岗位，会被当成「新增」推给用户，
+    --    而它其实已挂了 31 天，简历多半石沉大海。
+    --    NULL = 该平台没给发布时间（老数据、或解析不出来），此时筛选端退回 created_at 兜底。
+    posted_at TEXT,
     status TEXT NOT NULL DEFAULT 'candidate',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -295,6 +304,19 @@ try {
   if (!jc4.some((c) => c.name === 'ocr_status')) {
     db.exec("ALTER TABLE jobs ADD COLUMN ocr_status TEXT");
     console.log("[DB] Added ocr_status column to jobs");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 posted_at 列（平台口径的岗位发布时间，YYYY-MM-DD）
+//   目的：让「只看今天新开的岗位」能按**平台发布时间**筛，而不是退化成「我们入库的时间」。
+//   老数据此列为 NULL ⇒ 筛选端会退回 created_at 兜底，不会因为缺列而漏掉整批岗位。
+try {
+  const jc5 = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jc5.some((c) => c.name === 'posted_at')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN posted_at TEXT");
+    console.log("[DB] Added posted_at column to jobs");
   }
 } catch (e) {
   // 忽略错误（列可能已存在）
@@ -648,18 +670,69 @@ export function createApplication(app: Omit<ApplicationRow, 'created_at' | 'upda
   return { ...app, strategy, evidence_path, created_at: now, updated_at: now };
 }
 
+/**
+ * 动态 UPDATE 的列名**运行时白名单**。
+ * ==========================================================================
+ * 🔴 2026-09-30 修复（P0：列名注入）
+ *
+ * 原先这几个 `updateXxx` 都写成：
+ *     for (const key of Object.keys(updates)) fields.push(`${key} = ?`);
+ *     db.prepare(`UPDATE jobs SET ${fields.join(', ')} WHERE id = ?`)
+ * —— **列名位置直接取自对象的键**。而 `PATCH /api/jobs/:id` 又把 `req.body`
+ * 整包转发进来（server/index.ts），于是键名可以被注入。
+ *
+ * 实测（隔离库，`_tools/_inject_probe.mjs`）：
+ *   body = { "company = 'X', position = ?, city = ?, salary = ? --": "P" }
+ *   拼出 UPDATE jobs SET company = 'X', position = ?, city = ?, salary = ? -- = ?, updated_at = ? WHERE id = ?
+ *   `--` 把 `WHERE id = ?` 整段注释掉 ⇒ **全表被改写**，且接口静默返回 200。
+ *
+ * ⚠️ TypeScript 的 `Partial<Pick<JobRow, ...>>` **只是编译期约束**：`req.body` 是 any，
+ *    运行时没有任何键名校验。凡是「列名来自对象键」的动态 SQL，运行时都必须过白名单。
+ *
+ * 修法：**按白名单顺序遍历**，而不是按对象键顺序 ——
+ *   ① 键名只可能来自这里的常量，注入面被结构性消除（不是靠过滤黑名单）；
+ *   ② 顺带消掉「SQL 文本随 body 键序变化」带来的 prepared-statement 缓存抖动。
+ */
+const JOB_UPDATABLE_COLUMNS = [
+  'company', 'position', 'city', 'jd', 'requirements', 'salary', 'apply_url', 'deadline',
+  'match_score', 'match_detail', 'quarantine', 'skip_reason', 'card_text', 'jd_images',
+  'jd_source', 'ocr_status', 'posted_at', 'remote', 'status',
+] as const;
+
+const APPLICATION_UPDATABLE_COLUMNS = [
+  'platform', 'company', 'position', 'salary', 'city', 'job_url', 'status',
+  'login_method', 'message', 'strategy', 'evidence_path', 'video_path',
+] as const;
+
+/** 供路由层复用同一份清单（校验/回显），避免两处各抄一遍后走样 */
+export const JOB_UPDATABLE = JOB_UPDATABLE_COLUMNS;
+
+/**
+ * 从 `updates` 里按 `allowed` 白名单取出待更新列。
+ * 键名只来自 `allowed`（常量），**绝不来自调用方传入的对象键**。
+ */
+function collectUpdateFields(
+  updates: Record<string, any>,
+  allowed: readonly string[],
+  transform: (key: string, value: any) => any = (_k, v) => v,
+): { fields: string[]; values: any[] } {
+  const fields: string[] = [];
+  const values: any[] = [];
+  for (const key of allowed) {
+    const raw = updates?.[key];
+    if (raw === undefined) continue;
+    fields.push(`${key} = ?`);
+    values.push(transform(key, raw));
+  }
+  return { fields, values };
+}
+
 export function updateApplication(id: string, updates: Partial<Pick<ApplicationRow,
   'platform' | 'company' | 'position' | 'salary' | 'city' | 'job_url' | 'status' | 'login_method' | 'message' | 'strategy' | 'evidence_path' | 'video_path'
 >>): boolean {
-  const fields: string[] = [];
-  const values: any[] = [];
-  for (const key of Object.keys(updates) as Array<keyof typeof updates>) {
-    const value = (updates as any)[key];
-    if (value !== undefined) {
-      fields.push(`${key} = ?`);
-      values.push(value);
-    }
-  }
+  const { fields, values } = collectUpdateFields(
+    updates as Record<string, any>, APPLICATION_UPDATABLE_COLUMNS,
+  );
   if (fields.length === 0) return false;
   fields.push('updated_at = ?');
   values.push(new Date().toISOString());
@@ -699,6 +772,12 @@ export interface JobRow {
   jd_source: string | null;
   /** 图片JD的OCR回填状态：NULL/pending=待识别；done=已识别写回jd；failed=识别失败(模型非视觉/无内容)，可 --retry-failed 重跑 */
   ocr_status: string | null;
+  /**
+   * 岗位发布时间（`YYYY-MM-DD`，**平台口径**）。与 `created_at`（我们入库的时间）是两回事：
+   * 前者回答「这个岗位挂了多久」，后者只回答「我们什么时候发现的」。
+   * NULL = 平台没给、或文案解析不出来 ⇒ 筛选端退回 created_at 兜底。
+   */
+  posted_at: string | null;
   /** 远程岗位标记：1=远程/居家办公，0=非远程（驻场/坐班），NULL=未识别。采集时按文本自动推断，可被显式覆盖 */
   remote: number | null;
   status: string;
@@ -876,6 +955,13 @@ export function upsertJob(job: {
    */
   remote?: number | null;
   /**
+   * 岗位发布时间。接受两种形态：
+   *   · 已解析好的 `YYYY-MM-DD`；
+   *   · 平台原文（`'今天'` / `'更新9月2日'`）—— 入库前会经 normalizePostedDate 收敛。
+   * 认不出来落 `null`（存脏值会让「仅当日新增」永远匹配不上，岗位静默消失）。
+   */
+  posted_at?: string | null;
+  /**
    * 匹配分（AI/规则算出的界面匹配分）。**未评分时必须传 undefined/NULL，不要传 0**：
    * 老库 jobs.match_score 列默认值是 0（见 upsertJob INSERT 注释），若不显式写 NULL，
    * 新采集的岗位会落成 0，而打招呼闸门把「0 分」当成「已评 0 分」→ 全部被匹配度闸门拦下
@@ -893,6 +979,27 @@ export function upsertJob(job: {
   if (job.city !== undefined) cleaned.city = sanitizeJobText(job.city, 30);
   // 薪资也被加密字体污染（`10-20K` → `-K`），用专用清洗（保留合法薪资、丢弃无数字残片）
   if (job.salary !== undefined) cleaned.salary = sanitizeSalary(job.salary);
+  // 发布时间：接受 `YYYY-MM-DD` 或平台原文（'今天' / '更新9月2日'），统一收敛后入库。
+  // 认不出来落 null —— 存 `'面议'` 这类脏值会让筛选端 `= '2026-10-02'` 永远匹配不上，
+  // 岗位会静默消失在「仅当日新增」里，且没有任何地方报错。
+  // 发布时间取三种来源，优先级从高到低：
+  //   ① 调用方显式传的 posted_at（最权威）；
+  //   ② 卡片文本解析 —— 实测 offerbiu 的 card_text 100% 可解析（963/963），
+  //      于是**所有已经写 card_text 的采集器零改动就获得了发布时间**；
+  //   ③ 详情页正文里**带字段名**的日期（`更新时间2026-09-20`，真实库 80 例）。
+  //      ⚠️ 只认字段名，绝不把整篇 JD 扔进全规则解析器 —— 实测那样命中 2% 且大多是
+  //      「工作时间9-18」「宣讲会时间」这类噪声。
+  //   ⚠️ 三者都没结果时**保持 undefined**（而不是写 null）：upsertJob 是部分更新语义，
+  //      写 null 会把「投递流程补 JD」时已存好的 posted_at 抹掉。
+  if (job.posted_at !== undefined) {
+    cleaned.posted_at = normalizePostedDate(job.posted_at);
+  } else if (job.card_text) {
+    const guess = parsePostedAt(job.card_text).date;
+    if (guess) cleaned.posted_at = guess;
+  } else if (job.jd) {
+    const guess = postedAtFromLabeled(job.jd);
+    if (guess) cleaned.posted_at = guess;
+  }
   // 远程标记：显式传入（含 0/1）则尊重；未传则按文本自动推断
   const remoteVal = job.remote !== undefined
     ? (job.remote ? 1 : 0)
@@ -919,14 +1026,14 @@ export function upsertJob(job: {
   //    company/position/apply_url = NULL（实测 boss 12/277、job51 53/101 条被抹掉）。
   //    现在语义为「部分更新」：undefined = 保持原值；显式 null = 清空。
   const UPDATABLE = ['source', 'company', 'position', 'city', 'jd', 'requirements',
-    'salary', 'apply_url', 'deadline', 'card_text', 'jd_images', 'jd_source', 'remote'] as const;
+    'salary', 'apply_url', 'deadline', 'card_text', 'jd_images', 'jd_source', 'posted_at', 'remote'] as const;
   const providedCols = UPDATABLE.filter((c) => (job as Record<string, unknown>)[c] !== undefined);
   // updated_at 始终更新，保证 SET 子句非空（否则只剩逗号会成为非法 SQL）
   const setSql = [...providedCols.map((c) => `${c} = excluded.${c}`), 'updated_at = excluded.updated_at'].join(',\n      ');
 
   db.prepare(`
-    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, match_score, remote, status, created_at, updated_at)
-    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, @match_score, @remote, 'candidate', @created_at, @updated_at)
+    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, posted_at, match_score, remote, status, created_at, updated_at)
+    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, @posted_at, @match_score, @remote, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       ${setSql}
   `).run({
@@ -941,6 +1048,7 @@ export function upsertJob(job: {
     card_text: job.card_text ?? null,
     jd_images: job.jd_images ?? null,
     jd_source: job.jd_source ?? null,
+    posted_at: job.posted_at ?? null,
     remote: remoteVal,
     requirements: job.requirements ?? null,
     salary: job.salary ?? null,
@@ -953,25 +1061,20 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' |   'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'remote' | 'status'
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' |   'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'posted_at' | 'remote' | 'status'
 >>): boolean {
-  const fields: string[] = [];
-  const values: any[] = [];
   /** 文本字段同样过清洗，避免绕过 upsertJob 直接脏写（见 sanitize* 系列） */
   const sanitizeField = (k: string, v: any): any => {
     if (k === 'company') return sanitizeCompany(v);
     if (k === 'position') return sanitizePosition(v);
     if (k === 'salary') return sanitizeSalary(v);
     if (k === 'city') return sanitizeJobText(v, 30);
+    if (k === 'posted_at') return normalizePostedDate(v);
     return v;
   };
-  for (const key of Object.keys(updates) as Array<keyof typeof updates>) {
-    const raw = (updates as any)[key];
-    if (raw === undefined) continue;
-    const value = sanitizeField(key as string, raw);
-    fields.push(`${key} = ?`);
-    values.push(value);
-  }
+  const { fields, values } = collectUpdateFields(
+    updates as Record<string, any>, JOB_UPDATABLE_COLUMNS, sanitizeField,
+  );
   if (fields.length === 0) return false;
   fields.push('updated_at = ?');
   values.push(new Date().toISOString());

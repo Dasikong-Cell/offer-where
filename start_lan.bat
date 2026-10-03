@@ -15,8 +15,15 @@ REM  The backend ALSO listens on your LAN so a phone or tablet on
 REM  the SAME Wi-Fi can open the console. Desktop and phone share
 REM  ONE backend and ONE SQLite (data/chat.db): anything changed on
 REM  either side shows up on the other after a refresh.
-REM  Use this only on a trusted network (home Wi-Fi) -- everyone on
-REM  the same network can open the console and trigger real actions.
+REM
+REM  A new device must enter a PAIRING CODE on first visit -- a
+REM  6-digit number printed by the server window (JobApply-Server).
+REM  Without it, anyone on the same Wi-Fi could open your console
+REM  and trigger real job applications on your behalf.
+REM  This PC (127.0.0.1) never needs pairing.
+REM  Set PAIRING=off before this script to disable the gate, but
+REM  then you are back to "same network = trusted".
+REM
 REM  Never port-forward it; public exposure is not supported.
 REM ============================================================
 
@@ -39,6 +46,11 @@ if defined IPS (
 ) else (
   echo   [warn] No LAN IPv4 address found. Check Wi-Fi / Ethernet.
 )
+echo.
+echo   A phone/tablet needs a PAIRING CODE on first visit.
+echo   Look in the "JobApply-Server" window for:
+echo       LAN pairing code:  123456
+echo   (One-time code; a new one is issued after each pairing.)
 echo ============================================
 echo.
 

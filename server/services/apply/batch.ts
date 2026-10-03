@@ -94,6 +94,12 @@ import { ensureChatResumePng, sendChatResumeImage } from './chatResumeImage.js';
 import { checkAndAdvance } from './schedule.js';
 import { getResumeVersion } from './resumeVersion.js';
 import { isClosingRelatedError, randomInt } from '../safeOp.js';
+import { POSTED_WITHIN_LABELS, type PostedWithin } from '../parsePostedAt.js';
+import { filterByPostedWindow } from '../postedFilter.js';
+
+// 发布时间筛选的实现在 `../postedFilter.js`（纯模块，零重依赖，可单测）。
+// 这里再导出一次，保持既有 API 面 —— 它此前是定义在本文件里的。
+export { filterByPostedWindow };
 
 export interface BatchCriteria {
   keywords?: string[];      // 任一命中即保留（岗位名/公司/JD）
@@ -117,6 +123,24 @@ export interface BatchCriteria {
   dailyLimit?: number;
   /** 仅投递远程岗位（jobs.remote=1，对标 Resumly「远程岗位筛选」） */
   remoteOnly?: boolean;
+  /**
+   * 时间口径：只保留「发布时间在近 N 天内」的岗位（`'today'` / `'3d'` / `'7d'` / `'any'`）。
+   * 缺省 / `'any'` = 不按时间筛，行为与加这个字段之前完全一致。
+   * 判据是 `jobs.posted_at`（**平台口径**的发布时间），该列为空时的行为见 `postedFallback`。
+   */
+  postedWithin?: PostedWithin;
+  /**
+   * `posted_at` 为空时，是否退回 `created_at`（**我们入库的时间**）兜底，**默认 true**。
+   *
+   * 为什么需要这个开关 —— 各平台能给到发布时间的比例差异极大（实测存量 2344 条）：
+   *   · offerbiu 100%（卡片上就写着「更新 9月2日」）
+   *   · BOSS      13%（详情页有「更新时间」字段）
+   *   · 其余 8 个平台 0%（卡片和详情页都没有这个字段）
+   * 若**不允许**兜底，「只看今天」在这 8 个平台上会一条都筛不出来，用户会以为功能坏了；
+   * 若**强制**兜底，又会把「岗位什么时候发布的」和「我们什么时候发现的」混为一谈。
+   * ⇒ 默认兜底（有总比空着强），显式传 `false` 则要求必须是真实的平台发布时间。
+   */
+  postedFallback?: boolean;
 }
 
 export interface BatchInput {
@@ -449,8 +473,16 @@ export async function runBatchApply(
   const blobOf = (j: any) =>
     `${j.company || ''} ${j.position || ''} ${j.jd || ''} ${j.requirements || ''}`.toLowerCase();
 
+  // 发布时间筛选（postedWithin）—— 判据是**平台口径**的 posted_at，不是我们的入库时间。
+  // 三个计数分开记：用户据此判断「要不要开兜底」「是不是该换个平台采」。
+  // 不记数的话，用户只会看到「筛出来 0 条」，无从知道是「今天真没有」还是「这些平台没给发布时间」。
+  // 发布时间筛选走独立的纯函数（见 filterByPostedWindow 注释：抽出来才能单测）
+  const posted = filterByPostedWindow(jobs, input.criteria?.postedWithin, {
+    fallback: input.criteria?.postedFallback,
+  });
+
   // 先做与关键词无关的过滤（城市 / 薪资 / 匹配分）
-  const baseFiltered = jobs.filter(j => {
+  const baseFiltered = posted.jobs.filter(j => {
     const blob = blobOf(j);
     if (city && !((j.city || '').toLowerCase().includes(city) || blob.includes(city))) return false;
     // 远程岗位筛选（对标 Resumly）：remoteOnly 时只保留 jobs.remote=1
@@ -471,6 +503,14 @@ export async function runBatchApply(
   // 「java开发工程师」的岗位整池误杀（原实现是严格全词 substring 匹配）。
   const kwMatch = (j: any) => kw.some(k => kwTokens(k).some(t => blobOf(j).includes(t)));
   const filtered = kw.length ? baseFiltered.filter(kwMatch) : baseFiltered;
+
+  if (posted.days != null) {
+    const parts = [`发布时间窗口 ${input.criteria?.postedWithin}（≤${posted.days} 天）`];
+    if (posted.viaFallback) parts.push(`${posted.viaFallback} 条靠入库时间兜底`);
+    if (posted.outOfRange) parts.push(`${posted.outOfRange} 条超出窗口`);
+    if (posted.missing) parts.push(`${posted.missing} 条因缺发布时间被排除`);
+    console.log(`[Batch] ${parts.join('，')}`);
+  }
 
   // 5) 排序：**未评估过的岗位优先，再按匹配分降序**。
   // ⚠️ 2026-09-30 修「边投递边找」卡死：此前纯按分降序，而被打招呼闸门判「匹配度过低」的岗位
@@ -508,6 +548,20 @@ export async function runBatchApply(
     startMsg = `未找到可投岗位：该来源岗位库为空，请先采集岗位后再投`;
   } else if (jobs.filter(j => j.status !== 'applied').length === 0) {
     startMsg = `未找到可投岗位：该来源 ${jobs.length} 个岗位都已投递过（已按「跳过已投」过滤），请采集新岗位后再投`;
+  } else if (posted.days != null && posted.jobs.length === 0) {
+    // 🔴 这条分支必须**单独存在**。否则会落到下面那句「被筛选条件（城市/薪资/匹配分）过滤掉了」，
+    //    用户就会去调城市和薪资 —— 而真正的原因是「库里压根没有这个时间窗内的岗位」，
+    //    跟城市薪资毫无关系。实测（2026-10-03）：库里最新采集是 3 天前，选「今天」必然 0 条，
+    //    这**不是 bug**，但看起来极像 bug。
+    const lbl = POSTED_WITHIN_LABELS.find((l) => l.value === input.criteria?.postedWithin)?.label
+      ?? String(input.criteria?.postedWithin ?? '');
+    const why = posted.missing > 0
+      ? `（另有 ${posted.missing} 个岗位平台没给发布时间，而你关掉了「缺发布时间按采集时间算」）`
+      : posted.outOfRange > 0
+        ? `（${posted.outOfRange} 个未投岗位的发布时间都早于这个窗口）`
+        : '';
+    startMsg = `未找到可投岗位：库中没有「${lbl}」发布的岗位${why}。`
+      + `刷新时间来自各招聘平台，得先采集才会有新数据 —— 建议先跑一轮采集，或把「发布时间」放宽 / 勾上「缺发布时间按采集时间算」。`;
   } else if (kw.length && baseFiltered.length > 0 && baseFiltered.filter(kwMatch).length === 0) {
     startMsg = `未找到可投岗位：${baseFiltered.length} 个未投岗位没有一个匹配「目标职位」（${kw.join('、')}）。可在「我的档案」放宽/清空目标职位，或采集更多岗位后再投`;
   } else {

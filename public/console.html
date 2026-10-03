@@ -441,16 +441,27 @@
             <div class="row2" style="margin-top:10px">
               <div><label class="f">每日投递上限（0 = 不限制）</label>
                 <input id="batchDailyLimit" type="number" min="0" max="500" step="1" value="40" /></div>
-              <div></div>
+              <div><label class="f">发布时间</label>
+                <!-- 判据是**平台发布时间**（jobs.posted_at），不是「我们什么时候采集到的」。
+                     取值的语义与兜底规则见 BatchCriteria.postedWithin / postedFallback 的注释。 -->
+                <select id="batchPostedWithin">
+                  <option value="any">不限</option>
+                  <option value="today">今天发布</option>
+                  <option value="3d">近 3 天发布</option>
+                  <option value="7d">近 7 天发布</option>
+                </select></div>
             </div>
             <div class="note small" style="margin-top:6px" id="batchQuotaNote">匹配分即首页/职位记录里显示的分数。平台对批量投递有账号级风控，每日上限用于保号。</div>
+            <div class="note small" style="margin-top:6px">「发布时间」按<b>平台标注的发布时间</b>筛，不是按采集时间。目前各平台能给到的比例不同：offerbiu 全部有、BOSS 约一成、其余平台暂无 —— 没有发布时间的岗位默认按「采集时间」参与筛选（可在下方取消勾选，改为一律不投）。投递完成后日志会列出「X 条靠采集时间兜底」，便于判断这次筛选的可信度。</div>
             <div style="margin-top:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
               <label class="toggle"><input type="checkbox" id="batchExclude" checked /> 排除已投递</label>
               <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
               <label class="toggle"><input type="checkbox" id="batchRemote" /> 仅远程岗位</label>
+              <label class="toggle" title="平台没给发布时间的岗位，改用「我们采集到它的时间」参与筛选。取消勾选则这类岗位在指定了发布时间时一律不投。"><input type="checkbox" id="batchPostedFallback" checked /> 缺发布时间按采集时间算</label>
               <label class="toggle"><input type="checkbox" id="batchHumanize" checked /> 模拟真人节奏</label>
               <label class="toggle"><input type="checkbox" id="batchRecord" /> 记录操作录像</label>
               <label class="toggle"><input type="checkbox" id="batchPreview" /> 仅预览（不真正投递）</label>
+              <label class="toggle" title="offerbiu 等「企业官网」通道的真实提交开关。默认关闭 = 官网通道填表到底但不点提交。勾选后官网表单会被真实提交（不可撤回）。平台通道（BOSS/智联/51job…）不受此开关影响。"><input type="checkbox" id="batchRealSend" /> 官网通道真实提交</label>
               <button class="btn primary" id="batchRun">开始投递</button>
               <button class="btn" id="batchRoutePreview" type="button" title="按当前来源/平台预估候选池会被分到哪些通道（含自动走网申的岗位）">分析路由</button>
             </div>
@@ -1742,6 +1753,10 @@ $('#batchRun').addEventListener('click', async ()=>{
       source: $('#batchSource').value || undefined,
       // 平台通道只读预览：零真实投递地验证链路（服务端对应 ApplyInput.preview）
       preview: $('#batchPreview').checked,
+      // 官网/邮箱通道的真实提交开关。缺省 false ⇒ 官网通道保持既有行为（只填表不提交）。
+      // ⚠️ 服务端有「双通道闸门一致性」：preview=true 时即使这里为 true 也只会预览 ——
+      //    否则官网通道预览、邮箱通道却真发信，「仅预览」就形同虚设（batch.ts 有注释与断言钉住）。
+      realSend: $('#batchRealSend').checked,
       // 模拟真人节奏（对标 CareerBoom.ai）：默认开；取消勾选则固定 intervalMs（调试用）
       humanize: $('#batchHumanize').checked,
       // 真·CDP screencast：每次投递前后自动录/停，回看入口写入该投递记录（video_path）
@@ -1754,6 +1769,10 @@ $('#batchRun').addEventListener('click', async ()=>{
         city: $('#batchCity').value || undefined,
         minScore,
         dailyLimit,
+        // 发布时间窗口：'any' 上送也无妨，服务端 postedWithinDays('any') 会得到 null（= 不筛），
+        // 行为与没有这个字段时完全一致。判据是平台发布时间 posted_at，缺失时按 postedFallback 兜底。
+        postedWithin: $('#batchPostedWithin').value || 'any',
+        postedFallback: $('#batchPostedFallback').checked,
       }
     };
     const r = await api('/api/apply/batch', {method:'POST', body:JSON.stringify(body)});

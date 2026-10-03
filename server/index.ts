@@ -50,9 +50,10 @@ import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuC
 import { probePlatformApi } from "./services/platformApi/bossOpenApi.js";
 import { probePlatformHealthCached, summarizeHealth } from "./services/platformHealth.js";
 import { cleanupData } from "./services/dataCleanup.js";
-import { buildAllowedOrigins, canInjectToken, checkRequestOrigin, lanOriginsFromIps } from "./services/requestGuard.js";
+import { buildAllowedOrigins, canInjectToken, checkRequestOrigin, lanOriginsFromIps, isLoopbackIp } from "./services/requestGuard.js";
 import { isPipeNoise } from "./services/safeOp.js";
-import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isAuthorizedStaticRes, signStaticPath, isConsoleAsset, isGuideAsset } from "./services/authToken.js";
+import { getAuthToken, isAuthEnabled, isAuthorizedStrict, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isAuthorizedStaticRes, signStaticPath, isConsoleAsset, isGuideAsset, isPairAnonRequest } from "./services/authToken.js";
+import { buildPairSetCookie, getPairCode, isPairedRequest, isPairingEnabled, pairWithCode, pairedDeviceCount } from "./services/pairing.js";
 import { queueErrorAlert, alertStatus, sendTestAlert } from "./services/errorAlert.js";
 import { listCities, cityCount, findCity, isCitySupported, DEFAULT_CITY } from "./services/cities.js";
 import { locateByIp } from "./services/geo.js";
@@ -219,12 +220,25 @@ app.use((req, res, next) => {
 // 不含任何个人信息；而控制台页面本身不带令牌（令牌是服务端注入进 HTML 的），
 // 挡住它等于把钥匙锁在屋里。真正要保护的是 data/ 下的截图与 API 数据，那两处仍在门后。
 const AUTH_ENABLED = isAuthEnabled(HOST);
+/**
+ * 配对闸门：只在鉴权开启（非回环监听）时才有意义 —— 回环下连令牌都不用，谈不上配对。
+ *
+ * 为什么需要它：`canInjectToken` 只能按**对方地址**判断能不能注入令牌，而同一 Wi-Fi 下
+ * 「用户自己的手机」与「隔壁同事的笔记本」都是 `192.168.x.x` —— 地址这一维区分不了。
+ * 于是 `HOST=0.0.0.0` 时同网段任何设备打开控制台都能拿到令牌，而令牌能触发真实投递。
+ * 配对码就是补上那条**带外信道**：码打在你自己的屏幕上，别人看不到。
+ * `PAIRING=off` 可关（退回"地址即信任"的旧行为）。
+ */
+const PAIRING_ENABLED = AUTH_ENABLED && isPairingEnabled();
 if (AUTH_ENABLED) {
   app.use((req, res, next) => {
     const m = String(req.method || '').toUpperCase();
     if (m === 'OPTIONS') return next();
     if (isPublicReadGet(m, String(req.path || ''))) return next();
     if (isConsoleAsset(m, String(req.path || ''))) return next();
+    // 配对页与「用配对码换设备凭证」——它们本身就是取得授权的手段，挡在门后即死循环。
+    // 安全性由配对码本身保证（6 位 + 一次性 + 失败限速），见 services/pairing.ts。
+    if (PAIRING_ENABLED && isPairAnonRequest(m, String(req.path || ''))) return next();
     // 使用说明页（public/guide/）—— 判据见 authToken.ts 的 isGuideAsset。
     // 少了这一行，控制台侧栏底部那个「使用说明」入口在鉴权开启时直接 401：
     // 收件人自己桌面（HOST 回环、鉴权关）没事，恰恰是 `start_lan.bat` 开了
@@ -241,6 +255,17 @@ if (AUTH_ENABLED) {
     res.status(401).json({ error: '缺少或无效的访问令牌（请在请求头带 X-Auth-Token，令牌见 data/.auth_token）' });
   });
   logRun('INFO', `访问令牌鉴权已开启（令牌文件 data/.auth_token；匿名放行的 GET：${PUBLIC_READ_GET_PATHS.join(', ')}）`);
+  if (PAIRING_ENABLED) {
+    // 配对码要打在**用户自己的屏幕上**才有意义 —— 这条带外信道正是它的全部安全性来源。
+    // 同时也落到 data/.pair_code，方便窗口被关掉/滚屏之后还能查。
+    logRun('INFO', `局域网配对已开启：新设备首次访问需输入配对码（PAIRING=off 可关；当前已配对 ${pairedDeviceCount()} 台）`);
+    console.log('');
+    console.log('  ┌──────────────────────────────────────────────────┐');
+    console.log(`  │  局域网设备首次访问的配对码：  ${getPairCode()}                 │`);
+    console.log('  │  仅本机访问不需配对；配对码一次性，用过自动更换   │');
+    console.log('  └──────────────────────────────────────────────────┘');
+    console.log('');
+  }
 }
 
 // ── 5xx 统一落日志 + 告警 ──
@@ -312,6 +337,47 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(CONSOLE_DIR));
+
+/** 发送配对页（读不到文件就退化为一段极简提示 —— 绝不把 `/` 变成 500） */
+function sendPairPage(res: any): void {
+  try {
+    res.status(200).type('html').send(fs.readFileSync(path.join(CONSOLE_DIR, 'pair.html'), 'utf8'));
+  } catch {
+    res.status(200).type('html').send(
+      '<!doctype html><meta charset="utf-8"><title>需要配对</title>'
+      + '<p>这台设备需要配对：请在运行 OfferWhere 的电脑上查看 <code>data/.pair_code</code>，或服务端窗口里的配对码。</p>',
+    );
+  }
+}
+
+// ── 配对页 / 用配对码换设备凭证（匿名可达，见 services/pairing.ts 的说明）──
+app.get(['/pair', '/pair.html'], (_req, res) => {
+  if (!PAIRING_ENABLED) { res.redirect('/'); return; }
+  sendPairPage(res);
+});
+
+app.post('/api/pair', (req, res) => {
+  if (!PAIRING_ENABLED) { res.status(404).json({ error: '配对未启用' }); return; }
+  const r = pairWithCode(req, (req.body || {}).code);
+  if (!r.ok) {
+    if (r.retryAfterSec) res.setHeader('Retry-After', String(r.retryAfterSec));
+    res.status(400).json({ error: r.reason, retryAfterSec: r.retryAfterSec });
+    return;
+  }
+  res.setHeader('Set-Cookie', buildPairSetCookie(r.cookie, r.maxAgeSec));
+  res.json({ ok: true });
+});
+
+// 查看当前配对码 —— **仅回环**。否则"看码"本身就成了绕过配对的第一步。
+app.get('/api/pair/code', (req, res) => {
+  if (!PAIRING_ENABLED) { res.status(404).json({ error: '配对未启用' }); return; }
+  if (!isLoopbackIp(req.socket?.remoteAddress || '')) {
+    res.status(403).json({ error: '仅本机可查看配对码' });
+    return;
+  }
+  res.json({ code: getPairCode(), pairedDevices: pairedDeviceCount() });
+});
+
 app.get("/", (req, res) => {
   const file = path.join(CONSOLE_DIR, 'console.html');
   if (!AUTH_ENABLED) { res.sendFile(file); return; }
@@ -327,6 +393,15 @@ app.get("/", (req, res) => {
   // 公网经反代进来时地址是回环但带 X-Forwarded-For ⇒ 不注入，页面会提示手填令牌。
   if (!canInjectToken({ remoteAddress: req.socket?.remoteAddress, headers: req.headers })) {
     res.sendFile(file);
+    return;
+  }
+  // 🔴 局域网 + 配对开启 + 这台设备还没配对 ⇒ 发**配对页**，不注入令牌。
+  //
+  // 「能不能注入」原先只看对方地址是不是私有网段，而同一 Wi-Fi 下用户自己的手机
+  // 与别人的笔记本都是 192.168.x.x ⇒ 地址这一维区分不了，同网段任何设备都能拿到令牌。
+  // 配对码补上那条带外信道。**回环（用户自己的电脑）不走这一步**，本机自用零打扰。
+  if (PAIRING_ENABLED && !isLoopbackIp(req.socket?.remoteAddress || '') && !isPairedRequest(req)) {
+    sendPairPage(res);
     return;
   }
   try {
@@ -1296,7 +1371,28 @@ app.post("/api/jobs", (req, res) => {
 
 app.patch("/api/jobs/:id", (req, res) => {
   try {
-    const ok = db.updateJob(req.params.id, req.body || {});
+    // 🔴 2026-09-30：这里原先是 `db.updateJob(req.params.id, req.body || {})` —— 整包转发。
+    // 配合 db.updateJob 里「用 Object.keys(updates) 拼列名」的老写法，构成**列名注入**：
+    // 实测 body = { "company = 'X', position = ?, city = ?, salary = ? --": "P" } 会拼出
+    //   UPDATE jobs SET company = 'X', position = ?, city = ?, salary = ? -- = ?, updated_at = ? WHERE id = ?
+    // `--` 注释掉 WHERE，**全表被改写**，接口还静默返回 200。
+    //
+    // 两道防线（各自独立成立）：
+    //   ① db.updateJob 内部已改为**按列名白名单遍历**（键名不可能来自 body）；
+    //   ② 这里再按同一份清单（JOB_UPDATABLE，唯一真相源在 db.ts）**显式挑字段**，
+    //      未知键直接丢弃 —— 保留旧客户端「多传字段也不报错」的兼容性。
+    // 顺带修掉一个误导：原先「没有可更新字段」也走 `return false`，
+    // 与「岗位不存在」共用同一条 404，空 body 会被报成「岗位不存在」。
+    const body = (req.body || {}) as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    for (const k of db.JOB_UPDATABLE) {
+      if (body[k] !== undefined) patch[k] = body[k];
+    }
+    if (Object.keys(patch).length === 0) {
+      if (!db.getJob(String(req.params.id))) return res.status(404).json({ error: "岗位不存在" });
+      return res.status(400).json({ error: "没有可更新的字段" });
+    }
+    const ok = db.updateJob(req.params.id, patch as any);
     if (!ok) return res.status(404).json({ error: "岗位不存在" });
     res.json({ success: true });
   } catch (error: any) {
@@ -2897,12 +2993,21 @@ const server = app.listen(PORT, HOST, () => {
   } catch (e) {
     console.error('[watch] bootstrap failed:', e);
   }
-  // 非阻塞：释放过期磁盘占用（截图超期、DB 备份仅留最近若干份）
-  // O2：顺带检查 data/ 总体积是否超阈值（分发给他人后，磁盘可能被静默吃满）
+  // 非阻塞：释放过期磁盘占用（截图超期、DB 备份仅留最近若干份 / 简历备份 / 运行日志），
+  // 并在 data/ 总体积超阈值时**自动限额**（档位见 services/dataCleanup.ts 的 AutoLimitMode）：
+  //   默认 safe —— 只收紧保留期（截图 14→7/3 天、日志 30→14/7 天、备份份数下调），
+  //   删的都是"本来就该过期"的东西；`full` 才会额外清调试产物与过期 JD 图。
+  //   `DATA_AUTO_LIMIT=off` 可退回"只告警"的旧行为。
+  //   🔴 browser 登录态 / evidence 投递证据 / resume_tailored 一岗一简历产物 **任何档位都不碰**。
   cleanupData({})
     .then((rep: any) => {
+      const al = rep?.autoLimit;
+      if (al?.triggered) {
+        logRun('INFO', `data/ 超阈值已自动限额(${al.mode})：本次释放 ${rep.freedHuman}`
+          + (al.stillOver ? '，清理后仍超阈值（体积大头是不自动清理的登录态/证据，需人工处置或调高 DATA_MAX_MB）' : ''));
+      }
       if (rep && rep.overThreshold) {
-        logRun('ERROR', `data/ 已达 ${rep.totalHuman}，超过阈值 ${Math.round((rep.maxBytes || 0) / 1024 / 1024)}MB —— 建议清理（npm run data:cleanup；或用 DATA_MAX_MB 调整阈值）`);
+        logRun('ERROR', `data/ 已达 ${rep.totalHuman}，超过阈值 ${Math.round((rep.maxBytes || 0) / 1024 / 1024)}MB —— ${al?.stillOver ? '自动清理后仍超，需人工处置' : '建议清理'}（npm run data:cleanup；或用 DATA_MAX_MB 调整阈值）`);
       }
     })
     .catch((e) => logRun('ERROR', `cleanupData 启动清理异常: ${e}`));

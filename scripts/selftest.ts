@@ -15,7 +15,6 @@ import { matchResumeToJob } from '../server/services/match.js';
 import { extractEmails, rootDomain } from '../server/services/offerbiuEmailScan.js';
 import { tailorResume, parseSkills, buildResumeBlob } from '../server/services/apply/resumeTailor.js';
 import { isAiEnabled } from '../server/services/apply/aiClient.js';
-import { sanitizeJobText, sanitizePosition, sanitizeCompany } from '../server/db.js';
 import { buildResumeHtml } from '../server/services/apply/resumeRender.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -152,51 +151,10 @@ if (tailored.source === 'llm') {
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n══════ E. 岗位字段清洗（BOSS 加密字体污染） ══════');
-// 实测脏值样本（库内 59/373 条 BOSS 岗位命中）
-const cleanCases: Array<[string, string | null]> = [
-  ['Java\n-K', 'Java'],                                             // 换行 + 薪资残片（数字被加密字体吞掉）
-  ['java开发工程师\nK', 'java开发工程师'],
-  ['Java（外包兴业银行-远程面试-项目稳定）\n-K', 'Java（外包兴业银行-远程面试-项目稳定）'],
-  ['Java开发工程师', 'Java开发工程师'],                              // 干净值不动
-  ['前端开发（Vue3）', '前端开发（Vue3）'],
-  ['C++开发', 'C++开发'],
-  ['Java 10-20K ·16薪', 'Java'],                                     // 完整薪资残片
-  ['-K', null],                                                      // 整串即残片 → 置空
-  ['\uE123\uE456Java\uE789', 'Java'],                                // PUA 字形
-  ['  多  余   空白  ', '多 余 空白'],   // 折叠连续空白为单空格（不吞掉词间空格，避免误合并词）
-];
-for (const [input, expect] of cleanCases) {
-  const got = sanitizeJobText(input, 80);
-  check(`清洗 ${JSON.stringify(input)}`, got === expect, `→ ${JSON.stringify(got)}${got === expect ? '' : ' 期望 ' + JSON.stringify(expect)}`);
-}
-
-// ─────────────────────────────────────────────────────────
-console.log('\n══════ F. 卡片尾巴清洗（老版 51job 采集器污染） ══════');
-// 样本取自库内真实脏值（118/149 条 job51 岗位命中）
-const cardCases: Array<[string, string]> = [
-  ['软件全栈工程师(010565) 5-9千 昆明·呈贡区 无需经验 本科 java mysql 数据库', '软件全栈工程师(010565)'],
-  ['上海_Java后端开发工程师 9千-1.1万 上海·杨浦区 1-3年 大专 五险一金 带薪年假', '上海_Java后端开发工程师'],
-  ['人工智能算法（应用）工程师(010564) 8千-1.5万 昆明·呈贡区 3年及以上 本科 java', '人工智能算法（应用）工程师(010564)'],
-  ['Java开发工程师', 'Java开发工程师'],                       // 干净值不动
-  ['Java开发工程师·远程', 'Java开发工程师·远程'],              // 含·但无空格前缀 → 不误伤
-  ['前端开发（Vue3）', '前端开发（Vue3）'],
-];
-for (const [input, expect] of cardCases) {
-  const got = sanitizePosition(input);
-  check(`卡片尾巴 ${input.slice(0, 20)}…`, got === expect, `→ ${JSON.stringify(got)}`);
-}
-
-const coCases: Array<[string, string | null]> = [
-  ['公司全称：云南科诚卫远科技有限公司', '云南科诚卫远科技有限公司'],
-  ['APP下载', null],
-  ['首页', null],
-  ['云南天霄科技', '云南天霄科技'],
-];
-for (const [input, expect] of coCases) {
-  const got = sanitizeCompany(input);
-  check(`公司名 ${JSON.stringify(input)}`, got === expect, `→ ${JSON.stringify(got)}`);
-}
+// E / F 两组（岗位字段清洗 / 卡片尾巴清洗）已于 2026-10-01 **迁移**到
+// `tests/unit/sanitize.test.ts` —— 它们是纯字符串变换，与 DB / 文件无关，
+// 放在标准 test runner 里能单跑一个文件、每条脏值独立命名、失败能精确定位。
+// 顺带让本文件不再 import `server/db.js`（那会打开 data/chat.db 并跑 migration）。
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ G. 定制简历 HTML 渲染（一岗一简历出稿） ══════');

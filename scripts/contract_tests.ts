@@ -2705,6 +2705,252 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     '跟随 + 只有深度上限 ⇒ 含 junction 的 Chrome profile 会指数级展开');
 }
 
+// ── 动态 UPDATE 的列名白名单（P0 列名注入回归）────────────────────────────────
+// 背景（实测 2026-09-30）：`PATCH /api/jobs/:id` 曾把 `req.body` 整包转发给 updateJob，
+// 而 updateJob 用 `for (const key of Object.keys(updates)) fields.push(\`${key} = ?\`)`
+// —— **列名位置直接取自对象键**。实测载荷（隔离库 _tools/_inject_probe.mjs）：
+//   { "company = 'X', position = ?, city = ?, salary = ? --": "P" }
+// 拼出 `UPDATE jobs SET company = 'X', position = ?, city = ?, salary = ? -- = ?, updated_at = ? WHERE id = ?`，
+// `--` 把 `WHERE id = ?` 注释掉 ⇒ **三条互不相同的岗位被全部改写**，接口还静默 200。
+//
+// ⚠️ 本段断言的目标字符串（`Object.keys(updates)` / `req.body`）**在我写的修复说明注释里就有**，
+//    所以必须走 countMatches（内部先 stripComments）—— 否则断言会被「自己的注释」满足。
+{
+  const CT_ROOT3 = fileURLToPath(new URL('..', import.meta.url));
+  const dbSrc = fs.readFileSync(path.join(CT_ROOT3, 'server/db.ts'), 'utf8');
+  const idxSrc = fs.readFileSync(path.join(CT_ROOT3, 'server/index.ts'), 'utf8');
+  const clSrc = fs.readFileSync(path.join(CT_ROOT3, 'server/services/dataCleanup.ts'), 'utf8');
+
+  const nLoop = countMatches(dbSrc, /for\s*\(const\s+key\s+of\s+Object\.keys\(updates\)/g);
+  check('db.ts 不再「按对象键循环拼列名」（列名注入的根因）', nLoop === 0,
+    `实际 ${nLoop} 处 ⇒ 键名会直接进 SQL 文本`);
+
+  const nHelper = countMatches(dbSrc, /collectUpdateFields\s*\(/g);
+  check('两个动态 UPDATE 都改走白名单助手（定义 1 + 调用 2）', nHelper === 3,
+    `实际 ${nHelper} 处`);
+
+  check('jobs 可更新列清单已导出（路由复用同一真相源，不各写一份）',
+    countMatches(dbSrc, /export const JOB_UPDATABLE\b/g) === 1,
+    `实际 ${countMatches(dbSrc, /export const JOB_UPDATABLE\b/g)} 处`);
+
+  const nForward = countMatches(idxSrc, /db\.updateJob\(\s*req\.params\.id\s*,\s*req\.body/g);
+  check('PATCH /api/jobs/:id 不再把 req.body 整包转发给 updateJob', nForward === 0,
+    `实际 ${nForward} 处 ⇒ 任意键名都能到达 SQL 构造`);
+
+  check('该路由按白名单显式挑字段',
+    countMatches(idxSrc, /for\s*\(const\s+k\s+of\s+db\.JOB_UPDATABLE\)/g) === 1,
+    `实际 ${countMatches(idxSrc, /for\s*\(const\s+k\s+of\s+db\.JOB_UPDATABLE\)/g)} 处`);
+
+  // ── DB 备份保留：以「备份本体」为单位 ──
+  // 原实现按前缀 `chat.db.bak-` 无差别收集 ⇒ SQLite 的 `-wal`/`-shm` 伴生文件同样命中，
+  // 被当成「一份备份」参与 mtime 排序、挤占 keepDbBackups 名额。
+  // 实测（_tools/_backup_retention_probe.mts）：3 份主备份各带 2 个伴生时 deleted=6、
+  // 只剩最新 1 份 —— 承诺「留 3 份」实际留 1 份；名额被伴生占满时**可用备份一份不剩**。
+  // ⚠️ 目标文本是 `n.replace(/-(wal|shm)$/i, '')` —— 正则里的圆括号**必须转义**，
+  //    否则 `(wal|shm)` 会被当成「分组 + 或」而不是字面量 `(wal|shm)`，恒 0 命中。
+  //    这种「恒 0 命中」的断言在破坏性对照里也只会显示为红 —— 看着像有区分力，实则没有。
+  //    已用 node 实测确认命中 1 次后再落笔。
+  const nStrip = countMatches(clSrc, /\.replace\(\/-\(wal\|shm\)\$\/i/g);
+  check('DB 备份按「备份本体」分组（-wal/-shm 不再占保留名额）', nStrip === 1,
+    `实际 ${nStrip} 处基名归一化`);
+  check('DB 备份保留按组整组保留/整组删除',
+    countMatches(clSrc, /groups\.get\(base\)/g) >= 1 && /\bgroups\b/.test(stripComments(clSrc)),
+    '没有分组 ⇒ 伴生文件会被拆散，留下「主备份已删、只剩伴生」的孤儿');
+
+  // ── 简历备份纳入清理（原先无人回收，每重传一次多留一份含 PII 的副本）──
+  const nResume = countMatches(clSrc, /keepResumeBackups/g);
+  check('简历备份（resume_*.pdf.bak.<ts>）纳入清理并计入报告', nResume >= 3,
+    `实际 ${nResume} 处（期望 ≥3：选项 + 默认值 + 保留计算）`);
+
+  // ── 删除失败不得谎报释放量 ──
+  // 原先一律「先 deleted++ 再 unlink」，unlink 抛错被 catch 吞掉 ⇒ 报告宣称「已释放 N 个」，
+  // 目录里一个都没少。实测撞见过（报告 `删除 1`、目录里 4 项一个没动）。
+  //
+  // ⚠️ 判据升级（2026-10-01）：原来写死「三处各命中 1」。自动限额新增了删除点
+  //    （pruneTree 清调试产物）⇒ 数量一变断言就误红，而**误报比漏报更危险**
+  //    （人一旦觉得"这条总是红的"，整份报告都不看了）。改成核对**性质**：
+  //    每一处 `deleted++` 要么紧跟 `unlink`（先删后计），要么在 dryRun 的「只统计」分支里
+  //    （那个分支本来就不删）。新增删除点不会误红，而「先计后删」仍会被抓出来。
+  const nUnlinkThenInc = countMatches(clSrc, /unlink\([^)]*\);\s*\w+\.deleted\+\+/g);
+  const nIncTotal = countMatches(clSrc, /\.deleted\+\+/g);
+  const nDryRunInc = countMatches(clSrc, /if\s*\(dryRun\)\s*\{[^}]*\.deleted\+\+/g);
+  check('清理计数发生在 unlink 之后（删除失败不谎报释放量）',
+    nUnlinkThenInc >= 3 && nIncTotal === nUnlinkThenInc + nDryRunInc,
+    `unlink 后计数 ${nUnlinkThenInc} / 自增总数 ${nIncTotal} / dryRun 分支 ${nDryRunInc}（应满足 总数 = unlink后 + dryRun）⇒ 出现「先计后删」即为不满足`);
+
+  // ── 超阈值自动限额（2026-10-01）────────────────────────────────────────────
+  // 背景：原先 data/ 超阈值只打印一行告警，分发给他人后磁盘会被「截图 + 日志 + 备份 +
+  // 简历副本」这些**本来就有保留策略的东西**静默吃满，而终端一关那行字就没了。
+  // 改为按档位自动限额，但**必须**保证它只动"可再生"的东西 —— 下面三条就是这条底线。
+  const nModeType = countMatches(clSrc, /export type AutoLimitMode = 'off' \| 'safe' \| 'full'/g);
+  check('自动限额档位可配（off / safe / full）',
+    nModeType === 1 && /DATA_AUTO_LIMIT/.test(stripComments(clSrc)),
+    '档位决定"敢删到什么程度"；没有 env 开关就等于写死行为，用户无法按自己的容忍度调整');
+
+  // 🔴 底线：自动限额**永远**不许碰登录态 / 投递证据 / 一岗一简历产物。
+  //    这些要么不可再生（登录态删了要把 8 个平台重新登一遍），要么正是用户要留的证据。
+  //
+  // ⚠️ 反向断言（"不出现"）最大的风险是**恒 0 命中** ⇒ 恒绿。所以判据要覆盖全部两条入口：
+  //    ① 直接写死目录的 prune 调用；② 通过 `debugDirs` 默认值传进去的。
+  //    只查 ① 的话，把 `debugDirs ?? ['smoke', 'browser']` 一改就静默失效（实测过）。
+  //    这条有区分力由 `_tools/_pairing_control.py` 的第 8 条破坏对照证明。
+  const nProtectedTouch = countMatches(
+    clSrc,
+    /prune(?:ByAge|Tree|DbBackups|ResumeBackups)\(\s*path\.join\(DATA_DIR,\s*'(browser|evidence|resume_tailored)'/g,
+  );
+  const nProtectedDefault = countMatches(clSrc, /debugDirs \?\? \[[^\]]*'(browser|evidence|resume_tailored)'/g);
+  check('自动限额不碰 browser / evidence / resume_tailored',
+    nProtectedTouch === 0 && nProtectedDefault === 0,
+    `直接清理目标 ${nProtectedTouch} 处 / debugDirs 默认值 ${nProtectedDefault} 处 ⇒ 自动限额把不可再生的数据（登录态）或用户证据列进了清理目标`);
+
+  check('收紧参数是导出的纯函数（可单测、不依赖文件系统）',
+    countMatches(clSrc, /export function tightenParams\b/g) === 1,
+    '否则"超 1.5 倍时收紧几档"只能靠跑真目录来验，成本高到没人会验');
+
+  // 「清完仍然超」必须说清是**谁**占的 —— 否则用户看到的只有「仍超阈值」，
+  // 会以为清理功能坏了（实测本机 browser 506MB + jd_images 234MB 占 89%，而这两块
+  // 是**有意不自动清理**的）。
+  // ⚠️ 用「赋值语句」而不是「出现过 stillOver/topDirs」做判据：后者只要某个字段名还在
+  //    任何一处出现就绿，把真正干活的那行删掉都不会红（存在性 ≠ 区分力）。
+  check('清理后仍超阈值时必须给出体积构成',
+    countMatches(clSrc, /autoLimit\.topDirs = await dirBreakdown\(\d+\);/g) === 1
+    && countMatches(clSrc, /autoLimit\.stillOver = overThreshold;/g) === 1,
+    `topDirs 赋值 ${countMatches(clSrc, /autoLimit\.topDirs = await dirBreakdown\(\d+\);/g)} 处 / stillOver 赋值 ${countMatches(clSrc, /autoLimit\.stillOver = overThreshold;/g)} 处（各应为 1）`);
+}
+
+// ══════ 一次性配对码（同网段陌生人的准入闸门，2026-10-01） ══════
+// 背景：`HOST=0.0.0.0` 时鉴权会自动开启，而控制台**把令牌注入给任何来自私有网段的请求**
+// —— `canInjectToken` 只能按对方地址判断，而同一 Wi-Fi 下用户自己的手机与别人的笔记本
+// 都是 192.168.x.x，地址这一维区分不了。于是"仅限可信 Wi-Fi"只是一句免责声明，
+// 不是防线：同网段任何设备打开控制台就能拿到令牌，而令牌能触发真实投递。
+// 配对码补上那条**带外信道**（码打在你屏幕上，别人看不到）。
+//
+// ⚠️ 这些断言的共同点是「**性质**」而不是「数字」：区分力来自
+//    随机源是否可预测 / 码是否一次性 / 限速是否两道 / 凭证是否可验签。
+//    行为正确性另由 `_tools/_pairing_probe.mjs`（21 条，真起两个后端）覆盖。
+{
+  const CT_ROOT4 = fileURLToPath(new URL('..', import.meta.url));
+  const pairSrc = fs.readFileSync(path.join(CT_ROOT4, 'server/services/pairing.ts'), 'utf8');
+  const authSrc4 = fs.readFileSync(path.join(CT_ROOT4, 'server/services/authToken.ts'), 'utf8');
+  const idxSrc4 = fs.readFileSync(path.join(CT_ROOT4, 'server/index.ts'), 'utf8');
+
+  check('配对码用密码学随机（Math.random 是可预测的，等于没码）',
+    countMatches(pairSrc, /crypto\.randomInt\(/g) >= 1 && countMatches(pairSrc, /Math\.random\(/g) === 0,
+    `randomInt ${countMatches(pairSrc, /crypto\.randomInt\(/g)} / Math.random ${countMatches(pairSrc, /Math\.random\(/g)}`);
+
+  // ⚠️ 判据用**整条赋值语句**而不是 `rotatePairCode()` 的出现次数：后者在
+  //    `getPairCode()` 里也调用一次，阈值定成 ≥2 时，把配对成功后的那次轮换删掉
+  //    仍然绿（实测踩到第二条"假区分力"）。
+  check('配对码是一次性的（配对成功后立即轮换）',
+    countMatches(pairSrc, /const next = rotatePairCode\(\);/g) === 1,
+    `实际 ${countMatches(pairSrc, /const next = rotatePairCode\(\);/g)} 处 ⇒ 不轮换的话旧码可被无限复用，"一次性"名存实亡`);
+
+  check('配对失败有速率限制，且单 IP 与全局两道',
+    countMatches(pairSrc, /recentFails\(ip\)\.length >= MAX_FAIL_PER_IP/g) === 1
+    && countMatches(pairSrc, /recentFails\(GLOBAL_KEY\)\.length >= MAX_FAIL_GLOBAL/g) === 1,
+    '只按单 IP 限可被"改静态 IP / 多网卡"绕开；只按全局限会被一个坏客户端拖住所有人');
+
+  check('设备凭证用 HMAC 验签（不是"随机串在册即认"）',
+    countMatches(pairSrc, /createHmac\('sha256'/g) >= 1 && countMatches(pairSrc, /safeEqual\(/g) >= 2,
+    '裸随机串无法离线判真伪；HMAC 把"验签"与"是否在册"分开，撤销一台设备不必轮换密钥、也不踢掉其它设备');
+
+  // ⚠️ 判据必须精确到「`/` 路由那一行条件」，不能只查 `isLoopbackIp(` 是否存在：
+  //    同一个文件里的 `/api/pair/code` 路由**也**用 `isLoopbackIp(req.socket?.remoteAddress …)`。
+  //    只查函数名的话，把 `/` 路由里的回环豁免删掉，断言仍然绿（实测踩到）—— 典型的"假区分力"。
+  check('🔴 回环地址免配对（本机自用零打扰）',
+    countMatches(idxSrc4, /PAIRING_ENABLED && !isLoopbackIp\(req\.socket\?\.remoteAddress \|\| ''\) && !isPairedRequest\(req\)/g) === 1,
+    '少了这一步，用户在自己电脑上打开控制台也要输配对码 —— 为了安全把正常使用也堵上');
+
+  check('🔴 配对页 HTML 里绝不出现令牌注入',
+    !fs.readFileSync(path.join(CT_ROOT4, 'public/pair.html'), 'utf8').includes('__AUTH_TOKEN__'),
+    '配对页若带令牌，等于把闸门本身当成钥匙发给每一个敲门的人');
+
+  check('匿名放行的配对路径是**显式清单**（不是前缀放行）',
+    countMatches(authSrc4, /PAIR_PAGE_PATHS = \['\/pair', '\/pair\.html'\]/g) === 1
+    && countMatches(authSrc4, /PAIR_ANON_POST_PATHS = \['\/api\/pair'\]/g) === 1,
+    '改成 startsWith 放行整个前缀，等于任何人往那个目录丢个文件就自动公开');
+
+  check('配对闸门可关（PAIRING=off 回退到"地址即信任"的旧行为）',
+    countMatches(pairSrc, /process\.env\.PAIRING/g) === 1,
+    '没有开关的安全机制在用户自己完全可控的网络里会变成纯粹的负担，最后被整体关掉');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 发布时间（posted_at）—— 「只投今天新开的岗位」
+//
+// 这组断言的核心不是「有没有这个字段」，而是**别把两件事搞混**：
+//   posted_at —— 岗位什么时候发布的（平台口径）
+//   created_at —— 我们什么时候采集到的
+// 任何一处退回 created_at，功能就名存实亡，而且**不会报任何错**：
+// 用户只会在「只看今天」里看到一批挂了半个月的岗位，根本不会怀疑是筛选坏了。
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const RT = fileURLToPath(new URL('..', import.meta.url));
+  const readT = (p: string) => fs.readFileSync(path.join(RT, p), 'utf8');
+  const dbT = readT('server/db.ts');
+  const pfT = readT('server/services/postedFilter.ts');
+  const btT = readT('server/services/apply/batch.ts');
+  const cT = readT('public/console.html');
+  // ⚠️ HTML **不能**用 countMatches：stripComments 是给 JS/TS 写的，它不认 `<!-- -->`，
+  //    `console.html` 里描述本功能的注释含 `postedWithin` 等词，会去「满足」断言
+  //    （本仓库已多次踩到"自己的注释满足断言"）。故 HTML 一律按原始串计数。
+  const nth = (s: string, needle: string) => s.split(needle).length - 1;
+
+  check('jobs 建表含 posted_at 列',
+    countMatches(dbT, /^\s*posted_at TEXT,$/gm) === 1,
+    `实际 ${countMatches(dbT, /^\s*posted_at TEXT,$/gm)} 处`);
+
+  // CREATE TABLE IF NOT EXISTS 对**已存在的表**完全不起作用 ⇒ 老用户只能靠这段迁移。
+  // 而新装用户永远发现不了它坏了（新库一次就建对），所以必须单独钉住。
+  check('🔴 老库自动补 posted_at 列（用户库是老的，CREATE TABLE IF NOT EXISTS 帮不上忙）',
+    countMatches(dbT, /if \(!jc5\.some\(\(c\) => c\.name === 'posted_at'\)\) \{/g) === 1
+    && countMatches(dbT, /ALTER TABLE jobs ADD COLUMN posted_at TEXT/g) === 1,
+    '缺这段，升级后的老库会直接报 no such column: posted_at');
+
+  check('posted_at 进了列白名单（防「列名来自对象键」注入）',
+    countMatches(dbT, /'jd_source', 'ocr_status', 'posted_at', 'remote', 'status',/g) === 1);
+
+  check('upsertJob 从 card_text 自动解析（已有采集器零改动获得发布时间）',
+    countMatches(dbT, /const guess = parsePostedAt\(job\.card_text\)\.date;/g) === 1);
+
+  // 这条是「刻意不做」的反向断言。实测 1202 条真实 JD：全文解析命中仅 2%，
+  // 且剩下的几乎全是「工作时间9-18」「公司成立日期」「宣讲会时间」这类噪声。
+  check('🔴 jd 只走「带字段名」精确通道，不做全文解析',
+    countMatches(dbT, /const guess = postedAtFromLabeled\(job\.jd\);/g) === 1
+    && countMatches(dbT, /parsePostedAt\(job\.jd\)/g) === 0,
+    '把 jd 丢进全规则解析器，会把「工作时间9-18」当成 9 月 18 日发布');
+
+  check('筛选实现放在独立纯模块（batch.ts 会拉起整个浏览器栈，没法单测）',
+    countMatches(pfT, /export function filterByPostedWindow/g) === 1
+    && countMatches(btT, /import \{ filterByPostedWindow \} from '\.\.\/postedFilter\.js';/g) === 1);
+
+  check('🔴 posted_at 不再做时区换算（它已经是当地日历日期）',
+    countMatches(pfT, /\.exec\(String\(j\.posted_at\)\)/g) === 1
+    && countMatches(pfT, /localDateOf\(j\.posted_at/g) === 0,
+    '再做一次换算，会让 UTC-5 这类时区的 2026-09-02 变成 09-01 —— 凭空差一天且不报错');
+
+  check('🔴 created_at 必须换本地日历（直接截前 10 位会在 UTC+8 的清晨把今天筛空）',
+    countMatches(pfT, /effective = localDateOf\(j\.created_at, o\);/g) === 1);
+
+  check('选了发布时间窗但筛出 0 条时给出专门的诊断',
+    countMatches(btT, /posted\.days != null && posted\.jobs\.length === 0/g) === 1,
+    '否则会落到「被筛选条件（城市/薪资/匹配分）过滤掉了」那句，把用户引去调城市和薪资 —— '
+    + '而真正的原因是库里没有这个时间窗内的岗位（实测 2026-10-03 选「今天」必然 0 条，看起来极像 bug）');
+
+  check('控制台有发布时间下拉并透传',
+    nth(cT, 'id="batchPostedWithin"') === 1
+    && nth(cT, "postedWithin: $('#batchPostedWithin').value || 'any',") === 1);
+
+  check('控制台有「缺发布时间按采集时间算」开关并透传',
+    nth(cT, 'id="batchPostedFallback"') === 1
+    && nth(cT, "postedFallback: $('#batchPostedFallback').checked,") === 1);
+
+  check('控制台把「仅预览」与「官网通道真实提交」分开（双通道闸门）',
+    nth(cT, 'id="batchRealSend"') === 1
+    && nth(cT, "realSend: $('#batchRealSend').checked,") === 1,
+    '此前 UI 没有 realSend 入口，官网通道恒为预览 —— 用户以为在真投，其实只填了表');
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`
