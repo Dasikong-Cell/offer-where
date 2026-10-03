@@ -58,9 +58,16 @@ function resolveHrPosition(company: string | null, platform: string): string | n
 }
 
 /** 支持自动回复的平台 → 对应聊天驱动（新增平台在此登记即生效，引擎零改动）。
- *  boss/liepin 为已真机校准的专属实现；其余 7 个 Web IM 平台经 genericChatDriver 配置化工厂
- *  生成（启发式基线，calibrated:false，待本地探针 probe_chat.ts 真机校准后再投产）。
- *  offerbiu 为邮件通道，由 offerbiu-email-direct-apply 处理，不在此登记。 */
+ *  已真机校准：boss / liepin（专属实现）+ zhilian（配置化，2026-09-24 校准）；
+ *  其余 3 个 Web IM 平台（nowcoder / iguopin / yingjiesheng）为启发式基线（calibrated:false）；
+ *  job51 / yupao / chinahr 标记 autoReplySupported:false —— 结构性不可用，引擎直接跳过。
+ *  offerbiu 为邮件通道，由 offerbiu-email-direct-apply 处理，不在此登记。
+ *
+ *  🔴 本表是「自动回复支持哪些平台」的**单一真相源**：
+ *     · 控制台下拉 ← `GET /api/auto-reply/platforms`（= `listAutoReplyPlatforms()`）
+ *     · 请求准入   ← `isAutoReplyPlatform()`（非法平台 400，**不静默降级**）
+ *     历史上前端硬编码 2 项、后端也只放行 2 项，把已校准的 zhilian 挡在门外，
+ *     并把其余平台悄悄当成 boss 跑 —— 新增平台时务必只改本表。 */
 export const DRIVERS: Partial<Record<ApplyPlatform, ChatDriver>> = {
   boss: bossChatDriver,
   liepin: liepinChatDriver,
@@ -80,6 +87,47 @@ export function registerChatDriver(platform: ApplyPlatform, driver: ChatDriver):
 
 export function getChatDriver(platform: ApplyPlatform): ChatDriver | null {
   return DRIVERS[platform] || null;
+}
+
+/** 读驱动的「架构上是否支持」标志；一等字段优先，旧的 config 写法兜底。 */
+function readAutoReplySupport(d: ChatDriver): { supported: boolean; disabledReason?: string } {
+  const cfg = (d as unknown as { config?: { autoReplySupported?: boolean; disabledReason?: string } }).config;
+  return {
+    supported: (d.autoReplySupported ?? cfg?.autoReplySupported) !== false,
+    disabledReason: d.disabledReason ?? cfg?.disabledReason,
+  };
+}
+
+export interface AutoReplyPlatformInfo {
+  id: ApplyPlatform;
+  /** 真机校准过、选择器已与目标平台对齐（false 时引擎不会误发，但也不会真正回复）。 */
+  calibrated: boolean;
+  /** 架构上支持 Web IM 自动回复（false = HR 沟通走 App，无法驱动）。 */
+  supported: boolean;
+  /** supported=false 时的原因说明。 */
+  disabledReason?: string;
+}
+
+/**
+ * 「自动回复支持哪些平台」的**单一真相源**（数据源 = `DRIVERS` 本身）。
+ *
+ * 🔴 控制台下拉与后端准入都必须走这里。历史上前后端**各写了一份硬编码平台清单**，
+ *    后果是：前端只列 boss/liepin，后端也只放行 boss/liepin 并把其它平台
+ *    **静默降级成 boss** —— 用户选了 A 平台，实际在 B 平台发消息；同时已真机校准的
+ *    zhilian 被白白挡在门外。新增平台时只要在 DRIVERS 登记，两端自动同步。
+ */
+export function listAutoReplyPlatforms(): AutoReplyPlatformInfo[] {
+  return (Object.keys(DRIVERS) as ApplyPlatform[]).map((id) => {
+    const d = DRIVERS[id]!;
+    const { supported, disabledReason } = readAutoReplySupport(d);
+    return { id, calibrated: d.calibrated === true, supported, ...(disabledReason ? { disabledReason } : {}) };
+  });
+}
+
+/** 该平台能否被自动回复引擎驱动（请求准入用；不合法时应**明确报错**，绝不静默降级）。 */
+export function isAutoReplyPlatform(p: string): boolean {
+  const d = DRIVERS[p as ApplyPlatform];
+  return !!d && readAutoReplySupport(d).supported;
 }
 
 export interface ReplyEvent {
@@ -171,9 +219,12 @@ export async function runAutoReply(
 
   // 架构不支持（平台无可用 Web IM，如 51job/鱼泡/中华英才 HR 走 App）：直接跳过，
   // 不空跑导航、不误发。这类平台即使登录也无法驱动自动回复。
+  // 优先读驱动的一等字段（chatTypes.ChatDriver.autoReplySupported），旧的「只写在 config 里」仍兼容。
   const dcfg = (driver as unknown as { config?: { autoReplySupported?: boolean; disabledReason?: string } }).config;
-  if (dcfg && dcfg.autoReplySupported === false) {
-    emit({ type: 'error', message: `平台 ${platform} 架构上不支持自动回复（${dcfg.disabledReason || '无可用 Web IM'}）。跳过，建议改用该平台 App 沟通。` });
+  const arSupported = driver.autoReplySupported ?? dcfg?.autoReplySupported;
+  const disabledReason = driver.disabledReason ?? dcfg?.disabledReason;
+  if (arSupported === false) {
+    emit({ type: 'error', message: `平台 ${platform} 架构上不支持自动回复（${disabledReason || '无可用 Web IM'}）。跳过，建议改用该平台 App 沟通。` });
     return { sent: 0, skipped: 0 };
   }
 

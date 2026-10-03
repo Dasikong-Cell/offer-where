@@ -273,6 +273,12 @@ export function buildChatDriver(cfg: ChatDriverConfig): ChatDriver & { __setExFo
 
   return {
     platform: PLATFORM,
+    // 把配置里的两个「能力/状态」标志**提升为驱动的一等字段**：
+    // 控制台下拉与 run 准入统一读这里，不再各自去掏 `driver.config`（之前只有一处这么干，
+    // 于是「列出哪些平台可用」这件事在别处就只能靠硬编码，final 造成了下拉与后端不同步）。
+    calibrated: cfg.calibrated === true,
+    autoReplySupported: cfg.autoReplySupported !== false,
+    ...(cfg.disabledReason ? { disabledReason: cfg.disabledReason } : {}),
     openChat,
     listConversations,
     openConversation,

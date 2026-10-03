@@ -1,11 +1,15 @@
 /**
  * 其余平台的聊天驱动实例（基于 genericChatDriver.ts 配置化工厂）。
  *
- * ⚠️ 重要：本文件内 7 个 Web IM 平台驱动均为「启发式基线」（calibrated:false）。
- * 各平台 IM 的真实 DOM class 必须真机校准 —— 跑本地探针 `probe_chat.ts <platform>`（在 scripts/ 下，gitignored 不入库）
- * dump 出列表项 / 消息气泡的真实 class 与文本，再把实测选择器回填到对应 config 并置
- * calibrated:true，方可用于生产自动回复。校准前引擎不会误发（消息侧判定未知则跳过、不回），
- * 但也不会真正回复，直到选择器对齐。
+ * ⚠️ 本文件 7 个 Web IM 平台里**只有智联(zhilian)已真机校准**（calibrated:true），其余为
+ * 「启发式基线」（calibrated:false）。各平台 IM 的真实 DOM class 必须真机校准 ——
+ * 跑本地探针 `probe_chat.ts <platform>`（在 scripts/ 下，gitignored 不入库）dump 出列表项 /
+ * 消息气泡的真实 class 与文本，再把实测选择器回填到对应 config 并置 calibrated:true，
+ * 方可用于生产自动回复。校准前引擎不会误发（消息侧判定未知则跳过、不回），但也不会真正回复。
+ *
+ * 🔴 两件事别混：`calibrated:false` = 选择器没对齐（会尝试，可能找不到会话）；
+ *    `autoReplySupported:false` = **结构性不可用**（51job/鱼泡/中华英才的 HR 沟通走 App、
+ *    Web 侧无会话列表），引擎直接跳过，且**不会出现在控制台下拉里**。
  *
  * offerbiu（牛客/OfferBiu 邮箱直投通道）不在此列：其 HR 沟通走**邮件**而非 Web IM，
  * 由 offerbiu-email-direct-apply 流程处理，本自动回复引擎不驱动它（故意不登记）。

@@ -58,4 +58,25 @@ export interface ChatDriver {
    * ⚠️ 该操作**有真实副作用**（会向 HR 发出简历），只在真实发送模式下调用。
    */
   acceptResumeRequest?(): Promise<boolean>;
+
+  /**
+   * 真机校准状态：`false`/缺省 = 启发式基线（选择器未对齐 ⇒ 引擎不会误发，但也不会真正回复）。
+   * `true` = 已用本地探针 `probe_chat.ts` 把实测选择器回填过，可用于生产。
+   *
+   * ⚠️ 与 `autoReplySupported` 是**两回事**，别混：
+   *   `calibrated=false`      —— 功能会尝试，只是可能找不到会话；
+   *   `autoReplySupported=false` —— 结构性不可用，引擎直接跳过。
+   */
+  calibrated?: boolean;
+  /**
+   * 架构上是否支持本引擎自动回复：`false` = 该平台没有可导航的 Web IM 收件箱
+   * （如 51job / 鱼泡 / 中华英才的 HR 沟通走 App），即使登录也无法驱动。
+   *
+   * 🔴 控制台下拉与 `GET /api/auto-reply/run` 的准入都必须以本字段（配合 DRIVERS）为准，
+   * **不得再各写一份硬编码平台清单** —— 曾因此把已校准的 zhilian 也挡在门外，
+   * 且非法平台被**静默降级成 boss**（用户以为在回复 A 平台，实际在 B 平台操作）。
+   */
+  autoReplySupported?: boolean;
+  /** `autoReplySupported=false` 时给用户看的说明（会出现在错误提示与下拉标注里） */
+  disabledReason?: string;
 }

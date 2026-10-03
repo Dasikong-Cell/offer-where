@@ -223,6 +223,68 @@ check('写请求 + 无 Origin 本机脚本放行', checkRequestOrigin({ method: 
     html.includes('id="menuBtn"') && html.includes('id="navBackdrop"') && /\.side\.open\s*\{/.test(html),
     '缺任一 ⇒ 手机上无法切换视图（原实现直接隐藏侧栏）');
 }
+{
+  // ── 自动回复平台清单必须「单一真相源」（2026-10-03 用户反馈：「平台下拉只有两项」） ──
+  // 🔴 原实现前后端**各写一份硬编码**：控制台下拉只列 boss/liepin；后端 `GET /api/auto-reply/run`
+  //    也只放行这两个，并把其它平台**静默降级成 boss** —— 用户以为在回复智联，实际在 BOSS 上操作
+  //    （有真实副作用的静默降级，最难发现）；同时已真机校准的 zhilian 被白白挡在门外。
+  //    这组断言把「两处硬编码」的形态钉死。
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const idxCode = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'index.ts'), 'utf8'));
+  const htmlCode = stripComments(fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8'));
+  const runnerSrc = fs.readFileSync(path.join(ROOT, 'server', 'services', 'apply', 'autoReplyRunner.ts'), 'utf8');
+
+  check('自动回复 run 准入不再硬编码平台白名单',
+    !/\['boss'\s*,\s*'liepin'\]\s*\.includes/.test(idxCode),
+    "不得出现 ['boss','liepin'].includes(...) —— 它把未列入的平台静默降级成 boss");
+  check('自动回复 run 准入改用 isAutoReplyPlatform（唯一一处）',
+    countMatches(idxCode, /isAutoReplyPlatform\s*\(/g) === 1,
+    `实际 ${countMatches(idxCode, /isAutoReplyPlatform\s*\(/g)} 处`);
+  check('控制台平台下拉不再硬编码选项（改为读接口）',
+    !htmlCode.includes(`$('#replyPlatform').innerHTML = '<option value="boss">`),
+    '旧写法：直接 innerHTML 塞死两项');
+  check('控制台确实调用了平台清单接口',
+    htmlCode.includes('/api/auto-reply/platforms'),
+    '下拉数据必须来自 GET /api/auto-reply/platforms');
+  check('平台清单由 autoReplyRunner 统一导出（单一真相源）',
+    /export function listAutoReplyPlatforms\s*\(/.test(runnerSrc) &&
+    /export function isAutoReplyPlatform\s*\(/.test(runnerSrc),
+    '两端都应只读这里，而不是各写一份');
+}
+{
+  // ── 「邮箱直投」面板（offerbiu）三段必须真能用 ──
+  // 2026-10-03 用户截图：① 「keywords 不能为空」 ③ 「❌ undefined」。
+  // 根因是三个独立缺陷：① 采集按钮发空 body；② ③ 不传 jobIds；③ 前端读 `ev.msg` 而后端 SSE
+  // 文案字段是 `message`。另外 `quarantine`/`force` 在 console.html 里各 0 处 ——
+  // 换前端时把「跨公司串号」隔离交互整个弄丢了（后端闸门还在，用户却点不到）。
+  const R = fileURLToPath(new URL('..', import.meta.url));
+  const mail = stripComments(fs.readFileSync(path.join(R, 'public', 'console.html'), 'utf8'));
+
+  check('邮箱直投不再读取不存在的 ev.msg',
+    !/\bev\.msg\b/.test(mail),
+    '后端 SSE 的文案字段是 message；读 msg 只会得到 undefined（旧实现显示「❌ undefined」）');
+  check('邮箱直投采集按钮发送真实 keywords（不再发空 body）',
+    /collect-keywords'[\s\S]{0,300}?keywords:\s*kws/.test(mail),
+    "旧实现发 body:'{}' ⇒ 后端 400「keywords 不能为空」");
+  check('邮箱直投提交时带上 jobIds 与 emails 映射',
+    /email-apply'[\s\S]{0,300}?jobIds\b/.test(mail) && /\bemails\s*[,}]/.test(mail),
+    '不传 jobIds ⇒ 后端回 error「未选择任何岗位」；emails 是规避微信限流的预取证邮箱');
+  check('邮箱直投保留「跨公司串号」隔离交互（隔离项默认不勾 + 强制开关）',
+    // ⚠️ 必须锚在 `<input id="emailForce">` **元素**上，不能只写 includes('emailForce')：
+    //    JS 里还有 `$('#emailForce').checked`，只测字符串存在 ⇒ 把复选框整个删掉断言照样绿
+    //    （2026-10-03 破坏对照当场抓出这条假区分力）。
+    /<input[^>]*\bid="emailForce"/.test(mail) && /q\?'':' checked'/.test(mail),
+    'quarantine/force 曾被整个丢失 —— 后端闸门还在，但用户无法区分也无法强制');
+  check('邮箱直投隔离项默认不勾选（安全底线，不得一键全选）',
+    /q\?'':' checked'/.test(mail),
+    '退化成恒 checked ⇒ 用户一不留神就把简历发给错误公司（不可撤回）');
+  check('邮箱直投强制开关确实透传 force',
+    /\$\('#emailForce'\)\.checked/.test(mail),
+    '只在 UI 画开关、不把值发出去 ⇒ 闸门形同虚设');
+  check('换行常量 NL 只在顶层定义一次（多面板共用）',
+    countMatches(mail, /const NL\s*=/g) === 1 && /^const NL\s*=/m.test(mail),
+    '曾写在 #replyRun 处理器体内 ⇒ 邮箱直投一调用就 ReferenceError，而 console:check 只查语法查不出');
+}
 
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ A1.4 注释剥离器（静态断言的地基，2026-09-30） ══════');

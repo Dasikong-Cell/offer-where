@@ -310,6 +310,8 @@ export async function sendResume(): Promise<boolean> {
 /** BOSS 平台 ChatDriver 实现（供自动回复引擎统一调度） */
 export const bossChatDriver: ChatDriver = {
   platform: PLATFORM,
+  // 已真机校准 + 有可导航的 Web IM ⇒ 控制台下拉会正常列出、引擎可直接跑。
+  calibrated: true,
   openChat,
   listConversations,
   openConversation,

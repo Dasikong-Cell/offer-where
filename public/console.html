@@ -478,6 +478,7 @@
               <div><label class="f">模式</label>
                 <select id="replyMode"><option value="preview">预览（不发送）</option><option value="real">真实发送</option></select></div>
             </div>
+            <div class="note warn" id="replyCalibNote" style="display:none;margin-top:10px"></div>
             <label class="toggle" style="margin-top:12px"><input type="checkbox" id="replyUnread" checked /> 仅处理未读消息</label>
             <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
               <button class="btn sm" id="replyCheck">检查登录态</button>
@@ -495,13 +496,26 @@
           <div class="tabpane" id="tab-email" style="display:none">
             <div class="grid cols-3" style="gap:14px">
               <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">① 采集关键词</h2>
-                <div class="out" id="emailStep1" style="max-height:120px"></div>
+                <div class="muted" style="margin-bottom:6px">offerbiu 匿名只能翻 3 页，必须靠关键词细分扩池。每行一个关键词。</div>
+                <textarea id="emailKeywords" class="area" style="min-height:86px" placeholder="每行一个关键词">Java 后端
+软件测试
+前端开发
+嵌入式开发
+算法工程师</textarea>
+                <div class="out" id="emailStep1" style="max-height:110px;margin-top:8px"></div>
                 <button class="btn primary sm" id="emailCollect" style="margin-top:8px">采集校招关键词</button></div>
               <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">② 扫描招聘邮箱</h2>
-                <div class="out" id="emailStep2" style="max-height:120px"></div>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                  <label class="muted">条数 <input id="emailScanLimit" type="number" min="1" max="2000" step="1" value="20" style="width:66px" /></label>
+                  <label class="muted">起点 <input id="emailScanOffset" type="number" min="0" step="1" value="0" style="width:66px" /></label>
+                </div>
+                <div class="out" id="emailStep2" style="max-height:110px;margin-top:8px"></div>
+                <div id="emailHits" style="margin-top:8px"></div>
                 <button class="btn primary sm" id="emailScan" style="margin-top:8px">扫描邮箱</button></div>
               <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">③ 批量直投</h2>
-                <div class="out" id="emailStep3" style="max-height:120px"></div>
+                <div class="muted" id="emailSelSummary">尚未选择命中岗位 —— 先在 ② 扫描并勾选。</div>
+                <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="emailForce" /> 强制投递（忽略「跨公司串号」隔离）</label>
+                <div class="out" id="emailStep3" style="max-height:110px;margin-top:8px"></div>
                 <button class="btn primary sm" id="emailApply" style="margin-top:8px">开始投递</button></div>
             </div>
             <div class="note warn">邮箱直投走 offerbiu 微信推文 / 官网表单通道，<b>无需登录平台</b>。真实发送前请先预览，并人工剔除「跨公司串号」候选（个人 QQ / HR-SaaS 平台邮箱已自动隔离）。</div>
@@ -891,6 +905,10 @@ function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.class
 // esc：HTML 转义。⚠️ 2026-09-25 补上引号 —— 此前只转 &<> ，属性上下文（src="…"/title='…'）
 // 仍可被引号突破形成注入面；转义 " 与 ' 后，文本/属性两种上下文都安全。
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* 换行常量必须定义在**顶层**：曾把它写在 `#replyRun` 处理器体内，结果自动回复面板能用、
+   邮箱直投面板一调用就 ReferenceError（而 console:check 只查语法，查不出作用域问题）。
+   凡是被多个面板共用的常量/函数，一律放顶层。 */
+const NL = String.fromCharCode(10);
 
 /* ---------- 移动端抽屉导航 ---------- */
 /* 手机端（≤760px）侧栏由 CSS 变成 off-canvas 抽屉；这里只负责开关。
@@ -1507,11 +1525,54 @@ $('#hTestAlert').addEventListener('click', async ()=>{
 });
 
 /* ---------- deliver: platforms selects ---------- */
+/** 自动回复支持的平台 —— **从后端取**（单一真相源 = autoReplyRunner.DRIVERS）。
+ *  🔴 原先这里硬编码 `boss + liepin`，后端也只放行这两个、并把其它平台**静默降级成 boss**
+ *    ⇒ 已真机校准的智联被挡在门外，用户以为「自动回复只有这两个平台」。 */
+let REPLY_PLATFORMS = null;   // 缓存，切视图不必重复打接口
+async function fillReplyPlatformSelect(){
+  const sel = $('#replyPlatform');
+  if(!sel) return;
+  try{
+    if(!REPLY_PLATFORMS){
+      const r = await api('/api/auto-reply/platforms');
+      REPLY_PLATFORMS = (r && r.platforms) || [];
+    }
+    if(!REPLY_PLATFORMS.length) throw new Error('后端返回的平台清单为空');
+    sel.innerHTML = REPLY_PLATFORMS.map(p=>{
+      const name = (PLATFORMS.find(x=>x.id===p.id)||{}).name || p.id;
+      // 未真机校准的平台照样列出（引擎不会误发，但也不会真正回复）—— 必须标注出来，
+      // 否则用户选了没反应会以为是坏了。
+      return '<option value="'+p.id+'">'+esc(name)+(p.calibrated?'':' · 待校准')+'</option>';
+    }).join('');
+    showReplyCalibNote();
+  }catch(e){
+    // 接口失败时绝不能把下拉留空（用户会以为「一个平台都没有」）；退回两个已校准的。
+    sel.innerHTML = '<option value="boss">BOSS直聘</option><option value="liepin">猎聘</option>';
+    console.warn('自动回复平台清单获取失败，已退回内置两项：', e);
+  }
+}
+/** 选中「待校准」平台时给出可见说明 —— 否则「选了却没反应」会被当成功能坏了。
+ *  ⚠️ 必须定义在顶层：放进别的函数体里会让这里的调用抛 ReferenceError（整页初始化中断）。 */
+function showReplyCalibNote(){
+  const el = $('#replyCalibNote');
+  if(!el) return;
+  const id = $('#replyPlatform') ? $('#replyPlatform').value : '';
+  const p = (REPLY_PLATFORMS||[]).find(x=>x.id===id);
+  if(p && p.calibrated === false){
+    el.style.display = '';
+    el.innerHTML = '⚠️ 该平台的聊天选择器<b>尚未真机校准</b>：引擎不会误发消息，'
+      + '但很可能找不到会话而不回复。要用它请先跑本地探针 <code>probe_chat.ts '+esc(p.id)+'</code>，'
+      + '把实测选择器回填到 <code>platformsChat.ts</code> 并置 <code>calibrated:true</code>。';
+  } else {
+    el.style.display = 'none';
+  }
+}
 function fillPlatformSelects(){
   const opts = '<option value="">全部平台</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
   $('#batchPlatform').innerHTML = opts;
-  // 自动回复引擎目前仅实现 BOSS / 猎聘（51job、智联暂无 driver），下拉只列这两个
-  $('#replyPlatform').innerHTML = '<option value="boss">BOSS直聘</option><option value="liepin">猎聘</option>';
+  const rsel = $('#replyPlatform');
+  if(rsel) rsel.innerHTML = '<option value="" disabled selected>加载中…</option>';
+  fillReplyPlatformSelect();
   $('#batchSource').innerHTML = '<option value="">全部来源</option>' + PLATFORMS.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('');
 }
 
@@ -1902,7 +1963,6 @@ $('#replyRun').addEventListener('click', async ()=>{
   }
   const url='/api/auto-reply/run?platform='+encodeURIComponent(platform)
     +'&realSend='+realSend+'&unreadOnly='+unreadOnly;
-  const NL = String.fromCharCode(10);
   let sent=0, skipped=0, total=0;
   try{
     // 鉴权开启时这条也要带令牌：它是 GET，但 realSend=1 会真的发消息，
@@ -1947,13 +2007,21 @@ $('#replyStop').addEventListener('click', async ()=>{
   catch(e){ $('#replyStatus').textContent='停止失败：'+e.message; }
 });
 $('#replyCheck').addEventListener('click', checkReplyLogin);
-$('#replyPlatform').addEventListener('change', checkReplyLogin);
+$('#replyPlatform').addEventListener('change', ()=>{ checkReplyLogin(); showReplyCalibNote(); });
 
-/* ---------- email apply (offerbiu) ---------- */
-async function emailStream(path, body, outEl, barEl){
+/* ---------- email apply (offerbiu) ----------
+   ⚠️ 后端 SSE 事件的文案字段是 **`message`**（不是 `msg`）。曾全写成 `ev.msg` ⇒ `undefined`：
+   ① 进度事件只会打印原始 JSON；② 出错时显示「❌ undefined」，用户完全不知道发生了什么。
+   任何新增事件分支都必须读 `ev.message`。 */
+async function emailStream(path, body, outEl, barEl, onEvent){
   outEl.textContent=''; if(barEl) barEl.style.width='0%';
   const res = await fetch(path, {method:'POST', headers:Object.assign({'Content-Type':'application/json'}, authHeaders()), body: JSON.stringify(body||{})});
+  if(!res.ok || !res.body){
+    const t = await res.text().catch(()=> '');
+    throw new Error('HTTP '+res.status+(t?('：'+t.slice(0,300)):''));
+  }
   const reader = res.body.getReader(); const dec = new TextDecoder(); let buf=''; let n=0;
+  const push = (line)=>{ outEl.textContent += (outEl.textContent?NL:'') + line; outEl.scrollTop = outEl.scrollHeight; };
   while(true){
     const {done, value} = await reader.read(); if(done) break;
     buf += dec.decode(value, {stream:true});
@@ -1961,27 +2029,108 @@ async function emailStream(path, body, outEl, barEl){
     for(const line of lines){
       if(!line.startsWith('data:')) continue;
       const payload = line.slice(5).trim(); if(!payload) continue;
-      try{
-        const ev = JSON.parse(payload);
-        if(ev.type==='progress'||ev.type==='scan'){ n++; outEl.textContent += (ev.msg||JSON.stringify(ev))+'\n'; if(barEl) barEl.style.width=Math.min(100,(n%100)).toFixed(0)+'%'; }
-        else if(ev.type==='done'){ outEl.textContent += '✅ 完成：'+JSON.stringify(ev.result||ev)+'\n'; if(barEl) barEl.style.width='100%'; }
-        else if(ev.type==='error'){ outEl.textContent += '❌ '+ev.msg+'\n'; }
-        else outEl.textContent += JSON.stringify(ev)+'\n';
-      }catch(_){ outEl.textContent += payload+'\n'; }
+      let ev; try{ ev = JSON.parse(payload); }catch(_){ push(payload); continue; }
+      if(onEvent) { try{ onEvent(ev); }catch(_){} }
+      const total = Number(ev.total)||0;
+      const pct = total ? Math.min(100, Math.round((Number(ev.index)||n+1)/total*100)) : Math.min(100, n%100);
+      if(ev.type==='progress'){ n++; push(ev.message || (ev.company?('扫描 '+ev.company):'…')); if(barEl) barEl.style.width=pct+'%'; }
+      else if(ev.type==='scan'){ push(ev.message||JSON.stringify(ev)); }
+      else if(ev.type==='found'){ n++; push('✅ 扫描完成：共看 '+ev.scanned+' 个页面，命中 '+((ev.found||[]).length)+' 个招聘邮箱（已在下方列出）'); if(barEl) barEl.style.width='100%'; }
+      else if(ev.type==='result'){ n++;
+        const tag = ev.status==='applied' ? '  ✓ 已投 ' : (ev.status==='skipped' ? '  ⊘ 跳过 ' : '  ✗ 失败 ');
+        push(tag + (ev.company||ev.position||ev.jobId||'') + (ev.message?(' — '+ev.message):''));
+        if(barEl && total) barEl.style.width=pct+'%';
+      }
+      else if(ev.type==='done'){ push('■ 完成：成功 '+ev.ok+' · 失败 '+ev.fail+' · 共 '+ev.total); if(barEl) barEl.style.width='100%'; }
+      else if(ev.type==='error'){ push('❌ '+(ev.message||'未知错误')); }
+      // 无 type 的事件（如后端收尾固定的 `data: {}`）静默忽略 —— 否则输出尾部会多一行 `{}`
+      else if(ev && ev.type) push(JSON.stringify(ev));
     }
     outEl.scrollTop = outEl.scrollHeight;
   }
 }
+
+/* 扫描命中的岗位（含 quarantine 标记）；投递时按勾选项映射成 jobIds + emails */
+let EMAIL_HITS = [];
+function renderEmailHits(){
+  const box = $('#emailHits'); if(!box) return;
+  if(!EMAIL_HITS.length){
+    box.innerHTML = '<div class="muted">尚无命中。多数 offerbiu 岗位是微信推文/官网表单，页面本就没有邮箱 —— 命中少属正常，先加关键词扩池。</div>';
+    updateEmailSel(); return;
+  }
+  box.innerHTML = EMAIL_HITS.map((h,i)=>{
+    const q = !!h.quarantine;
+    return '<label style="display:block;padding:6px 4px;border-bottom:1px solid rgba(128,128,128,.25)">'
+      + '<input type="checkbox" class="emailHitChk" data-i="'+i+'"'+(q?'':' checked')+' /> '
+      + '<b>'+esc(h.company||'')+'</b> · '+esc(h.position||'')+(h.city?(' · '+esc(h.city)):'')
+      + (q ? ' <b style="color:#c0392b">⚠ 跨公司串号</b>' : '')
+      + '<br><span class="muted" style="margin-left:20px">'+esc(h.email||'')+'</span>'
+      + (q ? '<br><span style="margin-left:20px;color:#c0392b">'+esc(h.quarantine||'')+'</span>' : '')
+      + '</label>';
+  }).join('') + '<div class="muted" style="margin-top:6px">带「⚠ 跨公司串号」的默认不勾选；确要认真投请勾上 ③ 的强制开关。</div>';
+  box.querySelectorAll('.emailHitChk').forEach(c=>c.addEventListener('change', updateEmailSel));
+  updateEmailSel();
+}
+function selectedEmailHits(){
+  return [...document.querySelectorAll('.emailHitChk')].filter(c=>c.checked)
+    .map(c=>EMAIL_HITS[Number(c.dataset.i)]).filter(Boolean);
+}
+function updateEmailSel(){
+  const sel = selectedEmailHits();
+  const box = $('#emailSelSummary'); if(!box) return;
+  if(!sel.length){ box.textContent = EMAIL_HITS.length ? '尚未勾选 —— 在 ② 的列表里勾选要投递的岗位。' : '尚未选择命中岗位 —— 先在 ② 扫描并勾选。'; return; }
+  const risky = sel.filter(h=>h.quarantine).length;
+  box.innerHTML = '将投递 <b>'+sel.length+'</b> 个岗位'
+    + (risky ? '（其中 <b style="color:#c0392b">'+risky+' 个带串号标记</b>）' : '')
+    + '<br><span class="muted">'+esc(sel.slice(0,3).map(h=>h.company||'').filter(Boolean).join('、'))
+    + (sel.length>3 ? ' 等' : '')+'</span>';
+}
+
 $('#emailCollect').addEventListener('click', async ()=>{
-  const b=$('#emailCollect'); b.disabled=true; $('#emailStep1').textContent='采集中…';
-  try{ const r = await api('/api/offerbiu/collect-keywords', {method:'POST', body:'{}'}); $('#emailStep1').textContent=JSON.stringify(r,null,2); }
-  catch(e){ $('#emailStep1').textContent='错误：'+e.message; } b.disabled=false;
+  const kws = ($('#emailKeywords').value||'').split(/[\n,，、;；]+/).map(s=>s.trim()).filter(Boolean);
+  if(!kws.length){ $('#emailStep1').textContent='请先填写至少一个关键词（每行一个）。'; return; }
+  const b=$('#emailCollect'); b.disabled=true;
+  $('#emailStep1').textContent='采集中…（每个关键词最多 3 页，可能需要一两分钟）';
+  try{
+    const r = await api('/api/offerbiu/collect-keywords', {method:'POST', body: JSON.stringify({keywords: kws})});
+    $('#emailStep1').textContent = '✅ 本轮新增 '+(r&&r.collected!=null?r.collected:'?')+' 个岗位 · 关键词：'+kws.join('、');
+  }catch(e){ $('#emailStep1').textContent='❌ 采集失败：'+(e.message||e); }
+  b.disabled=false;
 });
-$('#emailScan').addEventListener('click', ()=> emailStream('/api/offerbiu/scan-emails', {workers:4, settleMs:1200}, $('#emailStep2'), $('#emailBar')).catch(e=>$('#emailStep2').textContent='错误：'+e.message));
+
+$('#emailScan').addEventListener('click', async ()=>{
+  const b=$('#emailScan'); b.disabled=true;
+  EMAIL_HITS=[]; renderEmailHits();
+  const limit = Math.max(1, Number($('#emailScanLimit').value)||20);
+  const offset = Math.max(0, Number($('#emailScanOffset').value)||0);
+  $('#emailStep2').textContent='扫描中…（'+limit+' 个岗位，起点 '+offset+'；需要 offerbiu 调试窗口已启动）';
+  try{
+    await emailStream('/api/offerbiu/scan-emails', {limit, offset, workers:4, settleMs:1200},
+      $('#emailStep2'), $('#emailBar'),
+      (ev)=>{ if(ev.type==='found'){ EMAIL_HITS = Array.isArray(ev.found)?ev.found:[]; renderEmailHits(); } });
+  }catch(e){ $('#emailStep2').textContent += NL+'❌ 扫描失败：'+(e.message||e); }
+  b.disabled=false;
+});
+
 $('#emailApply').addEventListener('click', async ()=>{
-  if(!confirm('确认真实发送邮箱直投？请先预览并人工剔除串号候选。')) return;
-  await emailStream('/api/offerbiu/email-apply', {channel:'email', realSend:true, tailor:true}, $('#emailStep3'), $('#emailBar'))
-    .catch(e=>$('#emailStep3').textContent='错误：'+e.message);
+  const hits = selectedEmailHits();
+  if(!hits.length){ $('#emailStep3').textContent='请先在 ② 里勾选要投递的命中岗位。'; return; }
+  const force = $('#emailForce').checked;
+  const risky = hits.filter(h=>h.quarantine).length;
+  if(risky && !force){
+    $('#emailStep3').textContent='❌ 勾选项里有 '+risky+' 个带「跨公司串号」标记。请取消勾选它们，或勾上「强制投递（忽略隔离）」—— 否则简历可能发给错误的公司（不可撤回）。';
+    return;
+  }
+  const jobIds = hits.map(h=>h.jobId);
+  const emails = {}; hits.forEach(h=>{ emails[h.jobId]=h.email; });
+  const preview = hits.slice(0,5).map(h=>'  · '+(h.company||'')+' | '+h.position+' | '+h.email).join('\n');
+  if(!confirm('确认真实发送 '+jobIds.length+' 封邮件（不可撤回）？\n\n'+preview+(hits.length>5?('\n  …另有 '+(hits.length-5)+' 个'):'')+(risky?'\n\n⚠ 含 '+risky+' 个串号项（已强制）':''))) return;
+  const b=$('#emailApply'); b.disabled=true; $('#emailStep3').textContent='投递中…（一岗一简历会先按 JD 生成定制附件，逐封间隔 8 秒）';
+  try{
+    await emailStream('/api/offerbiu/email-apply',
+      {jobIds, emails, tailor:true, intervalMs:8000, force}, $('#emailStep3'), $('#emailBar'));
+  }catch(e){ $('#emailStep3').textContent += NL+'❌ 投递失败：'+(e.message||e); }
+  b.disabled=false;
 });
 
 /* ---------- 网申（独立平台，复用企业官网投递引擎；端口 9238 / 上下文 'wangshen'）---------- */

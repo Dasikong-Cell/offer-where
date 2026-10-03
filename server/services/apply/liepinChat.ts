@@ -206,6 +206,8 @@ export async function acceptResumeRequest(): Promise<boolean> {
 /** 猎聘平台 ChatDriver 实现 */
 export const liepinChatDriver: ChatDriver = {
   platform: PLATFORM,
+  // 已真机校准 + 有可导航的 Web IM ⇒ 控制台下拉会正常列出、引擎可直接跑。
+  calibrated: true,
   openChat,
   listConversations,
   openConversation,

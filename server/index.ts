@@ -43,7 +43,7 @@ import {
 } from "./services/apply/batch.js";
 import { rememberCurrentForm } from "./services/apply/offerbiu.js";
 import { scanOfferbiuEmails } from "./services/offerbiuEmailScan.js";
-import { runAutoReply } from "./services/apply/autoReplyRunner.js";
+import { runAutoReply, isAutoReplyPlatform, listAutoReplyPlatforms } from "./services/apply/autoReplyRunner.js";
 import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
 import { collectOfferbiu, collectOfferbiuByKeywords } from "./services/offerbiuCollect.js";
@@ -2272,12 +2272,39 @@ app.post("/api/apply/batch", async (req, res) => {
 
 let autoReplyController: AbortController | null = null;
 
+/**
+ * 自动回复支持的平台清单 —— 控制台下拉的数据源。
+ *
+ * 单一真相源 = `autoReplyRunner.DRIVERS`（平台能力写在驱动自己身上）。
+ * 🔴 控制台**不得**再硬编码平台选项：历史上前后端各写一份，前端只列 2 个、
+ *    后端也只放行 2 个，导致已真机校准的 zhilian 被挡在门外，用户以为
+ *    「自动回复只有 BOSS 和猎聘」。
+ */
+app.get("/api/auto-reply/platforms", (_req, res) => {
+  const all = listAutoReplyPlatforms();
+  res.json({
+    platforms: all.filter((p) => p.supported),
+    unsupported: all.filter((p) => !p.supported),
+  });
+});
+
 app.get("/api/auto-reply/run", async (req, res) => {
   const q = req.query || {};
   const unreadOnly = q.unreadOnly !== '0' && q.unreadOnly !== 'false';
   const limit = Number(q.limit || 0) || 0;
   const realSend = q.realSend === '1' || q.realSend === 'true';
-  const platform = typeof q.platform === 'string' && ['boss', 'liepin'].includes(q.platform) ? q.platform : 'boss';
+  // 🔴 非法平台必须**明确报错**，绝不静默降级：原先写成
+  //      ['boss','liepin'].includes(x) ? x : 'boss'
+  //    ⇒ 传 zhilian 会被悄悄当成 boss 跑（用户以为在回复智联，实际在 BOSS 上操作）。
+  //    这类「有真实副作用的静默降级」是最难发现的一类错误。
+  const requested = typeof q.platform === 'string' && q.platform.trim() ? q.platform.trim() : 'boss';
+  if (!isAutoReplyPlatform(requested)) {
+    return res.status(400).json({
+      error: `平台「${requested}」不支持自动回复`,
+      supported: listAutoReplyPlatforms().filter((p) => p.supported).map((p) => p.id),
+    });
+  }
+  const platform = requested;
   // useAi：是否用大模型生成话术。默认 true（API 已配置时自动启用，未配置自动回退规则）。
   // 传 useAi=0/false 可强制走规则模板。
   const useAi = q.useAi !== '0' && q.useAi !== 'false';
