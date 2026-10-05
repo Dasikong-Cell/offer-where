@@ -693,9 +693,9 @@ check('签名可替代请求头的路径清单是显式白名单（含 /api/resu
     /'\/api\/resume\/file'/.test(readText('server/services/authToken.ts')),
   '漏了 /api/resume/file ⇒ 控制台「预览简历」按钮恒 401');
 check('控制台简历预览用后端签发的 previewUrl（不是自己拼裸路径）',
-  /window\.open\(b\.dataset\.prev/.test(readText('public/console.html')) &&
+  /openLightbox\('<iframe src="'\+esc\(b\.dataset\.prev\)/.test(readText('public/console.html')) && !/window\.open\(b\.dataset\.prev/.test(readText('public/console.html')) &&
     /data-prev="'\+esc\(pv\)/.test(readText('public/console.html')),
-  'window.open 发不出请求头 ⇒ 裸路径在鉴权开启时恒 401');
+  '桌面壳（Tauri）拦截 window.open ⇒ 预览必须改页内 lightbox；签名 URL 也不可省（iframe 发不出请求头）');
 // 控制台那条裸 fetch 必须带上令牌，否则「鉴权一开，自动回复就用不了」
 // （而它走的是 GET，正是这次要收紧的对象）。
 check('控制台调 /api/auto-reply/run 时带上令牌头',

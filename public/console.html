@@ -4212,15 +4212,19 @@ function renderResumeCurrent(r){
     const ok = o.exists;
     const size = ok ? (o.size/1024).toFixed(0)+' KB' : '未上传';
     const time = o.uploadedAt ? new Date(o.uploadedAt).toLocaleString('zh-CN') : '';
-    // 用后端给的 previewUrl（带短时签名）：window.open 开新标签页发不出 X-Auth-Token，
+    // 用后端给的 previewUrl（带短时签名）：iframe 载入是独立文档、发不出 X-Auth-Token，
     // 走裸路径在鉴权开启时恒 401。签名只授权这一个文件、1 小时后失效。
     const pv = o.previewUrl || (o.url + '&t=');
     return '<div class="kv" style="border-left:3px solid '+(ok?'#2da44e':'#d0d7de')+';padding-left:8px;margin:8px 0">'
       + '<span><b>'+label+'</b>'+(ok?' ✓':' ✗')+'<div class="small muted">'+esc(o.fileName||'')+' · '+size+(time?' · '+time:'')+'</div></span>'
-      + (ok?'<span><button class="btn sm" data-prev="'+esc(pv)+'">预览</button></span>':'<span class="muted">—</span>')
+      + (ok?'<span><button class="btn sm" data-prev="'+esc(pv)+'" data-prev-label="'+esc(label)+'">预览</button></span>':'<span class="muted">—</span>')
       + '</div>';
   }).join('');
-  $$('[data-prev]').forEach(function(b){ b.addEventListener('click', function(){ window.open(b.dataset.prev, '_blank'); }); });
+  // 🔴 桌面壳（Tauri）拦截 window.open ⇒ 点「预览」毫无反应（与证据回溯 target=_blank 同源）。
+  // 改走页内 lightbox 的 iframe：同源签名 URL，不依赖请求头；PDF 由外壳内嵌查看器渲染。
+  $$('[data-prev]').forEach(function(b){ b.addEventListener('click', function(){
+    openLightbox('<iframe src="'+esc(b.dataset.prev)+'" title="简历预览"></iframe>', (b.dataset.prevLabel||'简历')+' · 预览');
+  }); });
 }
 const dz = $('#dropZone'); const rf = $('#resumeFile');
 dz.addEventListener('click', function(){ rf.click(); });
