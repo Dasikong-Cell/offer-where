@@ -431,13 +431,17 @@ async function runSearch(input: ApplyInput): Promise<ApplyResult> {
  * 否则 ensureLoggedIn 走验证码登录或返回 false，由调用方 catch 吞掉、绝不阻断投递。
  * 返回新入库岗位数。
  */
-export async function collectBossToDb(limit = 40): Promise<number> {
+export async function collectBossToDb(
+  limit = 40,
+  /** 投前实时采集的定向参数：关键词/城市由批量投递的筛选条件透传（2026-10-05） */
+  opts?: { keywords?: string[]; cityCode?: number; cityName?: string | null },
+): Promise<number> {
   const cfg = getPlatform('boss');
   if (!cfg) return 0;
   const logs = new ApplyLogger();
   const profile = db.getProfile() as Record<string, unknown> | undefined;
   const targets = parsePositions(profile?.expectedPositions).filter(Boolean);
-  const kwList = (targets.length ? targets : ['Java开发', '软件开发', '前端开发', '测试工程师']).slice(0, 5);
+  const kwList = (opts?.keywords?.length ? opts.keywords : targets.length ? targets : ['Java开发', '软件开发', '前端开发', '测试工程师']).slice(0, 5);
 
   // 与 scripts/collect_boss.ts 同款抽取：从搜索卡片取 职位/公司/薪资/直链
   const EXTRACT = `(() => {
@@ -461,7 +465,7 @@ export async function collectBossToDb(limit = 40): Promise<number> {
 
   let inserted = 0;
   const searchUrl = (kw: string) =>
-    `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(kw)}&city=100010000`;
+    `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(kw)}&city=${opts?.cityCode ?? 100010000}`;
   for (const kw of kwList) {
     if (inserted >= limit) break;
     try {
@@ -476,7 +480,7 @@ export async function collectBossToDb(limit = 40): Promise<number> {
         const pos = String(it.position || '').toLowerCase();
         if (EXCLUDE.some((e) => pos.includes(e))) continue;
         if (!KEEP.some((k) => pos.includes(k))) continue;
-        db.upsertJob({ source: 'boss', company: it.company || null, position: it.position || null, city: null, salary: it.salary || null, apply_url: it.url });
+        db.upsertJob({ source: 'boss', company: it.company || null, position: it.position || null, city: opts?.cityName ?? null, salary: it.salary || null, apply_url: it.url });
         inserted++;
       }
     } catch (e: any) {

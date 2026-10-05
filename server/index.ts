@@ -2544,7 +2544,12 @@ app.get("/api/geo/locate", async (_req, res) => {
 app.get("/api/apply/quota", (req, res) => {
   try {
     const platform = String(req.query.platform || "").trim();
-    const limit = resolveDailyLimit();
+    // 🔴 2026-10-05 修「横幅与真闸门脱节」：原先固定用默认上限 40、**不读请求里的 dailyLimit**，
+    //   而 runBatchApply 的配额闸门读的是 criteria.dailyLimit ⇒ 用户把上限从 40 改成 41 后，
+    //   横幅仍显示「今日已投 40/40，还可投 0 份」，「显示能投几份」与「实际能不能投」永远对不上。
+    //   现在与真闸门同一份解析：query.dailyLimit → 环境变量 APPLY_DAILY_LIMIT → 默认 40。
+    const rawLimit = String((req.query as any)?.dailyLimit ?? "").trim();
+    const limit = resolveDailyLimit(rawLimit === "" ? undefined : Number(rawLimit));
     const used = todayAppliedCount(platform || undefined);
     // 平台级风控封锁（上一批命中额度到顶/账号异常后写入）：封锁期内批量投递会直接短路
     const block = platform ? readPlatformRiskBlock(platform) : null;
@@ -2582,7 +2587,7 @@ app.post("/api/apply/risk-unblock", (req, res) => {
 app.post("/api/apply/batch", async (req, res) => {
   try {
     const {
-      platform, source, criteria, collect, limit, headless, sinceMinutes, intervalMs, stream, realSend, preview,
+      platform, source, criteria, collect, limit, headless, sinceMinutes, intervalMs, stream, realSend, preview, liveCollect,
     } = req.body || {};
 
     if (platform && platform !== 'auto' && !isSupported(platform)) {
@@ -2600,6 +2605,8 @@ app.post("/api/apply/batch", async (req, res) => {
       criteria,
       collect: (collect === 'offerbiu' ? 'offerbiu' : false) as false | 'offerbiu',
       realSend: realSend === true,
+      // 投前实时采集：先上 BOSS 实搜真实岗位再投（2026-10-05）
+      liveCollect: liveCollect === true,
       // 平台通道只读预览（dry-run）：零真实投递地验证链路
       preview: preview === true,
       limit: limit ? Number(limit) : 10,

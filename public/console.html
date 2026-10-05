@@ -622,6 +622,7 @@
             <div class="note small" style="margin-top:6px" id="batchQuotaNote">匹配分即首页/职位记录里显示的分数。平台对批量投递有账号级风控，每日上限用于保号。</div>
             <div class="note small" style="margin-top:6px">「发布时间」按<b>平台标注的发布时间</b>筛，不是按采集时间。目前各平台能给到的比例不同：offerbiu 全部有、BOSS 约一成、其余平台暂无 —— 没有发布时间的岗位默认按「采集时间」参与筛选（可在下方取消勾选，改为一律不投）。投递完成后日志会列出「X 条靠采集时间兜底」，便于判断这次筛选的可信度。</div>
             <div style="margin-top:12px;display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+              <label class="toggle" title="投递前先上 BOSS 按下面的关键词/城市实时搜索真实在招岗位（仅 BOSS 支持），本批只投这些新鲜岗位 —— 不再吃库里采集已久的陈旧数据。实搜需 BOSS 窗口已登录。"><input type="checkbox" id="batchLiveCollect" checked /> 投前实时采集</label>
               <label class="toggle"><input type="checkbox" id="batchExclude" checked /> 排除已投递</label>
               <label class="toggle"><input type="checkbox" id="batchReal" /> 仅真实 JD 岗位</label>
               <label class="toggle"><input type="checkbox" id="batchRemote" /> 仅远程岗位</label>
@@ -3475,6 +3476,8 @@ $('#batchRun').addEventListener('click', async ()=>{
     const dailyLimit = dlRaw==='' ? 40 : Math.max(0, Math.min(500, Number(dlRaw)||0));
     const body = {
       platform: $('#batchPlatform').value || undefined,
+      // 投前实时采集：先上平台搜「当下真实在招」的岗位再投，不吃库里陈旧数据
+      liveCollect: $('#batchLiveCollect').checked,
       source: $('#batchSource').value || undefined,
       // 平台通道只读预览：零真实投递地验证链路（服务端对应 ApplyInput.preview）
       preview: $('#batchPreview').checked,
@@ -3502,7 +3505,9 @@ $('#batchRun').addEventListener('click', async ()=>{
     };
     const r = await api('/api/apply/batch', {method:'POST', body:JSON.stringify(body)});
     // 摘要置顶：先让人一眼看到「投成功几个 / 为什么没投出去」，再看逐条明细
-    const head = (r && r.message) ? ('【结果】'+r.message+'\n\n') : '';
+    // 「共 0 个岗位」必须带上原因：服务端已把诊断放进 r.reason（原先只走 SSE，普通 POST 拿不到）
+    const why = (r && r.reason) ? ('【为什么 0 个岗位】'+r.reason+'\n\n') : '';
+    const head = why + ((r && r.message) ? ('【结果】'+r.message+'\n\n') : '');
     $('#batchOut').textContent = head + JSON.stringify(r, null, 2);
     $('#batchBar').style.width='100%';
     // F3「需人工」引导：把需要人工介入的条目单独列出来并给一键入口 ——
@@ -3573,7 +3578,13 @@ async function loadQuota(){
   const el = $('#batchQuotaNote'); if(!el) return;
   try{
     const p = $('#batchPlatform').value || '';
-    const q = await api('/api/apply/quota'+(p?('?platform='+encodeURIComponent(p)):''));
+    // 横幅必须与真闸门同源：把输入框里的「每日投递上限」一并送上去，否则改完上限
+    // 横幅还是旧数字，显示与实际能不能投对不上（2026-10-05 实测）。
+    const dl = (($('#batchDailyLimit') || {}).value || '').trim();
+    const qs = [];
+    if (p) qs.push('platform=' + encodeURIComponent(p));
+    if (dl !== '') qs.push('dailyLimit=' + encodeURIComponent(dl));
+    const q = await api('/api/apply/quota' + (qs.length ? ('?' + qs.join('&')) : ''));
     // 风控封锁优先提示：封锁期内批量投递会被直接短路（不投），必须让用户看到原因与解封方式
     if(q.blocked){
       el.innerHTML = '⛔ 平台「'+esc(q.platform||'')+'」处于<b>风控封锁</b>期（约剩 '+q.blockedMinutesLeft+' 分钟）：'
@@ -3595,6 +3606,13 @@ async function loadQuota(){
     el.style.color = left===0 ? '#f85149' : '';
   }catch(e){ /* 只读展示失败不影响投递 */ }
 }
+
+/* 上限/平台/来源一变，横幅立刻重算 —— 否则用户改完上限看到的还是旧数字，
+   只会白投一批再回来找原因（2026-10-05 实测：改成 41 横幅仍显示 40/40）。 */
+['#batchDailyLimit', '#batchPlatform', '#batchSource'].forEach(sel => {
+  const el = $(sel); if (!el) return;
+  el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', loadQuota);
+});
 
 /* auto reply 登录态预检 */
 async function checkReplyLogin(){

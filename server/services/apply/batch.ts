@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import * as db from '../../db.js';
 import { runApply, isSupported, SUPPORTED_PLATFORMS, isWangshenUrl, classifyDelivery } from './index.js';
 import { collectBossToDb } from './engine.js';
+import { findCity } from '../cities.js';
 import { toApplyProfile, tryScreenshot } from './common.js';
 import { startRecording, stopRecording } from './screencast.js';
 import { execAction } from '../browser.js';
@@ -155,6 +156,13 @@ export interface BatchInput {
    */
   preview?: boolean;
   autoRefill?: boolean;             // 候选池耗尽时自动重采 BOSS 岗位（默认 true）
+  /**
+   * 投前实时采集（2026-10-05 用户诉求：投的是平台**当下**的真实岗位，不是库里的陈旧数据）。
+   * 开启后先上 BOSS 按「职位关键词/目标城市」实搜一轮入库，随后**只把这一轮平台上真实在招**的岗位当候选
+   * （判据 updated_at >= 采集开始时刻；upsertJob 每次都会 touch updated_at）；
+   * 实搜一个都没拿到（未登录 / 窗口没开 / 风控）才回落全库，并在 startMsg 里注明。仅 BOSS 支持。
+   */
+  liveCollect?: boolean;
   limit?: number;                   // 最多投递数（默认 10，上限 100）
   headless?: boolean;               // 默认非无头（便于人工过滑块）
   sinceMinutes?: number;            // 验证码邮件时间窗
@@ -196,6 +204,14 @@ export interface BatchResult {
   riskStopped?: number;
   results: BatchItemResult[];
   message: string;
+  /**
+   * picked 为 0 时说明「为什么一个岗位都没投出去」（池空 / 全已投 / 时间窗 / 关键词不匹配 /
+   * 被城市·薪资·匹配分滤掉）。
+   * 🔴 2026-10-05：这份诊断原先只经 onEvent（SSE）推送，而控制台「开始投递」走的是普通 POST、
+   *   **没有 onEvent** ⇒ 用户永远只看到「共 0 个岗位」，与写这段诊断的意图正好相反。
+   *   现在它同时进响应 JSON，非 SSE 调用也拿得到。
+   */
+  reason?: string;
 }
 
 /** 实时事件（供 SSE / 弹窗提示使用） */
@@ -407,7 +423,29 @@ export async function runBatchApply(
   }
 
   // 2) 取岗位
+  // ── 投前实时采集（2026-10-05 用户诉求：投的是平台**当下**的真实岗位，不是库里的陈旧数据）────
+  // 只吃库 ⇒ 池子里全是前几天采的低分/已评估岗（实测 264 个全 <42 分、高分早已投完）⇒ 永远 0 候选。
+  // 开启后先上 BOSS 按筛选条件实搜一轮，再只把「这一轮平台上真实在招」的岗位当候选；
+  // 实搜一个都没入库（未登录 / 窗口没开 / 风控）才回落全库，回落原因会写进 startMsg。
+  let liveCollected = -1;            // -1 = 本轮未启用实时采集
+  let liveFreshUsed = false;
+  const liveCollectStart = new Date(Date.now() - 5000).toISOString();
+  if (input.liveCollect && (input.source === 'boss' || input.platform === 'boss'
+    || input.platform === 'auto' || !input.platform)) {
+    const cityHit = input.criteria?.city ? findCity(input.criteria.city) : null;
+    console.log(`[Batch] 实时采集：上 BOSS 搜索真实岗位（关键词 ${input.criteria?.keywords?.join('、') || '默认意向'}，城市 ${cityHit?.name || '全国'}）…`);
+    liveCollected = await collectBossToDb(
+      Math.max(20, Math.min(100, (Number(input.limit) || 10) * 4)),
+      { keywords: input.criteria?.keywords, cityCode: cityHit?.boss, cityName: cityHit?.name ?? null },
+    );
+    console.log(`[Batch] 实时采集完成：${liveCollected} 个岗位入库`);
+  }
   let jobs = db.listJobs({ source: input.source });
+  if (liveCollected >= 0) {
+    // 新鲜度判据：upsertJob 每次都会 touch updated_at ⇒ 「这一轮平台上真实在招」= updated_at ≥ 采集开始
+    const fresh = jobs.filter(j => String((j as any).updated_at || '') >= liveCollectStart);
+    if (fresh.length > 0) { jobs = fresh; liveFreshUsed = true; }
+  }
   // 永远排除「已下线/不可投」岗位：批量连投的岗位池会被投递消耗，已确认关闭的岗位
   // 若仍留在候选会反复被选中重试（浪费 CDP 调用、刷 need_manual）。
   jobs = jobs.filter(j => j.status !== 'unavailable');
@@ -482,19 +520,21 @@ export async function runBatchApply(
   });
 
   // 先做与关键词无关的过滤（城市 / 薪资 / 匹配分）
+  // 分项计数：用户据此知道「被哪条条件卡了多少个」，不会再去瞎改无关的框（见下方 0 候选诊断）。
+  const drop = { city: 0, remote: 0, salary: 0, score: 0 };
   const baseFiltered = posted.jobs.filter(j => {
     const blob = blobOf(j);
-    if (city && !((j.city || '').toLowerCase().includes(city) || blob.includes(city))) return false;
+    if (city && !((j.city || '').toLowerCase().includes(city) || blob.includes(city))) { drop.city++; return false; }
     // 远程岗位筛选（对标 Resumly）：remoteOnly 时只保留 jobs.remote=1
-    if (input.criteria?.remoteOnly && j.remote !== 1) return false;
+    if (input.criteria?.remoteOnly && j.remote !== 1) { drop.remote++; return false; }
     if (input.criteria?.minSalary != null || input.criteria?.maxSalary != null) {
       const s = parseSalary(j.salary);
-      if (input.criteria!.minSalary != null && s.max != null && s.max < input.criteria!.minSalary) return false;
-      if (input.criteria!.maxSalary != null && s.min != null && s.min > input.criteria!.maxSalary) return false;
+      if (input.criteria!.minSalary != null && s.max != null && s.max < input.criteria!.minSalary) { drop.salary++; return false; }
+      if (input.criteria!.maxSalary != null && s.min != null && s.min > input.criteria!.maxSalary) { drop.salary++; return false; }
     }
     if (needScore && struct) {
       const score = scoreMap.get(j.id);
-      if (score != null && score < (input.criteria!.minScore as number)) return false;
+      if (score != null && score < (input.criteria!.minScore as number)) { drop.score++; return false; }
     }
     return true;
   });
@@ -565,7 +605,21 @@ export async function runBatchApply(
   } else if (kw.length && baseFiltered.length > 0 && baseFiltered.filter(kwMatch).length === 0) {
     startMsg = `未找到可投岗位：${baseFiltered.length} 个未投岗位没有一个匹配「目标职位」（${kw.join('、')}）。可在「我的档案」放宽/清空目标职位，或采集更多岗位后再投`;
   } else {
-    startMsg = `未找到可投岗位：其余未投岗位被筛选条件（城市/薪资/匹配分）过滤掉了`;
+    // 0 候选诊断「具体版」：点名哪条条件卡了多少个，命中匹配分闸门时明确告诉用户调最低匹配分
+    const drops: string[] = [];
+    if (drop.score > 0) drops.push(`匹配分<${input.criteria!.minScore} 的 ${drop.score} 个`);
+    if (drop.city > 0) drops.push(`城市不符「${input.criteria?.city || ''}」的 ${drop.city} 个`);
+    if (drop.salary > 0) drops.push(`薪资不符的 ${drop.salary} 个`);
+    if (drop.remote > 0) drops.push(`非远程的 ${drop.remote} 个`);
+    const detail = drops.length ? `（${drops.join('、')}）` : '';
+    startMsg = `未找到可投岗位：其余未投岗位被筛选条件（城市/薪资/匹配分）过滤掉了${detail}`
+      + (drop.score > 0 ? '；BOSS 待投岗多为未评分/低分（高分已被前几日投完）—— 想先验证链路就把「最低匹配分」调到 0（放开匹配分闸门），上限别用 0（不限制易触发账号风控）' : '；请检查城市/薪资/远程等条件是否过窄');
+  }
+  // 实时采集结果要让用户看得见：采到几个、本批是不是只投新鲜岗（否则「为什么 0 个」又说不清）
+  if (liveCollected >= 0) {
+    startMsg += liveFreshUsed
+      ? `｜已实时从 BOSS 采集 ${liveCollected} 个在招岗位，本批只投这些新鲜岗位`
+      : `｜实时采集到 ${liveCollected} 个但均与库内重复/未拿到新岗位，已回落全库筛选`;
   }
   onEvent?.({ type: 'start', total: picked.length, message: startMsg });
 
@@ -973,6 +1027,8 @@ export async function runBatchApply(
 
   const summary: BatchResult = {
     total: picked.length,
+    // 0 候选时把「为什么」一并带出（见 BatchResult.reason：非 SSE 调用也拿得到）
+    ...(picked.length === 0 ? { reason: startMsg } : {}),
     applied, needManual, needCaptcha, error, skipped, previewed, riskStopped,
     results,
     message: `批量投递完成：共 ${picked.length} 个岗位，成功 ${applied}、需人工 ${needManual}、需验证码 ${needCaptcha}、失败 ${error}、跳过 ${skipped}`

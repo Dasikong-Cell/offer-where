@@ -949,6 +949,101 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
   check('今日已投数可读且非负', todayAppliedCount() >= 0);
 }
 
+// D3b 「为什么 0 个岗位」必须对非 SSE 调用可见 + 配额横幅与真闸门同源
+// 🔴 2026-10-05 实测事故：BOSS 待投池 245 个非空（/api/apply/classify-batch 可证），
+//   却因「匹配分闸门默认 40」被全部滤掉、返回 total 0；而**原因**只经 onEvent(SSE) 推送，
+//   控制台的「开始投递」却是普通 POST（无 onEvent）⇒ 用户只看到「共 0 个岗位」干瞪眼。
+//   同时 /api/apply/quota 固定用默认上限 40、不读 dailyLimit，把上限改成 41 后横幅仍显示
+//   40/40 ⇒ 「显示能投几份」与「实际能不能投」永远对不上。
+{
+  const batchCode = stripComments(readText('server/services/apply/batch.ts'));
+  const idxQuota = stripComments(readText('server/index.ts'));
+  const htmlQuota = stripComments(readText('public/console.html'));
+
+  // ① 0 候选的原因进响应 JSON，而不是只走 SSE
+  check('0 候选的原因进响应 JSON（非 SSE 调用也拿得到）',
+    /\.\.\.\(picked\.length === 0 \? \{ reason: startMsg \} : \{\}\),/.test(batchCode)
+    && /reason\?: string;/.test(batchCode),
+    'BatchResult 缺 reason 字段，或 summary 没把 startMsg 带出来');
+
+  // ② quota 端点必须吃请求里的 dailyLimit（与 runBatchApply 的闸门同一份解析）
+  check('配额横幅与真闸门同源（quota 端点吃 dailyLimit）',
+    /const rawLimit = String\(\(req\.query as any\)\?\.dailyLimit \?\? ""\)\.trim\(\);/.test(idxQuota)
+    && /resolveDailyLimit\(rawLimit === "" \? undefined : Number\(rawLimit\)\)/.test(idxQuota),
+    'quota 端点仍固定用默认上限，没读 req.query.dailyLimit');
+
+  // ③ 前端必须把输入框里的上限送上去，且改完上限立刻重算横幅
+  check('前端把上限送进 quota 且改值即刷新横幅',
+    /qs\.push\('dailyLimit=' \+ encodeURIComponent\(dl\)\)/.test(htmlQuota)
+    && /\['#batchDailyLimit', '#batchPlatform', '#batchSource'\]/.test(htmlQuota)
+    && /addEventListener\(el\.tagName === 'SELECT' \? 'change' : 'input', loadQuota\)/.test(htmlQuota),
+    'loadQuota 没带 dailyLimit，或上限/平台/来源变化后横幅不刷新');
+
+  // ④ SSE 那条路不能被顺手删掉：实时进度面板同样要拿得到原因
+  check('诊断不能只经 SSE 推送（onEvent 与响应体双路）',
+    /onEvent\?\.\(\{ type: 'start', total: picked\.length, message: startMsg \}\);/.test(batchCode),
+    "start 事件丢了，实时进度面板拿不到原因");
+}
+
+// D3c 0 候选诊断必须「具体」：点名哪条条件卡了多少个，命中匹配分闸门要明说调最低匹配分
+// 🔴 2026-10-05 跟进 D3b：上轮只让「原因」可见，但诊断仍笼统说「被筛选条件过滤」，
+//    用户据此把「每日投递上限」误改成 0（以为那是匹配分），真正的「最低匹配分=40」仍把池子全灭。
+//    故诊断必须带分项计数，且命中匹配分闸门时**明确点名「最低匹配分」**，用户才不会改错框。
+{
+  const d3c = stripComments(readText('server/services/apply/batch.ts'));
+
+  // ⑤ baseFiltered 必须按条件分项计数（city/remote/salary/score），否则无法告诉用户各卡了多少
+  check('0 候选诊断按条件分项计数（city/remote/salary/score）',
+    /const drop = \{ city: 0, remote: 0, salary: 0, score: 0 \};/.test(d3c)
+    && /drop\.score\+\+; return false;/.test(d3c)
+    && /drop\.city\+\+; return false;/.test(d3c)
+    && /drop\.salary\+\+; return false;/.test(d3c)
+    && /drop\.remote\+\+; return false;/.test(d3c),
+    'baseFiltered 没按 city/remote/salary/score 分项计数，诊断无法点名具体条件');
+
+  // ⑥ 命中匹配分闸门时，必须点名「最低匹配分」并给出放行动作（调到 0），且提示上限别用 0
+  check('命中匹配分闸门时点名「最低匹配分」并指路（调到 0）',
+    /未找到可投岗位：其余未投岗位被筛选条件（城市\/薪资\/匹配分）过滤掉了/.test(d3c)
+    && /把「最低匹配分」调到 0/.test(d3c)
+    && /上限别用 0/.test(d3c),
+    '「被筛选条件过滤」分支没带分项计数 / 没点名最低匹配分 / 没提示上限别用 0');
+}
+
+// D3d 投前实时采集（2026-10-05 用户诉求）：投的是平台当下的真实岗位，不是库里的陈旧数据
+// 背景：只吃库 ⇒ 池子全是前几天采的低分/已评估岗（实测 264 个全 <42 分），高分早已投完 ⇒ 永远 0 候选。
+//   liveCollect 开启后先上 BOSS 按关键词/城市实搜一轮，只把「这一轮平台上真实在招」的岗位当候选。
+{
+  const d3dB = stripComments(readText('server/services/apply/batch.ts'));
+  const d3dE = stripComments(readText('server/services/apply/engine.ts'));
+  const d3dI = stripComments(readText('server/index.ts'));
+  const d3dH = stripComments(readText('public/console.html'));
+
+  // ⑦ 开关四层贯通：前端勾选 → 路由透传 → BatchInput → 采集调用（漏一层 = 点了没反应）
+  check('投前实时采集开关四层贯通（前端/路由/BatchInput/采集调用）',
+    /liveCollect: \$\('#batchLiveCollect'\)\.checked/.test(d3dH)
+    && /liveCollect: liveCollect === true/.test(d3dI)
+    && /liveCollect\?: boolean/.test(d3dB)
+    && /input\.liveCollect &&/.test(d3dB)
+    && /collectBossToDb\(/.test(d3dB),
+    'liveCollect 没贯通：前端勾了但路由/BatchInput/采集调用少一层 ⇒ 点了没反应');
+
+  // ⑧ 实搜必须带筛选条件的关键词/城市（否则「实时」搜回来的与用户要的无关）
+  check('实时采集把关键词/城市透传给 BOSS 搜索（含城市名回写，防城市筛全灭）',
+    /keywords: input\.criteria\?\.keywords/.test(d3dB)
+    && /cityCode: cityHit\?\.boss/.test(d3dB)
+    && /opts\?\.keywords\?\.length \? opts\.keywords/.test(d3dE)
+    && /city=\$\{opts\?\.cityCode \?\? 100010000\}/.test(d3dE)
+    && /city: opts\?\.cityName \?\? null/.test(d3dE),
+    '实搜没带关键词/城市（或城市名没回写 city 列 ⇒ 城市筛把新鲜岗全灭）');
+
+  // ⑨ 只投「这一轮平台上真实在招」的岗位（updated_at 新鲜度判定），实搜失败才回落全库且要说清
+  check('实时采集只投本轮在招岗（updated_at 新鲜度）+ 失败回落要在诊断里注明',
+    /updated_at/.test(d3dB) && /liveCollectStart/.test(d3dB) && /liveFreshUsed/.test(d3dB)
+    && /已实时从 BOSS 采集/.test(d3dB)
+    && /已回落全库筛选/.test(d3dB),
+    '新鲜度判定/回落说明缺失 ⇒ 用户又看不出投的是新岗还是陈旧池');
+}
+
 // D4 平台风控封锁持久化（命中后短路后续批次，避免连续重试升级风控）
 {
   const p = `${RUN_TAG}-plat`;
