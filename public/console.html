@@ -3664,8 +3664,9 @@ $('#replyRun').addEventListener('click', async ()=>{
         total++; if(ev.type==='sent') sent++; else if(ev.type==='skipped') skipped++;
         let line='';
         switch(ev.type){
-          case 'start': line='▶ 开始 · '+platform+(realSend?'（真实发送）':'（预览）'); break;
-          case 'conv': line='· '+(ev.hr||'?')+(ev.intent?'｜意图:'+ev.intent:'')+(ev.platform?'·'+ev.platform:''); break;
+          case 'start': line='▶ 开始 · '+platform+'（'+(ev.realSend?'真实发送':'预览')+'）'; break;
+          // 后端 conv 事件的人名字段是 name（不是 hr）：只读 ev.hr ⇒ 恒显示「?」（2026-10-05 用户实测）
+          case 'conv': line='· '+(ev.name||ev.hr||'?')+(ev.company?'（'+ev.company+'）':''); break;
           case 'dry': case 'send-text': line='  '+(realSend?'✓ 已发':'✎ 拟回复')+'：'+(ev.text||'').slice(0,120); break;
           case 'sent': line='  ✓ 已发送：'+(ev.text||'').slice(0,120); break;
           case 'send-resume': line='  ✓ 已发送简历'; break;

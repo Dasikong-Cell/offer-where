@@ -295,14 +295,21 @@ export async function runAutoReply(
 
   let sent = 0;
   let skipped = 0;
+  // 停止响应（2026-10-05 用户实测「停止不了」）：abort 原先只在每条会话开头检查一次，
+  // 会话内的打开会话 / 读消息 / AI 生成 / 发送都不查 ⇒ 点完停止当前会话照走完，
+  // 真实发送模式下甚至**停止后还会向 HR 发出一条真实消息**。改为关键步后都查；
+  // 「aborted」事件只发一次（多步同时命中不重复刷屏）。
+  let stopEmitted = false;
+  const hitStop = (): boolean => {
+    if (!signal?.aborted) return false;
+    if (!stopEmitted) { stopEmitted = true; emit({ type: 'aborted' }); }
+    return true;
+  };
   /** 单轮内为「检查简历请求卡片」而额外打开冷却期会话的次数上限（见下方冷却例外） */
   let cooldownCardScans = 0;
 
   for (const c of limited) {
-    if (signal?.aborted) {
-      emit({ type: 'aborted' });
-      break;
-    }
+    if (hitStop()) break;
     emit({ type: 'conv', name: c.name, company: c.company, lastMsg: c.lastMsg });
 
     // 节流：同一 HR 在冷却期内（默认 1h）不重复自动回复，避免被平台判营销/骚扰
@@ -343,7 +350,9 @@ export async function runAutoReply(
       skipped++;
       continue;
     }
+    if (hitStop()) break;
     const read = await driver.readConversation();
+    if (hitStop()) break;
     const lastHr = read.lastHr;
     const history = read.messages || [];
     // 平台「请求附件简历」卡片（如 BOSS「我想要一份您的附件简历，您是否同意」）：
@@ -386,6 +395,7 @@ export async function runAutoReply(
       skipped++;
       continue;
     }
+    if (hitStop()) break;
     // 求职者档案（用于填充话术，如姓名/电话/学历；来自全局 profile 表）
     const profRow = getProfile() as Record<string, unknown> | undefined;
     const profile = profRow
@@ -433,11 +443,15 @@ export async function runAutoReply(
     // 点击成功与否，**绝不回退工具栏 sendResume** —— 点击失败就留待下一轮重新检测再点（跨轮重试
     // 更安全，不会重复轰炸 HR）。工具栏「发简历」只用于「无结构化卡片的纯文本简历请求」（如
     // 「请把简历发我」且无卡片），避免卡片一直挂着待处理的错误路径。
+    // 🔴 发送前是硬闸门：点过停止后绝不向 HR 发出任何真实内容
+    if (hitStop()) break;
     if (decision.intent === 'ask_resume' && !read.resumeRequest) {
       const r = await driver.sendResume();
       emit({ type: 'send-resume', name: c.name, ok: r });
       done = done || r;
     }
+    // 🔴 发送前是硬闸门：点过停止后绝不向 HR 发出任何真实内容
+    if (hitStop()) break;
     if (reply) {
       const s = await driver.sendText(reply);
       emit({ type: 'send-text', name: c.name, ok: s, ai: aiSource, aiName });

@@ -1066,6 +1066,30 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
     '关键词把整池滤空时诊断不显示 ⇒ 用户不知道该清/改关键词');
 }
 
+// D4a 自动回复：停止响应性 + SSE 字段对齐（2026-10-05 用户实测「停止不了」「只会发问号」）
+{
+  const d4aR = stripComments(readText('server/services/apply/autoReplyRunner.ts'));
+  const d4aH = stripComments(readText('public/console.html'));
+
+  // ⑬ 停止检查必须覆盖到「发送前」（否则点完停止还会向 HR 发出真实消息 —— 有副作用的硬闸门）
+  check('自动回复停止：关键步后都检查 abort，发送前是硬闸门',
+    /const hitStop = /.test(d4aR)
+    && /if \(hitStop\(\)\) break;\s*if \(reply\) \{/.test(d4aR)
+    && /if \(hitStop\(\)\) break;\s*if \(decision\.intent === 'ask_resume'/.test(d4aR)
+    && /if \(hitStop\(\)\) break;\s*const read = await driver\.readConversation\(\);/.test(d4aR),
+    'abort 只在会话开头查一次 ⇒ 点停止后当前会话照走完、真实发送模式下还会发出一条消息');
+
+  // ⑭ conv 事件人名字段：后端发 name，前端只读 ev.hr ⇒ 恒显示「?」
+  check('自动回复日志：conv 行读后端真实字段（name），不再恒显示问号',
+    /ev\.name\|\|ev\.hr\|\|'\?'/.test(d4aH),
+    '字段错位 ⇒ HR 名永远显示「?」，用户以为发出去的是问号');
+
+  // ⑮ 「（预览）/（真实发送）」标签用后端 start 事件回传的 realSend（本地变量与实际模式可能脱节）
+  check('自动回复日志：开始行用后端回传的 realSend，不用本地变量猜',
+    /ev\.realSend\?'真实发送':'预览'/.test(d4aH),
+    '本地 realSend 与服务端实际模式脱节 ⇒ 明明真实发送却标「预览」（或反之），用户被误导');
+}
+
 // D4 平台风控封锁持久化（命中后短路后续批次，避免连续重试升级风控）
 {
   const p = `${RUN_TAG}-plat`;
