@@ -1800,6 +1800,11 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
 //   而 BOSS 投递完成后页面正好停在 /web/geek/chat ⇒ 证据截图会系统性失败。
 //   空白页截图 54ms 成功，证明**机制本身是好的**，问题只在窗口表面合成这条路径。
 //
+// 🔴 2026-10-05 续：上面那次修复**只对了一半** —— fromSurface:false 不再超时，但后台窗口
+//   被合成器节流时回的是**纯白帧**。实测 data/evidence 203 张里 190 张全白
+//   （体积 3.2–7.2KB；真实页面 143–306KB），全部集中在 BOSS、且全部落在加了兜底之后。
+//   「返回了数据」≠「图里有内容」—— 验收截图修复必须看像素，不能只看 res.ok。
+//
 // 顺带修掉一句**在猜原因**的报错：原超时文案写「疑似页面上下文被反爬销毁」，
 //   实测与反爬无关（同页面 fromSurface:false 就成功）⇒ 会把排查带向错误方向。
 //   报错只应陈述「检查过什么/等了多久」。
@@ -1811,14 +1816,19 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   const at = cdpLive.indexOf("case 'screenshot':");
   const shotBlock = at >= 0 ? cdpLive.slice(at, at + 1500) : '';
   // 🔴 匹配要**精确到调用参数**，不能只搜 `fromSurface:false` 这个子串：
-  //   本仓库踩过「断言被自己的注释满足」，这次是另一变体 —— 兜底分支里那句
-  //   `console.warn('…用 fromSurface:false 兜底重试')` 的**日志文案**就含这个子串，
-  //   所以只搜子串时，即使真参数被改回 fromSurface:true（会超时）断言照样绿。
+  //   本仓库踩过「断言被自己的注释满足」，这次是另一变体 —— 重试梯子的**日志文案**就含
+  //   这个子串，所以只搜子串时，即使真参数被删掉断言照样绿。
   //   ⇒ 要求「captureScreenshot 的 send 调用里」出现该参数（`[^)]*` 保证不跨到下一次调用）。
-  check('截图在常规路径失败时用 fromSurface:false 兜底',
-    at >= 0 && /'Page\.captureScreenshot'[^)]*fromSurface:\s*false/.test(shotBlock) && /catch/.test(shotBlock),
-    'BOSS 聊天页（投递后必然落到这里）上常规截图恒超时 ⇒ 证据截图系统性拿不到，' +
-    '而「录屏回溯」面板会一直空着且看不出原因');
+  check('截图有空白帧自检与逐级重试（bringToFront 弹窗放最后一级）',
+    at >= 0
+    && /'Page\.captureScreenshot'[^)]*fromSurface:\s*false/.test(shotBlock)
+    && /isBlank/.test(shotBlock)
+    && /setWebLifecycleState/.test(shotBlock)
+    && /Page\.bringToFront/.test(shotBlock)
+    && /catch/.test(shotBlock),
+    '后台/被遮挡窗口被合成器节流 ⇒ fromSurface:false「立即成功」但回的是**纯白帧** ' +
+    '（实测 evidence 190/203 张全白，09-24 超时时代的 5 张反而全有内容）；' +
+    '只验「返回了数据」不验「图里有内容」⇒ 把「超时」修成了「白图」，录屏回溯全是白卡片且看不出原因');
   check('CDP 超时报错不猜测原因（不写「疑似反爬」）',
     !/疑似页面上下文被反爬销毁/.test(cdpLive),
     '实测超时与反爬无关（同页面 fromSurface:false 1.28s 成功）；猜的原因会把排查带向错误方向。' +

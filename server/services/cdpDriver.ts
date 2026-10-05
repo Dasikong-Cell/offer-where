@@ -489,8 +489,10 @@ async function ensureSession(platform: string, endpoint: string): Promise<PageSe
       // ⚠️ 这里**绝不能**调用 Page.bringToFront：本函数是每一次浏览器动作（click/fill/
       // eval/screenshot…）的公共入口，一旦置顶，用户刚最小化的窗口会在下一个动作被立刻
       // 弹回来，表现为「点了最小化没用、窗口又自己弹出来」。
-      // 自动化在后台标签同样能正常执行（Runtime.evaluate / 点击 / 截图 均不受前台与否影响），
-      // 确实需要展示给用户的场景（如登录页要人工过验证），由调用方显式使用 'bringToFront' 动作。
+      // 自动化在后台标签下 Runtime.evaluate / 点击不受前台与否影响；
+      // **截图受** —— 后台窗口被合成器节流会回纯白帧（2026-10-05 实测 evidence 190/203 白图），
+      // 因此空白重试与 bringToFront 只写在 'screenshot' 动作内部（且 bringToFront 放最后一级），
+      // 不放在这条公共入口。确实需要展示给用户的场景，由调用方显式使用 'bringToFront' 动作。
       return existing;
     }
     catch { sessions.delete(platform); }
@@ -986,14 +988,32 @@ export async function execCdpAction(
         //     fromSurface:false      -> 成功 1284ms
         //   而 BOSS 投递完成后页面正好停在 /web/geek/chat ⇒ 投递后的证据截图
         //   **系统性拿不到**（全库 applications 带 evidence_path 的只有 5 条、停在 2026-09-24）。
-        //   策略：先按原样试一次（保真度最好，短超时 8s），失败再用 fromSurface:false 兜底。
-        let r: any;
-        try {
-          r = await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 8000);
-        } catch (e: any) {
-          console.warn(`[CDP ${platform}] 常规截图失败（${e?.message || e}），用 fromSurface:false 兜底重试`);
-          r = await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, fromSurface: false });
+        //
+        // 🔴 2026-10-05 再修：fromSurface:false 兜底虽然 1.3s「成功」，但后台/被遮挡窗口的
+        //   渲染帧被合成器节流，回的是**纯白帧** —— 实测 data/evidence 190/203 张全白
+        //   （09-24 超时时代的 5 张反而全有内容）。体积判据两侧余量都足够：
+        //   1920×912 纯白 PNG ≤7.2KB，真实页面 ≥143KB ⇒ 阈值取 20KB。
+        //   「返回了数据」≠「图里有内容」，只验成功不验内容，就是把「超时」修成了「白图」。
+        //   修复 = 逐级升级的重试梯子；bringToFront 会把用户最小化的窗口弹回来
+        //   （ensureSession 那条铁律的理由），所以**只在梯子最后一级**才动用它。
+        const isBlank = (b64: string) => Buffer.byteLength(b64, 'base64') < 20 * 1024;
+        let r: any = null;
+        for (let i = 0; i < 4; i++) {
+          try {
+            if (i === 2) { try { await send(s, 'Page.setWebLifecycleState', { state: 'active' }); } catch { /* 忽略 */ } }
+            if (i === 3) { try { await send(s, 'Page.bringToFront'); } catch { /* 忽略 */ } }
+            if (i >= 1) await new Promise((res2) => setTimeout(res2, 500));
+            const t = (i === 0 || i === 3)
+              ? await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, 8000)
+              : await send(s, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, fromSurface: false }, 8000);
+            if (t?.data && !isBlank(t.data)) { r = t; break; }
+            if (t?.data && !r) r = t;
+            console.warn(`[CDP ${platform}] 截图第 ${i + 1} 次得到空白帧（第 ${i + 1} 级参数），升级重试`);
+          } catch (e: any) {
+            console.warn(`[CDP ${platform}] 截图第 ${i + 1} 次失败（${e?.message || e}）`);
+          }
         }
+        if (!r?.data) return { ok: false, error: 'captureScreenshot 未返回数据' };
         const fileName = `${platform}-${Date.now()}.png`;
         const filePath = path.join(SHOT_DIR, fileName);
         fs.writeFileSync(filePath, Buffer.from(r.data, 'base64'));
