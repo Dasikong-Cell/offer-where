@@ -481,6 +481,10 @@ export async function runBatchApply(
   }
   if (struct) {
     for (const j of jobs) {
+      // 无 JD 文本（实时采集的列表页快照多属此类）⇒ 没有可依据的内容，打了也是 0 分垃圾数据。
+      // 2026-10-05 实测：40/43 个新鲜岗被「AI 对空 JD 打出的 0 分」+ 45 分闸门全灭。
+      // 这里直接跳过且**不写库**，把「未评分」留给过滤阶段按「无 JD 放行」处理。
+      if (!((j.jd || '').trim() || (j.requirements || '').trim())) continue;
       // `<=0` 也算「未评分」：老库 match_score 列默认 0，未算分的岗位会落成 0（同 greetDecision 的注释）
       if (j.match_score == null || j.match_score <= 0) {
         // AI 语义匹配；失败时 matchResumeToJobAi 内部回退规则匹配。
@@ -521,7 +525,7 @@ export async function runBatchApply(
 
   // 先做与关键词无关的过滤（城市 / 薪资 / 匹配分）
   // 分项计数：用户据此知道「被哪条条件卡了多少个」，不会再去瞎改无关的框（见下方 0 候选诊断）。
-  const drop = { city: 0, remote: 0, salary: 0, score: 0 };
+  const drop = { city: 0, remote: 0, salary: 0, score: 0, kw: 0 };
   const baseFiltered = posted.jobs.filter(j => {
     const blob = blobOf(j);
     if (city && !((j.city || '').toLowerCase().includes(city) || blob.includes(city))) { drop.city++; return false; }
@@ -534,7 +538,10 @@ export async function runBatchApply(
     }
     if (needScore && struct) {
       const score = scoreMap.get(j.id);
-      if (score != null && score < (input.criteria!.minScore as number)) { drop.score++; return false; }
+      // 无 JD 文本的岗位没有可信分数（打分阶段已跳过）⇒ 放行而不是按 0 分误杀；
+      // 与「无界面分时不启用匹配度闸门、宁可打招呼」的既有语义一致（见下方排序处注释）。
+      const hasJdText = Boolean((j.jd || '').trim() || (j.requirements || '').trim());
+      if (hasJdText && score != null && score < (input.criteria!.minScore as number)) { drop.score++; return false; }
     }
     return true;
   });
@@ -542,7 +549,11 @@ export async function runBatchApply(
   // 关键词匹配：用「核心词」判定，避免「目标职位=后端开发工程师」被标题为
   // 「java开发工程师」的岗位整池误杀（原实现是严格全词 substring 匹配）。
   const kwMatch = (j: any) => kw.some(k => kwTokens(k).some(t => blobOf(j).includes(t)));
-  const filtered = kw.length ? baseFiltered.filter(kwMatch) : baseFiltered;
+  // 关键词过滤也计入分项诊断：否则「关键词卡死整池」时 0 候选原因里看不到它
+  // （2026-10-05 实测：BOSS 按「全栈」搜回的岗位标题/JD 里 0 个含「全栈」，库内再按全栈过滤=全灭且无声）。
+  const filtered = kw.length
+    ? baseFiltered.filter(j => { const ok = kwMatch(j); if (!ok) drop.kw++; return ok; })
+    : baseFiltered;
 
   if (posted.days != null) {
     const parts = [`发布时间窗口 ${input.criteria?.postedWithin}（≤${posted.days} 天）`];
@@ -607,8 +618,9 @@ export async function runBatchApply(
   } else {
     // 0 候选诊断「具体版」：点名哪条条件卡了多少个，命中匹配分闸门时明确告诉用户调最低匹配分
     const drops: string[] = [];
-    if (drop.score > 0) drops.push(`匹配分<${input.criteria!.minScore} 的 ${drop.score} 个`);
-    if (drop.city > 0) drops.push(`城市不符「${input.criteria?.city || ''}」的 ${drop.city} 个`);
+      if (drop.score > 0) drops.push(`匹配分<${input.criteria!.minScore} 的 ${drop.score} 个`);
+      if (drop.kw > 0) drops.push(`不含关键词「${kw.join('、')}」的 ${drop.kw} 个`);
+      if (drop.city > 0) drops.push(`城市不符「${input.criteria?.city || ''}」的 ${drop.city} 个`);
     if (drop.salary > 0) drops.push(`薪资不符的 ${drop.salary} 个`);
     if (drop.remote > 0) drops.push(`非远程的 ${drop.remote} 个`);
     const detail = drops.length ? `（${drops.join('、')}）` : '';

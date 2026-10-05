@@ -992,9 +992,9 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
 {
   const d3c = stripComments(readText('server/services/apply/batch.ts'));
 
-  // ⑤ baseFiltered 必须按条件分项计数（city/remote/salary/score），否则无法告诉用户各卡了多少
-  check('0 候选诊断按条件分项计数（city/remote/salary/score）',
-    /const drop = \{ city: 0, remote: 0, salary: 0, score: 0 \};/.test(d3c)
+  // ⑤ baseFiltered 必须按条件分项计数（city/remote/salary/score/kw），否则无法告诉用户各卡了多少
+  check('0 候选诊断按条件分项计数（city/remote/salary/score/kw）',
+    /const drop = \{ city: 0, remote: 0, salary: 0, score: 0, kw: 0 \};/.test(d3c)
     && /drop\.score\+\+; return false;/.test(d3c)
     && /drop\.city\+\+; return false;/.test(d3c)
     && /drop\.salary\+\+; return false;/.test(d3c)
@@ -1042,6 +1042,28 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
     && /已实时从 BOSS 采集/.test(d3dB)
     && /已回落全库筛选/.test(d3dB),
     '新鲜度判定/回落说明缺失 ⇒ 用户又看不出投的是新岗还是陈旧池');
+}
+
+// D3e 实时采集岗位的闸门公平性（2026-10-05 实测：40/43 新鲜岗被「空 JD 打出的 0 分」误杀，
+// 且关键词过滤把整池卡死时诊断无声 ⇒ 用户无从知道该清/改关键词）
+{
+  const d3eB = stripComments(readText('server/services/apply/batch.ts'));
+
+  // ⑩ 无 JD 文本 ⇒ 打分阶段直接跳过且不写 0 分（空 JD 打出的分数只能是垃圾，还会污染库）
+  check('实时采集无 JD 岗：打分阶段跳过、不写 0 分污染库',
+    /j\.requirements \|\| ''\)\.trim\(\)\)\) continue;/.test(d3eB),
+    '空 JD 仍被打分并写 0 分 ⇒ 配合匹配分闸门把整批新鲜岗全灭（2026-10-05 实测 40/43）');
+
+  // ⑪ 无 JD 文本 ⇒ 分数闸门放行（没有可信分数，按 0 分杀是误杀）
+  check('实时采集无 JD 岗：分数闸门对无 JD 岗放行',
+    /const hasJdText = Boolean\(\(j\.jd/.test(d3eB)
+    && /hasJdText && score != null && score </.test(d3eB),
+    '无 JD 岗被当 0 分误杀 ⇒ 实时采集的列表页快照永远进不了候选');
+
+  // ⑫ 关键词过滤计入分项诊断（否则「关键词卡死整池」无声无息）
+  check('关键词过滤有分项计数并在 0 候选诊断中点名',
+    /drop\.kw\+\+/.test(d3eB) && /不含关键词「/.test(d3eB),
+    '关键词把整池滤空时诊断不显示 ⇒ 用户不知道该清/改关键词');
 }
 
 // D4 平台风控封锁持久化（命中后短路后续批次，避免连续重试升级风控）
