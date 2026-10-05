@@ -18,7 +18,9 @@ import { probePlatformConnections, DELIVERY_PLATFORMS } from "./services/connect
 import { parseResumeFile, structureResume } from "./services/resume.js";
 import { matchResumeToJobAi } from "./services/apply/matchAi.js";
 import { tailorResume } from "./services/apply/resumeTailor.js";
-import { ensureTailoredResumePdf } from "./services/apply/tailoredResumePdf.js";
+import { ensureTailoredResumePdf, printHtmlToPdf, PDF_VIA_PLATFORMS } from "./services/apply/tailoredResumePdf.js";
+import { renderResumeDoc, sanitizeDoc, safeDocId, newDoc } from "./services/apply/resumeDoc.js";
+import { RESUME_ACCENTS, DEFAULT_ACCENT_KEY, RESUME_VARIANTS, DEFAULT_VARIANT_KEY } from "./services/apply/resumeTheme.js";
 import { isAiEnabled, getAiConfig } from "./services/apply/aiClient.js";
 import { decideGreet, decideGreetBatch, DEFAULT_EXCLUDE_KEYWORDS } from "./services/apply/greetDecision.js";
 import {
@@ -26,12 +28,17 @@ import {
   getLetterTemplate, saveLetterTemplate, clearLetterTemplate, renderLetterTemplate, TEMPLATE_VARIABLES,
 } from "./services/apply/coverLetter.js";
 import { buildInterviewPrep, getInterviewPrep, clearInterviewPrep } from "./services/apply/interviewPrep.js";
-import { resumeVersionStatus, setResumeVersion, getResumeVersion, RESUME_VERSION_LABELS } from "./services/apply/resumeVersion.js";
+import { resumeVersionStatus, setResumeVersion, getResumeVersion, resolveResumeForVersion, RESUME_VERSION_LABELS } from "./services/apply/resumeVersion.js";
 import { listSchedules, setSchedule, getSchedule, describeSchedule, evaluateSchedule, advanceSchedule } from "./services/apply/schedule.js";
 import { getExchangeActions, setExchangeActions, runExchangeActions, summarizeExchange, EXCHANGE_LABELS } from "./services/apply/exchangeContact.js";
 import { ensureChatResumePng, decideResumeChannel, sendChatResumeImage, CHAT_IMAGE_INPUTS } from "./services/apply/chatResumeImage.js";
 import { locateJobById } from "./services/apply/jobLocate.js";
 import { tryScreenshot } from "./services/apply/common.js";
+// 校招卡片标签的**唯一定义**（供 /api/jobs 下发，前端不再抄一份）。
+import { CARD_UI_TAGS } from "./services/parseCardMeta.js";
+// 投递复盘的口径层（纯函数：什么算「已投出」、几天算「没进展」都在里面）。
+// ⚠️ 单独一个模块而不是写在路由里：口径要能被单测钉住，写在路由里就只能靠肉眼核对。
+import { buildReviewPlan } from "./services/reviewPlan.js";
 import { runApply, isSupported, SUPPORTED_PLATFORMS, classifyDelivery, isWangshenUrl, previewBatchRouting } from "./services/apply/index.js";
 import { computeAbReport, backfillLegacyStrategy } from "./services/apply/applyAbTest.js";
 import { checkResumeCompliance } from "./services/apply/resumeCompliance.js";
@@ -295,6 +302,15 @@ app.use('/data/evidence', express.static(EVIDENCE_DIR));
 const TAILORED_DIR = path.join(__dirname, '..', 'data', 'resume_tailored');
 if (!fs.existsSync(TAILORED_DIR)) fs.mkdirSync(TAILORED_DIR, { recursive: true });
 app.use('/data/resume_tailored', express.static(TAILORED_DIR));
+
+// 简历制作（D 批）的导出产物目录。
+// ⚠️ 在 `data/` 下新增子目录必须**同步注册三处**，缺一处都会只在特定时机暴露：
+//   ① 这里 mkdir + 静态挂载（缺 ⇒ 404）；
+//   ② `authToken.SIGNED_PATH_PREFIXES`（缺 ⇒ 局域网访问 401，本机永远测不出来）；
+//   ③ `dataCleanup` 的「任何档位都不碰」清单（缺 ⇒ 跑一次清理就把用户刚做的简历删了）。
+const RESUME_DOC_DIR = path.join(__dirname, '..', 'data', 'resume_doc');
+if (!fs.existsSync(RESUME_DOC_DIR)) fs.mkdirSync(RESUME_DOC_DIR, { recursive: true });
+app.use('/data/resume_doc', express.static(RESUME_DOC_DIR));
 
 // 静态资源：投递控制台（单一入口 App，public/console.html）
 const CONSOLE_DIR = path.join(__dirname, '..', 'public');
@@ -680,6 +696,105 @@ app.get("/api/stats/funnel", (_req, res) => {
     res.status(500).json({ error: error?.message || "统计失败" });
   }
 });
+
+// 个人中心汇总（**只回计数**）。
+// ⚠️ 为什么必须单开一个端点：控制台 `loadProfile()` 为了在「个人中心」显示几个数字，
+//    曾分别拉 `/api/jobs`（真实库 2500+ 条全量）与 `/api/applications`（全量）
+//    ——为了数个数把整库搬过网，岗位池越大越慢。这里全部走 SQL COUNT 聚合，
+//    返回体固定百余字节，与岗位池规模无关。
+app.get("/api/stats/summary", (_req, res) => {
+  try {
+    const count = (sql: string): number => (db.query<{ c: number }>(sql)[0] || { c: 0 }).c;
+    const byStatus = db.query<{ status: string; c: number }>(
+      "SELECT status, COUNT(*) c FROM jobs GROUP BY status"
+    );
+    let jobs = 0, candidate = 0, applied = 0, unavailable = 0;
+    for (const r of byStatus) {
+      jobs += r.c;
+      if (r.status === 'candidate') candidate = r.c;
+      else if (r.status === 'applied') applied = r.c;
+      else if (r.status === 'unavailable') unavailable = r.c;
+    }
+    const scored = db.query<{ c: number; avg: number }>(
+      "SELECT COUNT(*) c, AVG(match_score) avg FROM jobs WHERE match_score IS NOT NULL"
+    )[0] || { c: 0, avg: 0 };
+    res.json({
+      jobs,
+      jobsByStatus: { candidate, applied, unavailable },
+      applications: count("SELECT COUNT(*) c FROM applications"),
+      /** 已打过匹配分的岗位数与平均分（无 JD 的岗位明确不给分，不计入） */
+      match: { scored: scored.c, avg: scored.avg ? Math.round(scored.avg) : 0 },
+      // 🔴 简历定制台账**只落在磁盘**（data/resume_tailored/*.json），一条都没进库
+      //    ⇒ 这里**不能**用 SQL 数，份数与列表由 /api/resume/tailored-history 给。
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "获取汇总失败" });
+  }
+});
+
+
+/** AI 匹配历史（**服务端为准**）。
+ *  ⚠️ 为什么必须有这个端点：控制台此前把每次匹配只写进 localStorage（`ow_match_history_v1`），
+ *    于是「换台设备 / 换浏览器 / 清一次缓存」历史就没了，而且它与库里的 `jobs.match_score`
+ *    是**两份真相**。匹配本来就把分数与明细写回库了（`matched_at` 记时刻），
+ *    所以这里直接从 jobs 读 —— localStorage 退化为「当场粘贴 JD 那类没有行的记录」的补位，
+ *    前端**必须**把每条标注来源（已入库 / 仅本机），不许再混着显示。
+ *  排序：`matched_at` 倒序；老数据没有该列 ⇒ 退到 `updated_at`，并在条目上标 `atUnknown`。 */
+app.get("/api/stats/match-history", (req, res) => {
+  try {
+    const n = Number(req.query?.limit);
+    // 显式夹取并取整：这里的 limit 会拼进 SQL，绝不能把原始 query 串带进去
+    const limit = Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 1), 200) : 30;
+    const rows = db.query<any>(
+      "SELECT id, company, position, source, match_score, match_detail, matched_at, updated_at "
+      + "FROM jobs WHERE match_score IS NOT NULL "
+      + "ORDER BY COALESCE(matched_at, updated_at) DESC LIMIT ?",
+      [limit]
+    );
+    const items = rows.map((r) => {
+      let detail: any = null;
+      try { detail = r.match_detail ? JSON.parse(r.match_detail) : null; } catch { detail = null; }
+      return {
+        jobId: r.id,
+        company: r.company || '',
+        position: r.position || '',
+        source: r.source || '',
+        score: typeof r.match_score === 'number' ? Math.round(r.match_score) : null,
+        matched: Array.isArray(detail?.matched) ? detail.matched : [],
+        missing: Array.isArray(detail?.missing) ? detail.missing : [],
+        suggestions: Array.isArray(detail?.suggestions) ? detail.suggestions : [],
+        /** ISO 串；`atUnknown=true` 表示这是老数据、只有 updated_at 可用，不要当精确匹配时刻展示 */
+        at: r.matched_at || r.updated_at || '',
+        atUnknown: !r.matched_at,
+        /** 来源固定为库，前端据此标「已入库」 */
+        origin: 'db' as const,
+      };
+    });
+    res.json({ total: items.length, limit, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "获取匹配历史失败" });
+  }
+});
+
+// 投递复盘（对标 offerbiu `/review/`）：指标 + 四段行动清单。
+// 口径全部在 server/services/reviewPlan.ts，这里只负责取数并把「现在」传进去。
+// ⚠️ now 只在这里取一次（纯函数内部不读时钟）⇒ 同一次请求里所有「距今天数」用的是同一个今天，
+//    不会出现「前半段按 23:59:59 算、后半段按 00:00:00 算」这种跨日错位。
+app.get("/api/stats/review", (_req, res) => {
+  try {
+    const apps = db.listApplications(2000);
+    // 只取「待投递且未被规则跳过」的岗位 —— 复盘要的是「现在还能投的」，不是岗位池全量。
+    // 被跳过的（如「已投递过」）如果混进来，「优先投这批」就会把做过的活又列一遍。
+    const jobs = db.query<any>(
+      "SELECT id, company, position, source, apply_url, deadline, skip_reason, status "
+      + "FROM jobs WHERE status = 'candidate' AND (skip_reason IS NULL OR TRIM(skip_reason) = '')"
+    );
+    res.json(buildReviewPlan(apps, jobs, { now: new Date() }));
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "获取复盘数据失败" });
+  }
+});
+
 
 /** 平台可用性巡检：连接 / 登录态 / 风控 三合一结论 + 处置建议。
  *  ?deep=1（默认）会导航各平台页面做权威判定（约 8s/平台）；deep=0 只测 CDP 连接。
@@ -1096,10 +1211,20 @@ app.post("/api/applications", (req, res) => {
 
 app.patch("/api/applications/:id", (req, res) => {
   try {
-    const { platform, company, position, salary, city, jobUrl, status, loginMethod, message } = req.body || {};
+    const body = req.body || {};
+    const { platform, company, position, salary, city, jobUrl, status, loginMethod, message } = body;
+    // 流程时间节点：同时接受 snake_case（就是 /api/applications 回给前端的原始列名 ——
+    // 前端读到什么就写回什么，不必在前端再翻译一层）与 camelCase（沿用 jobUrl/loginMethod 的风格）。
+    // 两者都给时以 snake_case 为准；都不给 = undefined ⇒ 该列保持原值（部分更新语义）。
+    const pickTime = (snake: string, camel: string) => (body[snake] !== undefined ? body[snake] : body[camel]);
     const success = db.updateApplication(req.params.id, {
       platform, company, position, salary, city,
       job_url: jobUrl, status, login_method: loginMethod, message,
+      written_at: pickTime('written_at', 'writtenAt'),
+      interview_at: pickTime('interview_at', 'interviewAt'),
+      interview_round: pickTime('interview_round', 'interviewRound'),
+      offer_at: pickTime('offer_at', 'offerAt'),
+      closed_at: pickTime('closed_at', 'closedAt'),
     });
     if (!success) return res.status(404).json({ error: "记录不存在" });
     res.json({ success: true });
@@ -1119,6 +1244,131 @@ app.delete("/api/applications/:id", (req, res) => {
 });
 
 // ============= 简历解析 =============
+
+
+/* ---------------- 简历制作（D 批）：结构化草稿 + 出稿 ----------------
+ * 草稿存哪儿：`app_kv`，key 前缀 `resumedoc:` —— 复用既有的 kv 表，**零迁移**。
+ * 🔴 刻意**不**占用 `resume/原始|优化` 那两个版本位：它们是「投递时带哪份简历」的开关，
+ *    把制作台草稿混进去会让「简历版本」这个概念背上它不该管的语义（一份草稿不是可投递件）。
+ */
+const DOC_PREFIX = 'resumedoc:';
+const docKey = (id: string) => DOC_PREFIX + safeDocId(id);
+
+/** 简历制作页需要的**服务端常量**。
+ *  🔴 为什么连 `pdfVia` 一起下发：PDF 依赖 CDP，而「用哪个平台的浏览器排版」是后端的事。
+ *     前端若自己写死 `['official','boss']` 就是第二个真相源 —— 后端换端口映射、加平台时，
+ *     前端的「PDF 按钮是否可用」判断会静默失真（看着能点、点了才 503）。
+ *     配色白名单同理：抄一份前端，改一边漏一边就会渲染出不被承认的颜色。 */
+app.get("/api/resume/capabilities", (_req, res) => {
+  res.json({ accents: RESUME_ACCENTS, defaultAccent: DEFAULT_ACCENT_KEY,
+    variants: RESUME_VARIANTS, defaultVariant: DEFAULT_VARIANT_KEY, pdfVia: PDF_VIA_PLATFORMS });
+});
+
+app.get("/api/resume/docs", (_req, res) => {
+  try {
+    const items = db.kvKeysByPrefix(DOC_PREFIX).map((k) => {
+      const id = k.slice(DOC_PREFIX.length);
+      const d = db.kvGetJson<any>(k, null);
+      return d ? { id, title: String(d.title || ''), updatedAt: String(d.updatedAt || '') } : null;
+    }).filter(Boolean) as Array<{ id: string; title: string; updatedAt: string }>;
+    items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    res.json({ total: items.length, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取草稿列表失败" });
+  }
+});
+
+app.get("/api/resume/docs/:id", (req, res) => {
+  try {
+    const id = safeDocId(req.params.id);
+    const d = db.kvGetJson<any>(docKey(id), null);
+    if (!d) return res.status(404).json({ error: '草稿不存在' });
+    res.json({ doc: sanitizeDoc(d) });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取草稿失败" });
+  }
+});
+
+/** 新建 / 保存。`PUT`（不是 POST）：id 由调用方给定，语义是「把这个 id 的内容设成这份」。 */
+app.put("/api/resume/docs/:id", (req, res) => {
+  try {
+    const id = safeDocId(req.params.id);
+    const prev = db.kvGetJson<any>(docKey(id), null);
+    // 🔴 必须过 sanitizeDoc：草稿直接来自 req.body，不规整就会被写进库再渲染进 PDF
+    //    （超长文本撑爆排版、theme.accent 任意串 = CSS 注入面）。
+    const doc = sanitizeDoc({ ...(req.body || {}), id }, prev || undefined);
+    db.kvSetJson(docKey(id), doc);
+    res.json({ ok: true, doc });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "保存草稿失败" });
+  }
+});
+
+/** 从当前档案起一份新草稿（基本信息不必重打一遍）。body: { id?, title? } */
+app.post("/api/resume/docs", (req, res) => {
+  try {
+    const profile = (db.getProfile() as Record<string, any>) || {};
+    // 🔴 不能直接写 `safeDocId(req.body?.id) || <默认 id>`：safeDocId 对空输入返回 'doc'
+    //    （它必须永远吐一个可用的 id），**永远不会是假值** ⇒ 兜底分支永远走不到、
+    //    每份新草稿的 id 都恒为 'doc' ⇒ 建第二份必然 409「这个 id 已经有草稿了」。
+    const rawId = String(req.body?.id ?? '').trim();
+    const id = rawId ? safeDocId(rawId) : ('d' + Date.now().toString(36));
+    if (db.kvGetJson<any>(docKey(id), null)) return res.status(409).json({ error: '这个 id 已经有草稿了' });
+    const doc = { ...newDoc(id, profile), title: String(req.body?.title || '我的简历').slice(0, 60) };
+    db.kvSetJson(docKey(id), doc);
+    res.json({ ok: true, doc });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "新建草稿失败" });
+  }
+});
+
+app.delete("/api/resume/docs/:id", (req, res) => {
+  try {
+    const id = safeDocId(req.params.id);
+    if (!db.kvGetJson<any>(docKey(id), null)) return res.status(404).json({ error: '草稿不存在' });
+    db.kvDelete(docKey(id));
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "删除草稿失败" });
+  }
+});
+
+/** 出稿①：HTML —— **永远可用**（不依赖浏览器）。
+ *  🔴 刻意**不落盘**：草稿每敲一个字都会重渲染一次，落盘会在 data/ 堆一地中间产物，
+ *     还得再写一套清理。这里直接回字符串，前端用 iframe 的 srcdoc 预览、用 Blob 下载。 */
+app.post("/api/resume/docs/:id/html", (req, res) => {
+  try {
+    const id = safeDocId(req.params.id);
+    const d = db.kvGetJson<any>(docKey(id), null);
+    if (!d) return res.status(404).json({ error: '草稿不存在' });
+    // body.doc 有值时按「未保存的当前编辑内容」渲染（所见即所得），否则用库里那份
+    const doc = sanitizeDoc(req.body?.doc || d);
+    res.json({ ok: true, id: doc.id, title: doc.title, html: renderResumeDoc(doc) });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "渲染 HTML 失败" });
+  }
+});
+
+/** 出稿②：PDF —— **依赖 CDP**（借平台浏览器排版，与一岗一简历同一条通路）。
+ *  🔴 没有可用浏览器时返回 **503**（不是 500）：这是「依赖的浏览器不在线」，不是服务端坏了。
+ *     前端据此把按钮置灰并写明原因，而不是让用户点了才发现不能用。 */
+app.post("/api/resume/docs/:id/pdf", async (req, res) => {
+  try {
+    const id = safeDocId(req.params.id);
+    const d = db.kvGetJson<any>(docKey(id), null);
+    if (!d) return res.status(404).json({ error: '草稿不存在' });
+    const doc = sanitizeDoc(req.body?.doc || d);
+    fs.mkdirSync(RESUME_DOC_DIR, { recursive: true });
+    const htmlPath = path.join(RESUME_DOC_DIR, `${id}.html`);
+    const pdfPath = path.join(RESUME_DOC_DIR, `${id}.pdf`);
+    fs.writeFileSync(htmlPath, renderResumeDoc(doc), 'utf-8');
+    const r = await printHtmlToPdf(htmlPath, pdfPath);
+    if (!r.ok) return res.status(503).json({ ok: false, error: r.error, needPlatforms: PDF_VIA_PLATFORMS });
+    res.json({ ok: true, id, url: `/data/resume_doc/${id}.pdf` });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || '生成 PDF 失败' });
+  }
+});
 
 app.post("/api/resume/parse", async (req, res) => {
   try {
@@ -1156,7 +1406,11 @@ app.get("/api/jobs", (req, res) => {
   try {
     const { source, status } = req.query;
     const list = db.listJobs({ source: source as string, status: status as string });
-    res.json({ jobs: list, total: list.length });
+    // tagDefs：「校招信息库」快捷关注标签的定义（key / label / hint）。
+    // 由服务端下发而不是前端再抄一份 —— 抄一份就是第二个真相源，改一边忘一边时
+    // 前端会渲染出后端根本不认识的标签，点下去恒 0 条且没有任何地方会报错。
+    // 前端只用它拿「展示顺序 + 文案」，**是否渲染某个标签仍由数据实测值决定**（count > 0）。
+    res.json({ jobs: list, total: list.length, tagDefs: CARD_UI_TAGS });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "获取岗位失败" });
   }
@@ -1356,12 +1610,15 @@ app.post("/api/logs/alert-test", async (_req, res) => {
 
 app.post("/api/jobs", (req, res) => {
   try {
-    const { id, source, company, position, city, jd, requirements, salary, applyUrl, deadline } = req.body || {};
+    const { id, source, company, position, city, jd, requirements, salary, applyUrl, deadline, jobType, gradYear, tags } = req.body || {};
     if (!company && !position) return res.status(400).json({ error: "company / position 至少填一个" });
+    // gradYear / tags 是可选的**显式覆盖**：表单里没填就传 undefined，
+    // upsertJob 会退回「从卡片文本派生」（见 db.ts 的卡片元数据段）。
     const job = db.upsertJob({
       id, source, company: company ?? null, position: position ?? null, city: city ?? null,
       jd: jd ?? null, requirements: requirements ?? null, salary: salary ?? null,
-      apply_url: applyUrl ?? null, deadline: deadline ?? null,
+      apply_url: applyUrl ?? null, deadline: deadline ?? null, job_type: jobType ?? null,
+      grad_year: gradYear, tags,
     });
     res.json({ job });
   } catch (error: any) {
@@ -1421,7 +1678,7 @@ app.post("/api/jobs/match", async (req, res) => {
     const jobs = db.listJobs({ source: source as string, status: status as string });
     const ranked = await Promise.all(jobs.map(async (job) => {
       const r = await matchResumeToJobAi({ resumeBlob: struct.searchBlob, resumeSkills: struct.skills, jd: job.jd || '', requirements: job.requirements || '', position: job.position || '' });
-      db.updateJob(job.id, { match_score: r.score, match_detail: JSON.stringify({ matched: r.matched, missing: r.missing, suggestions: r.suggestions }) });
+      db.updateJob(job.id, { match_score: r.score, match_detail: JSON.stringify({ matched: r.matched, missing: r.missing, suggestions: r.suggestions }), matched_at: new Date().toISOString() });
       return { ...job, match_score: r.score, match_detail: { matched: r.matched, missing: r.missing, suggestions: r.suggestions } };
     }));
     ranked.sort((a, b) => (b.match_score ?? -1) - (a.match_score ?? -1));
@@ -1430,6 +1687,54 @@ app.post("/api/jobs/match", async (req, res) => {
       skills: struct.skills,
       total: ranked.length,
       jobs: ranked,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "匹配失败" });
+  }
+});
+
+/** 单岗位 AI 匹配（「AI 匹配」页面用）。
+ *  与 /api/jobs/match 的区别：那个是**全量**打分（对岗位池里每个岗位都调一次 AI，慢且贵），
+ *  这里只针对**一个**岗位 —— 岗位池里的 jobId，或用户当场粘贴的 JD。
+ *  入参：{ jobId } 或 { jd, position, company }；可选 filePath 覆盖简历底稿。 */
+app.post("/api/jobs/match-one", async (req, res) => {
+  try {
+    const { jobId, jd, position, company, filePath, version } = req.body || {};
+    const profile = db.getProfile();
+    // 简历底稿优先级：显式 filePath > 请求指定的「简历版本」解析结果 > 档案里的 resume_path。
+    // 用版本解析（而不是永远拿 resume_path）才有意义 —— 否则页面上那个「选择简历」下拉是假的：
+    // 切了版本分数却一模一样，而且**不报任何错**。
+    const byVersion = version ? resolveResumeForVersion(profile, String(version) as any) : undefined;
+    const target = filePath || byVersion || profile?.resume_path;
+    if (!target) return res.status(400).json({ error: "未配置简历，请先在「简历管理」上传简历" });
+    let j: { company: string | null; position: string | null; jd: string | null; requirements: string | null };
+    if (jobId) {
+      const row = db.getJob(String(jobId));
+      if (!row) return res.status(404).json({ error: "岗位不存在" });
+      j = { company: row.company, position: row.position, jd: row.jd, requirements: row.requirements };
+    } else {
+      j = { company: company ?? null, position: position ?? null, jd: jd ?? null, requirements: null };
+    }
+    if (!j.jd && !j.position) return res.status(400).json({ error: "请提供岗位：jobId，或 jd / position" });
+    const struct = await parseResumeFile(target);
+    const r = await matchResumeToJobAi({
+      resumeBlob: struct.searchBlob, resumeSkills: struct.skills,
+      jd: j.jd || '', requirements: j.requirements || '', position: j.position || '',
+    });
+    // 岗位池里的岗位顺手把分数写回（与全量匹配同一口径）；当场粘贴的 JD 无行可写，不落库
+    if (jobId) {
+      db.updateJob(String(jobId), {
+        match_score: r.score,
+        match_detail: JSON.stringify({ matched: r.matched, missing: r.missing, suggestions: r.suggestions }),
+        matched_at: new Date().toISOString(),
+      });
+    }
+    res.json({
+      ok: true, resumeName: struct.name, skills: struct.skills,
+      // resumeFile / resumeVersion 一并回传：UI 要能如实告诉用户「这一次用的是哪份简历」
+      resumeFile: target, resumeVersion: version ? String(version) : getResumeVersion(),
+      job: { id: jobId ? String(jobId) : null, company: j.company, position: j.position },
+      score: r.score, matched: r.matched, missing: r.missing, suggestions: r.suggestions,
     });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "匹配失败" });
@@ -1482,6 +1787,30 @@ app.post("/api/offerbiu/remember-form", async (req, res) => {
 });
 
 // 按关键词采集 offerbiu 岗位（利用列表页搜索框精准筛选：匿名也能拿到大量对口岗位）
+
+// 表单记忆列表 / 删除（「自动填充」页用）。
+// 只回「域名 + 字段标签 + 条数」，**不回值** —— 值是姓名 / 手机号 / 邮箱，属个人信息，
+// 摊在界面上等于把 PII 暴露给所有能看到屏幕的人。
+// ⚠️ 刻意用 POST：非回环部署时只有写方法走令牌鉴权，GET 免鉴权 ⇒
+//    做成 GET 等于给同网段的任何人开了个读候选人表单的口子。
+app.post("/api/offerbiu/form-memory/list", (_req, res) => {
+  try {
+    res.json({ ok: true, items: db.listFormMemory() });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message || '读取表单记忆失败' });
+  }
+});
+
+app.post("/api/offerbiu/form-memory/delete", (req, res) => {
+  const site = String((req.body && req.body.site) || '').trim();
+  if (!site) return res.status(400).json({ ok: false, error: 'site 不能为空' });
+  try {
+    // 走参数化 exec：site 来自请求体，绝不能拼进 SQL 字符串（列名/值注入）
+    res.json({ ok: true, removed: db.deleteFormMemory(site) });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message || '删除表单记忆失败' });
+  }
+});
 app.post("/api/offerbiu/collect-keywords", async (req, res) => {
   try {
     const { keywords, pagesPerKeyword = 3, perKeyword = 27 } = req.body || {};
@@ -1526,6 +1855,46 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
     send({ type: 'error', message: error?.message || '扫描失败' });
   } finally {
     res.end();
+  }
+});
+
+
+/** 简历定制历史（**只读**：扫 data/resume_tailored/ 的 json 台账）。
+ *  ⚠️ 为什么只能读磁盘：`/api/jobs/tailor`（正文定制）与 `/api/jobs/tailor-resume`（出 PDF）
+ *    都只往 data/resume_tailored/ 写 `<公司>-<职位>-<hash>.{json,html,pdf}` 三个文件，
+ *    **一条记录都没进库** ⇒ 想在个人中心看到「我为哪些岗位优化过简历」，只能扫目录。
+ *  安全：名字来自 readdirSync（不含路径分隔符），只回 basename 拼成的静态 URL，不回绝对路径。
+ *  容错：单个 json 损坏/半成品只跳过该文件，不让一条坏记录把整个接口打挂。 */
+app.get("/api/resume/tailored-history", (_req, res) => {
+  try {
+    if (!fs.existsSync(TAILORED_DIR)) return res.json({ total: 0, items: [] });
+    const items: Array<Record<string, any>> = [];
+    for (const f of fs.readdirSync(TAILORED_DIR)) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(TAILORED_DIR, f), 'utf8')) || {};
+        const base = f.slice(0, -'.json'.length);
+        items.push({
+          file: base,
+          company: String(j.company || ''),
+          position: String(j.position || ''),
+          matchScore: typeof j.matchScore === 'number' ? j.matchScore : null,
+          source: String(j.source || ''),
+          jobId: String(j.jobId || ''),
+          generatedAt: String(j.generatedAt || ''),
+          // 产物是否还在：json 在但 pdf/html 可能已被清理策略删掉 ⇒ 前端据此不给死链
+          hasPdf: fs.existsSync(path.join(TAILORED_DIR, base + '.pdf')),
+          hasHtml: fs.existsSync(path.join(TAILORED_DIR, base + '.html')),
+          url: `/data/resume_tailored/${base}.pdf`,
+        });
+      } catch {
+        /* 坏 json：跳过 */
+      }
+    }
+    items.sort((a, b) => String(b.generatedAt).localeCompare(String(a.generatedAt)));
+    res.json({ total: items.length, items });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "读取定制历史失败" });
   }
 });
 

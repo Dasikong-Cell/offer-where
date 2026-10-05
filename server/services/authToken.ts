@@ -267,6 +267,7 @@ const SIGNED_PATH_PREFIXES = [
   '/data/evidence/',
   '/data/screenshots/',
   '/data/resume_tailored/',
+  '/data/resume_doc/',
   '/api/resume/file',
 ];
 const STATIC_TTL_MS = 60 * 60 * 1000; // 1 小时

@@ -65,6 +65,74 @@ export interface ApplyProfile {
   skills?: string | null;
   /** 意向岗位 */
   expectedPositions?: string | null;
+
+  /* ── 自动填充信息（2026-10-04 新增，对标 offerbiu 的「结构化简历信息」）──────────
+     这组字段的唯一消费方是 `services/apply/offerbiu.ts: profileValueForLabel()`：
+     它把**投递表单上的字段标签**映射到这里的键，再填进官网 / 网申表单。
+
+     🔴 加字段必须同时在 `PROFILE_LABEL_RULES` 里给它一条规则 ——
+        否则「界面上填了值、表单里永远填不上」，**不报错、静默无效**。
+        对应断言见 `scripts/contract_tests.ts`「自动填充信息（对标 offerbiu）」一节。
+     🔴 键名一旦上线就不要改：老用户的 `data/chat.db` 里存的是 JSON 里的键，
+        改名等于把他们已经填过的值丢掉。 */
+
+  /* ── 基础信息 ── */
+  gender?: string | null;
+  nation?: string | null;
+  country?: string | null;
+  idType?: string | null;
+  idNo?: string | null;
+  /** 籍贯（≠ 户籍所在地，也 ≠ 居住城市，三个必须是三个键） */
+  hometown?: string | null;
+  /** 户籍所在地 */
+  domicile?: string | null;
+  address?: string | null;
+  zipCode?: string | null;
+  birthday?: string | null;
+  politicalStatus?: string | null;
+  height?: string | null;
+  weight?: string | null;
+  health?: string | null;
+  maritalStatus?: string | null;
+  wechat?: string | null;
+  qq?: string | null;
+  emergencyContact?: string | null;
+  emergencyRelation?: string | null;
+  /** 紧急联系电话（≠ 本人手机号，见 PROFILE_LABEL_RULES 的顺序说明） */
+  emergencyPhone?: string | null;
+  website?: string | null;
+  github?: string | null;
+  gitee?: string | null;
+  blog?: string | null;
+  linkedin?: string | null;
+  socialAccount?: string | null;
+
+  /* ── 投递偏好 ── */
+  expectedCity?: string | null;
+  /** 期望工作城市（可能与期望城市不同） */
+  expectWorkCity?: string | null;
+  interviewCity?: string | null;
+  workYears?: string | null;
+  expectSalary?: string | null;
+  onboardTime?: string | null;
+  jobType?: string | null;
+  workNature?: string | null;
+  workMode?: string | null;
+  internPeriod?: string | null;
+  internDays?: string | null;
+  acceptRemote?: string | null;
+  acceptAdjust?: string | null;
+  acceptCityAdjust?: string | null;
+  acceptDeptAdjust?: string | null;
+  industry?: string | null;
+  direction?: string | null;
+  businessGroup?: string | null;
+  department?: string | null;
+  referralCode?: string | null;
+  /** 招聘信息来源（刻意不叫 `source`：太通用的键名早晚被别的用途占用） */
+  applySource?: string | null;
+  otherCityNote?: string | null;
+  hasRelative?: string | null;
 }
 
 export interface ApplyJobRef {

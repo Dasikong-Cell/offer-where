@@ -53,6 +53,11 @@
   .brand .name{color:#fff;font-weight:700;font-size:15px;letter-spacing:.3px}
   .brand .name small{display:block;color:var(--side-text);font-weight:500;font-size:11px;letter-spacing:.5px}
   .nav{padding:8px 12px;flex:1;overflow:auto}
+  /* 侧栏 16 项在 1000px 高的视口里就会溢出 ⇒ 截图里能看到一条滚动条，观感脏。
+     这里只隐藏滚动条本身，overflow 仍保持 auto：矮屏（比如笔记本 768px）时
+     依然滚得到最下面几项。⚠️ 千万别顺手改成 hidden，那样底部菜单直接够不到。 */
+  .nav{scrollbar-width:none;-ms-overflow-style:none}
+  .nav::-webkit-scrollbar{width:0;height:0;display:none}
   .nav .grp{font-size:11px;color:#5d6678;padding:14px 10px 6px;letter-spacing:1px}
   .nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--side-text);
     font-size:13.5px;margin:2px 0;transition:.15s;position:relative}
@@ -145,6 +150,38 @@
   .pwa-bar-x{margin-left:0;color:var(--muted2);flex:none}
   /* 已作为独立 App 打开时就没必要再劝安装了 —— 由 JS 加 .standalone 兜底隐藏 */
   body.standalone .pwa-bar{display:none !important}
+  /* 简历制作台：左编辑流 / 右 sticky 外观+预览（对齐主流制作台的两栏布局）。
+     ⚠️ 不能写成内联 style：内联样式优先级高于媒体查询，手机上就塌不成单列。 */
+  .rm-cols{display:grid;gap:16px;grid-template-columns:minmax(0,1fr) 440px;align-items:start}
+  @media(max-width:1080px){.rm-cols{grid-template-columns:1fr 1fr}}
+  @media(max-width:760px){.rm-cols{grid-template-columns:1fr}}
+  .rm-edit{display:flex;flex-direction:column;gap:16px;min-width:0}
+  .rm-side{display:flex;flex-direction:column;gap:16px;position:sticky;top:14px;align-self:start}
+  @media(max-width:1080px){.rm-side{position:static}}
+  .rm-sec{border-top:1px solid var(--line2);padding-top:12px;margin-top:12px}
+  .rm-sec:first-of-type{border-top:0;padding-top:0;margin-top:0}
+  /* 板块卡片流（经历/栏目）：每张卡是一个板块，卡内每行是一条内容 */
+  .rm-sec-list{display:flex;flex-direction:column;gap:12px;margin-top:10px}
+  .rm-sec-card{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card)}
+  .rm-sec-head{display:flex;gap:8px;align-items:center}
+  .rm-sec-title{flex:1;font-weight:600}
+  .rm-sec-ops{display:flex;gap:6px}
+  .rm-items{margin:9px 0 4px;display:flex;flex-direction:column;gap:6px}
+  .rm-item{display:flex;gap:6px;align-items:flex-start}
+  .rm-item-ta{flex:1;resize:vertical}
+  .rm-item-del{flex:none}
+  .rm-presets{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .seg{display:flex;gap:6px;flex-wrap:wrap}
+  .seg-btn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;color:var(--text)}
+  .seg-btn.on{border-color:var(--brand);background:var(--brand);color:#fff}
+  .rm-empty{color:var(--muted2);padding:38px 0;text-align:center;font-size:13px;line-height:1.7}
+  .rm-item-ops{display:flex;flex-direction:column;gap:3px;flex:none}
+  .rm-adv{margin-top:10px;border-top:1px dashed var(--line2);padding-top:10px}
+  .rm-adv summary{cursor:pointer;color:var(--muted);font-size:13px;user-select:none}
+  .rm-adv textarea{margin-top:8px}
+  .btn.xs{padding:2px 8px;font-size:11.5px;border-radius:6px;line-height:1.4}
+  #rmPreview{width:100%;height:760px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  @media(max-width:760px){#rmPreview{height:520px}}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--shadow)}
   .card h2{font-size:14px;margin:0 0 14px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:8px}
   .card h2 .tag{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--muted2)}
@@ -247,6 +284,79 @@
   .muted{color:var(--muted)} .small{font-size:12px} .right{text-align:right}
   .kv{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--line2);font-size:13px}
   .kv:last-child{border:none} .kv b{color:var(--ink)} .kv span{color:var(--muted)}
+
+  /* ---------- 总览：本周投递趋势（内联 CSS 柱状，刻意不引图表库） ----------
+     柱子高度用**像素**而不是百分比：.col 是 flex 列，% 高度要依赖父级已解析的高度，
+     在「柱 + 数字 + 日期」三件套共存时容易溢出或被压成 0。像素是确定的。 */
+  .trend{display:flex;align-items:flex-end;gap:8px;padding:10px 2px 0}
+  .trend .col{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px}
+  .trend .bar{width:100%;max-width:46px;border-radius:8px 8px 3px 3px;background:linear-gradient(180deg,var(--brand),var(--brand2))}
+  .trend .bar.zero{background:#e6e9ef}
+  .trend .n{font-size:12.5px;font-weight:700;color:var(--ink)}
+  .trend .d{font-size:11px;color:var(--muted2);white-space:nowrap}
+  /* ---------- 我的投递：阶段看板（列宽固定 + 容器横向滚动） ---------- */
+  .kb{flex:0 0 236px;width:236px;background:#f7f8fb;border:1px solid var(--line);border-radius:var(--r-sm);padding:10px;max-height:600px;overflow:auto}
+  .kb h3{margin:0 0 9px;font-size:12.5px;font-weight:700;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .kb h3 em{font-style:normal;background:#e9edf4;border-radius:20px;padding:1px 8px;font-size:11px;color:var(--muted)}
+  /* 卡片样式被**两个**地方用：我的投递的看板列（.kb，236px 定宽）与校招信息库的卡片视图
+     （.kcg，自适应网格）。🔴 选择器必须一次覆盖两个容器 —— 写成两份必然漂移
+     （改一处忘一处），而漂移的表现只是「某个页面卡片没边框」这种不报错的走样。 */
+  .kcg{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;max-height:620px;overflow:auto}
+  .kb .kcard, .kcg .kcard{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:9px 10px;margin-bottom:8px;box-shadow:0 1px 2px rgba(20,30,50,.05)}
+  /* 网格里由 gap 负责间距，卡片自己不再留外边距（写在合并规则**之后**才能覆盖它） */
+  .kcg .kcard{margin-bottom:0}
+  .kb .kcard .t, .kcg .kcard .t{font-weight:700;font-size:13px;word-break:break-all}
+  .kb .kcard .m, .kcg .kcard .m{font-size:11.5px;color:var(--muted);margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .kb .kcard select, .kcg .kcard select{font-size:11.5px;padding:2px 4px;max-width:130px}
+  .kb .none, .kcg .none{padding:10px 0;text-align:center;font-size:12px;color:var(--muted2)}
+  .kb .none{padding:10px 0;text-align:center;font-size:12px;color:var(--muted2)}
+  /* ---------- 投递复盘：横向节奏条 ---------- */
+  .rvb{display:flex;flex-direction:column;gap:7px}
+  .rvb .row{display:flex;align-items:center;gap:9px;font-size:12.5px}
+  .rvb .row .lb{width:52px;flex:none;color:var(--muted)}
+  .rvb .row .tk{flex:1;background:#eef1f5;border-radius:6px;height:16px;overflow:hidden}
+  .rvb .row .tk i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--brand),var(--brand2))}
+  .rvb .row .vl{width:36px;text-align:right;font-weight:700;color:var(--ink)}
+  /* ---------- 自动填充信息（55 个字段由 AF_SECTIONS 数据驱动渲染）----------
+     🔴 刻意**不手写 55 段 HTML**：这么长的表单，标签不配对是常态，
+     而 typecheck / console:check 都看不出「少了一个 </div>」之外的语义错误。
+     数据表还有个好处：字段表和「标签→档案键」映射表在同一处审。 */
+  .af{margin-top:4px}
+  .af .sec{margin-top:16px}
+  .af .sec:first-child{margin-top:0}
+  .af .sec>h3{margin:0 0 10px;font-size:12.5px;font-weight:700;color:var(--muted);
+    letter-spacing:.4px;border-bottom:1px solid var(--line);padding-bottom:7px}
+  .af .row2{margin-top:10px}
+  .af .row2 label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  /* ---------- 我的投递：流程时间节点行 ----------
+     节点是**文本**不是输入控件：看板列宽只有 236px，塞三个输入框会把公司/职位挤没。
+     改时间统一走页面上方那条编辑条（#appsTimeEditCard），看板与表格共用同一条。 */
+  .kb .kcard .tn, .kcg .kcard .tn{font-size:11px;color:var(--muted);margin-top:5px;padding:3px 6px;border-radius:6px;
+    background:#eef2f8;border-left:2px solid var(--brand);word-break:break-all;line-height:1.5}
+  .kb .kcard .tn.warn, .kcg .kcard .tn.warn{background:#fff6e6;border-left-color:var(--warn);color:#8a5a00}
+  .kb .kcard .tn.done, .kcg .kcard .tn.done{background:var(--ok-soft);border-left-color:var(--ok);color:#1f6b3a}
+  /* ---------- 我的投递：时间节点编辑条 ---------- */
+  #appsTimeEditCard[hidden]{display:none}
+  #appsTimeEdit{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  #appsTimeEdit .fld{display:flex;flex-direction:column;gap:4px;min-width:150px}
+  #appsTimeEdit .fld label{font-size:11.5px;color:var(--muted)}
+  #appsTimeEdit input,#appsTimeEdit select{padding:6px 8px;font-size:12.5px}
+  /* ---------- 投递复盘：行动清单 ---------- */
+  .act{display:flex;flex-direction:column;gap:8px}
+  .act .it{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;padding:8px 10px;
+    border:1px solid var(--line);border-radius:9px;background:#fafbfd}
+  .act .it .tag2{flex:none;font-size:11px;padding:1px 7px;border-radius:20px;background:#e9edf4;
+    color:var(--muted);font-weight:700;white-space:nowrap}
+  .act .it.d0 .tag2{background:var(--bad-soft);color:#b3261e}
+  .act .it.d1 .tag2{background:var(--warn-soft);color:#8a5a00}
+  .act .it .tx{flex:1;min-width:0;word-break:break-all}
+  .act .it .tx b{color:var(--ink)}
+  .act .it .tx .sm{display:block;font-size:11.5px;color:var(--muted);margin-top:3px}
+  .act .sug{display:flex;gap:8px;font-size:12.5px;padding:7px 0;border-bottom:1px dashed var(--line2)}
+  .act .sug:last-child{border-bottom:none}
+  .act .sug .n{flex:none;width:18px;height:18px;border-radius:50%;background:var(--brand);color:#fff;
+    font-size:11px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .act .none{font-size:12.5px;color:var(--muted2);padding:8px 0}
 </style>
 </head>
 <body>
@@ -257,25 +367,47 @@
       <div class="logo"><img src="/app.ico" alt="" /></div>
       <div class="name">投递 Agent<small>RESUME DELIVERY</small></div>
     </div>
+    <!-- 侧栏分两组（2026-10-04）：上「求职工作台」= 找岗位 → 备简历 → 做匹配；
+         下「投递执行」= 真投 → 跟进 → 看账。
+         🔴 新增导航项**必须**带 data-view：`$$('#nav a')` 把每个 <a> 统一绑到
+         navigate(a.dataset.view)，没有 data-view 的锚点会被当成「切到 undefined 视图」，
+         点了不跳转还可能把当前视图清掉（页面上看不出来，只有真点一次才发现）。
+         同理，任何新增视图都要同步补 VIEW_META，否则 navigate 里 `VIEW_META[view].t` 直接抛错。 -->
     <nav class="nav" id="nav">
-      <div class="grp">总览</div>
+      <div class="grp">求职工作台</div>
       <a data-view="dashboard" class="active">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>首页看板</a>
-      <div class="grp">投递</div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>总览</a>
+      <a data-view="apps">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="12" rx="1.5"/></svg>我的投递</a>
+      <a data-view="jobs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>校招信息库</a>
+      <a data-view="jobsadd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>添加岗位</a>
+      <a data-view="resume">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>简历管理</a>
+      <a data-view="resumemake">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>简历制作</a>
+      <a data-view="autofill">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16"/><path d="M6 16l3-8 3 8M8.5 13h5"/><path d="M17 16V8"/></svg>自动填充</a>
+      <a data-view="match">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 17l-6.3 4 2.3-7.2-6-4.4h7.6z"/></svg>AI 匹配</a>
+      <a data-view="optimize">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>简历优化</a>
+      <a data-view="review">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20h18"/><rect x="5" y="11" width="3" height="6" rx="1"/><rect x="10.5" y="7" width="3" height="10" rx="1"/><rect x="16" y="13" width="3" height="4" rx="1"/></svg>投递复盘</a>
+      <a data-view="profile">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0115 0"/></svg>个人中心</a>
+      <div class="grp">投递执行</div>
       <a data-view="deliver">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>投递中心</a>
       <a data-view="records">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/></svg>职位记录</a>
-      <div class="grp">简历</div>
-      <a data-view="resume">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>简历中心</a>
-      <div class="grp">进阶</div>
-      <a data-view="enhance">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>对标增强</a>
-      <a data-view="advanced">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 17l-6.3 4 2.3-7.2-6-4.4h7.6z"/></svg>高级功能</a>
       <a data-view="logs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>运行日志<span class="nav-badge" id="navLogBadge" style="display:none">0</span></a>
+      <a data-view="advanced">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l6 6-6 6-6-6z"/><path d="M12 12l6 6-6 6-6-6z"/></svg>高级功能</a>
+      <a data-view="enhance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h13"/></svg>对标增强</a>
     </nav>
     <div class="side-foot">
       <div><span class="dot" id="svcDot"></span><span id="svcTxt">后端连接中…</span></div>
@@ -315,8 +447,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
         </button>
         <div>
-          <h1 id="viewTitle">首页看板</h1>
-          <div class="sub" id="viewSub">平台状态 · 投递漏斗 · AI 能力总览</div>
+          <h1 id="viewTitle">总览</h1>
+          <div class="sub" id="viewSub">岗位 / 投递 / 面试 / Offer · 本周投递趋势 · 3 天内截止</div>
         </div>
       </div>
       <div class="right">
@@ -352,11 +484,48 @@
           <div class="note small" id="scUpdateResult" style="margin-top:8px;display:none"></div>
         </div>
 
+        <!-- 总览头部（对齐 offerbiu 的 hero）：一句话说清这个工作台做什么 + 两个最常用入口 -->
+        <div class="card" style="margin-bottom:16px;background:linear-gradient(120deg,#fff 0%,#f7f2ff 55%,#eef4ff 100%)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+            <div>
+              <h2 style="font-size:22px;margin:0 0 6px">别再用 Excel 管秋招了</h2>
+              <div class="note small" style="max-width:640px">把岗位、简历、AI 匹配和投递进度放在同一个工作台：采集岗位 → 批量投递 → 跟进回复 → 复盘节奏。</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn" id="ovMatch">AI 匹配</button>
+              <button class="btn primary" id="ovAddJob">+ 添加岗位</button>
+            </div>
+          </div>
+        </div>
+
         <div class="grid cols-4" style="margin-bottom:16px">
-          <div class="card"><div class="stat"><div class="v" id="dTotal">–</div><div class="l">岗位总数</div></div></div>
-          <div class="card"><div class="stat"><div class="v" id="dApplied">–</div><div class="l">已投递 / 投递率</div></div></div>
+          <div class="card"><div class="stat"><div class="v" id="dTotal">–</div><div class="l">总岗位数</div></div>
+            <div class="note small" style="margin-top:6px" id="dTotalNote">采集 + 手动录入</div></div>
+          <div class="card"><div class="stat"><div class="v" id="dApplied">–</div><div class="l">已投递数量</div></div>
+            <div class="note small" style="margin-top:6px" id="dAppliedNote">含笔试、面试、Offer 阶段</div></div>
+          <div class="card"><div class="stat"><div class="v" id="dInterview">–</div><div class="l">面试中数量</div></div>
+            <div class="note small" style="margin-top:6px">一面 / 二面 / HR 面需要跟进</div></div>
+          <div class="card"><div class="stat"><div class="v" id="dOffer">–</div><div class="l">Offer 数量</div></div>
+            <div class="note small" style="margin-top:6px">继续比较城市、薪资和成长性</div></div>
+        </div>
+
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="card accent" style="grid-column:span 2">
+            <h2>本周投递趋势 <span class="tag" id="trendTag">近 7 天</span></h2>
+            <div class="note small">按天查看投递节奏，避免截止日期集中处理。</div>
+            <div id="trendChart" style="margin-top:12px"></div>
+          </div>
+          <div class="card">
+            <h2>3 天内截止 <span class="tag" id="soonTag">–</span></h2>
+            <div class="note small">临近的投递节点优先处理。</div>
+            <div id="soonList" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <div class="grid cols-3" style="margin-bottom:16px">
           <div class="card"><div class="stat"><div class="v sm" id="dRealJd">–</div><div class="l">真实 JD（可匹配）</div></div></div>
           <div class="card"><div class="stat"><div class="v sm" id="dImgJd">–</div><div class="l">JD 长图（可查看）</div></div></div>
+          <div class="card"><div class="stat"><div class="v sm" id="dUnscored">–</div><div class="l">尚未 AI 匹配</div></div></div>
         </div>
 
         <div class="grid cols-3" style="margin-bottom:16px">
@@ -401,7 +570,6 @@
             <button data-tab="batch" class="active">批量投递</button>
             <button data-tab="reply">自动回复</button>
             <button data-tab="email">邮箱直投</button>
-            <button data-tab="wangshen">网申</button>
           </div>
 
           <!-- batch -->
@@ -521,23 +689,6 @@
             <div class="note warn">邮箱直投走 offerbiu 微信推文 / 官网表单通道，<b>无需登录平台</b>。真实发送前请先预览，并人工剔除「跨公司串号」候选（个人 QQ / HR-SaaS 平台邮箱已自动隔离）。</div>
             <div class="progress"><i id="emailBar"></i></div>
           </div>
-
-          <!-- wangshen：独立「网申」平台，复用企业官网投递引擎（端口 9238 / 上下文 'wangshen'） -->
-          <div class="tabpane" id="tab-wangshen" style="display:none">
-            <p class="note small">网申 = 直接向<b>企业官网招聘系统 / 校招网申系统</b>投递。粘贴目标链接（每行一个），先「预览」只读探测投递入口与表单字段（不提交），确认无误后再「确认投递」真实提交。常规流程：在 9238 调试窗口打开官网 → 预览 → 人工补填必填项 →「记住当前表单」→ 确认投递。</p>
-            <label class="f">企业官网 / 校招网申链接（每行一个）</label>
-            <textarea id="wangshenUrls" class="area" placeholder="https://career.example.com/campus/apply/xxx&#10;https://job.example.com/social/apply/yyy" style="min-height:140px;margin-top:6px"></textarea>
-            <div class="row2" style="margin-top:10px;align-items:center">
-              <div style="display:flex;gap:8px">
-                <button class="btn primary sm" id="wangshenPreview">预览（只读探测）</button>
-                <button class="btn danger sm" id="wangshenApply">确认投递</button>
-                <button class="btn sm" id="wangshenRemember">记住当前表单</button>
-              </div>
-              <div class="muted small">「记住当前表单」把 9238 窗口当前页已填字段按域名存入记忆，下次同站自动填写（需先在窗口里人工补填）。</div>
-            </div>
-            <div class="progress"><i id="wangshenBar"></i></div>
-            <div class="out" id="wangshenOut" style="margin-top:10px;max-height:360px;white-space:pre-wrap"></div>
-          </div>
         </div>
       </section>
 
@@ -633,6 +784,201 @@
             <table class="tbl" id="recTbl">
               <thead><tr><th>公司</th><th>职位</th><th>平台</th><th>JD</th><th>匹配</th><th>状态</th><th>操作</th></tr></thead>
               <tbody><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 校招信息库（岗位池的浏览/筛选入口） ============
+           与「职位记录」的分工：职位记录是**运营视角**（漏斗 + OCR + 全量表格），
+           这里是**投递视角** —— 搜索、按城市/类型/截止状态筛，直接看「还剩几天」。
+           数据同源（GET /api/jobs），不做任何二次写库。 -->
+      <section class="view" id="view-jobs">
+        <div class="card">
+          <h2>校招信息库 <span class="tag" id="jobsCount">加载中…</span></h2>
+          <div class="row2" style="margin-bottom:10px">
+            <div><input id="jobsQ" placeholder="搜索公司 / 职位 / JD 关键词…" /></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="jobsSource"><option value="">全部平台</option></select>
+              <select id="jobsCity"><option value="">全部城市</option></select>
+              <select id="jobsType"><option value="">全部类型</option></select>
+              <!-- 届别：候选与条数都由数据实测值算出（见 fillJobsFilters）——只有一个届时，
+                   带条数的选项能让用户立刻明白「选它和不选一样」，而不是以为下拉坏了。 -->
+              <select id="jobsGrad"><option value="">全部届别</option></select>
+              <select id="jobsDeadline">
+                <option value="">全部截止状态</option>
+                <option value="open">未截止</option>
+                <option value="soon">7 天内截止</option>
+                <option value="expired">已截止</option>
+                <option value="none">未填截止</option>
+              </select>
+              <button class="btn" id="jobsReset" title="把搜索框、四个下拉和快捷标签一起恢复成「不筛」；不影响当前视图">重置筛选</button>
+              <button class="btn" id="jobsRefresh">刷新</button>
+            </div>
+          </div>
+          <!-- 快捷关注（对标 offerbiu 的「免笔试 / 央国企 / 研究所 / 外企」）：
+               chip 的**顺序与文案**来自 GET /api/jobs 下发的 tagDefs（服务端是唯一真相源），
+               而**是否出现**由数据实测值决定（那个标签一条都没有就不渲染，绝不留下点了必然 0 条的假控件）。
+               视图切换与「我的投递」同一套约法：data 属性 + .active + 两块容器互斥显示。 -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div id="jobsChips" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"></div>
+            <div class="tabs" style="margin:0" id="jobsViewTabs">
+              <button data-jobview="table" class="active">表格视图</button>
+              <button data-jobview="card">卡片视图</button>
+            </div>
+          </div>
+          <div class="note small" id="jobsStat">加载中…</div>
+          <div id="jobsTableWrap" style="overflow:auto;max-height:560px;margin-top:10px">
+            <table class="tbl" id="jobsTbl">
+              <thead><tr><th>公司</th><th>职位</th><th>类型</th><th>届别</th><th>城市</th><th>平台</th><th style="width:104px">截止</th><th style="width:56px">匹配</th><th style="width:132px">操作</th></tr></thead>
+              <tbody><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="kcg" id="jobsCards" style="display:none;margin-top:10px"></div>
+        </div>
+      </section>
+
+      <!-- ============ 添加岗位（手动录入，对齐 offerbiu「添加岗位」） ============
+           保存即进岗位池（POST /api/jobs），可参与 AI 匹配与批量投递。
+           「公司名称 / 岗位名称」至少填一个，其余全部选填 —— 与后端 400 判据一致。 -->
+      <section class="view" id="view-jobsadd">
+        <div class="grid cols-3">
+          <div class="card" style="grid-column:span 2">
+            <h2>录入一个新的投递目标</h2>
+            <div class="note small" style="margin:6px 0 10px">保存岗位信息，加入投递计划。保存后即可在「校招信息库」里筛选、并被 AI 匹配 / 批量投递使用。</div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px dashed #d8dee4;padding-top:12px">
+              <b style="font-size:14px">岗位信息</b>
+              <button class="btn sm" id="jaImportBtn">从插件导入</button>
+            </div>
+
+            <div id="jaImportBox" style="display:none;margin-top:10px;border:1px dashed #c4ccd6;border-radius:10px;padding:12px;background:#fafbfc">
+              <div class="note small" style="margin-bottom:6px">把官网岗位页的<b>链接</b>或整段<b>岗位文本</b>粘进来，点「解析填充」自动识别公司 / 职位 / 城市 / 薪资 / 投递链接，并写入下方表单（不覆盖已填内容）。</div>
+              <textarea id="jaImportText" rows="4" placeholder="粘贴岗位链接或岗位卡片文本…"></textarea>
+              <div style="display:flex;gap:10px;margin-top:8px;align-items:center;flex-wrap:wrap">
+                <button class="btn primary sm" id="jaImportParse">解析填充</button>
+                <button class="btn sm" id="jaImportClose">收起</button>
+                <span class="note small" id="jaImportMsg" style="align-self:center"></span>
+              </div>
+            </div>
+
+            <div class="row2" style="margin-top:12px">
+              <div><label class="f">公司名称 *</label><input id="jaCompany" placeholder="例如：字节跳动" /></div>
+              <div><label class="f">岗位名称 *</label><input id="jaPosition" placeholder="例如：产品经理实习生" /></div>
+            </div>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">城市（选填）</label><input id="jaCity" placeholder="例如：北京 / 上海 / 深圳" /></div>
+              <div><label class="f">岗位类型（选填）</label>
+                <select id="jaType">
+                  <option value="">不限</option>
+                  <option>产品岗</option><option>运营岗</option><option>技术岗</option><option>算法岗</option>
+                  <option>数据岗</option><option>设计岗</option><option>市场岗</option><option>职能岗</option>
+                  <option>销售岗</option><option>其他</option>
+                </select>
+              </div>
+            </div>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">投递链接（选填）</label><input id="jaUrl" placeholder="https://…" /></div>
+              <div><label class="f">截止日期（选填，未填默认招满为止）</label><input id="jaDeadline" type="date" /></div>
+            </div>
+            <div class="note small" style="margin-top:8px">这里填的「岗位类型 / 截止日期」就是「校招信息库」里两个筛选器的数据来源。招聘平台普遍不提供这两项，所以一条都没填时那两个下拉会自动置灰并说明原因 —— 免得出现「选了没有任何反应」的假筛选器。</div>
+            <div style="margin-top:10px">
+              <label class="f">岗位描述 JD（选填）</label>
+              <textarea id="jaJd" rows="7" placeholder="粘贴岗位职责、任职要求及加分项。使用 AI 匹配 / 定制简历 / 面试攻略时，JD 越完整效果越好。"></textarea>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
+              <button class="btn primary" id="jaSave">保存到投递计划</button>
+              <button class="btn" id="jaReset">清空</button>
+              <span class="note small" id="jaMsg" style="align-self:center"></span>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>官网岗位添加插件</h2>
+            <div class="note small" style="margin-bottom:10px">先在官网岗位页读取岗位，再回到本页手动导入并核对。</div>
+            <div class="note small" style="border-left:3px solid #7c5cff;padding-left:10px;margin-bottom:10px">
+              <b>从官网岗位 → 投递计划</b><br>
+              在官网岗位页复制链接或卡片文本，粘到左边「从插件导入」，解析后逐项<b>人工核对</b>再保存 —— 省去重复复制粘贴，但最终入库的字段由你确认。
+            </div>
+            <div class="note small" style="border-left:3px solid #7c5cff;padding-left:10px;margin-bottom:10px">
+              <b>读取企业官网岗位</b><br>
+              识别公司、岗位、城市、投递链接和岗位 JD。识别不出来时留空，不会写入猜测值。
+            </div>
+            <div class="note small" style="border-left:3px solid #7c5cff;padding-left:10px">
+              <b>自动识别关键字段</b><br>
+              公司名称、岗位名称、城市、薪资、投递链接走文本启发式解析；JD 过长时整段落入「岗位描述」框，不做截断。
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 我的投递（投递记录 + 状态流转） ============ -->
+      <section class="view" id="view-apps">
+        <!-- 顶栏：搜索 + 快速筛选 + 卡片/表格视图切换（对齐 offerbiu「我的投递」） -->
+        <div class="card" style="margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <div class="note small">集中管理岗位状态、截止时间、投递记录和笔面试安排。</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn sm" id="appsRefresh">刷新</button>
+              <button class="btn sm" id="appsExport">导出投递记录</button>
+              <button class="btn sm primary" id="appsAddJob">+ 添加岗位</button>
+            </div>
+          </div>
+          <div class="row2" style="margin-top:12px">
+            <div><input id="appsQ" placeholder="搜索公司、岗位、城市、备注或 JD…" /></div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
+              <span class="note small" id="appsCount">加载中…</span>
+              <div class="tabs" style="margin:0" id="appsViewTabs">
+                <button data-appview="card" class="active">卡片视图</button>
+                <button data-appview="table">表格视图</button>
+              </div>
+            </div>
+          </div>
+          <div id="appsQuick" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"></div>
+        </div>
+
+        <div class="grid cols-4" id="appsStats" style="margin-bottom:16px"></div>
+
+        <!-- 流程时间节点编辑条：看板与表格**共用同一条**。
+             两处各写一套编辑控件必然会漂移成两种行为（一处能清空、一处不能），
+             而且看板列宽 236px 塞不下输入框，本来就只能外置。 -->
+        <div class="card" id="appsTimeEditCard" hidden style="margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <h2 style="margin:0">笔面与结果时间 <span class="tag" id="appsTimeWho"></span></h2>
+            <button class="btn sm" id="appsTimeClose">收起</button>
+          </div>
+          <div class="note small" style="margin:6px 0 10px">
+            只填到日（2026-10-08）或到分（2026-10-08 14:00）都可以；<b>留空 = 清除该节点</b>。
+            留空与「填了个不认识的值」是两回事 —— 格式不对会被拦下，不会被悄悄清掉。
+          </div>
+          <div id="appsTimeEdit">
+            <div class="fld"><label for="ateWritten">笔试时间</label>
+              <input id="ateWritten" placeholder="2026-10-08 或 2026-10-08 09:00" /></div>
+            <div class="fld"><label for="ateInterview">面试时间</label>
+              <input id="ateInterview" placeholder="2026-10-08 或 2026-10-08 14:00" /></div>
+            <div class="fld"><label for="ateRound">面试轮次</label><select id="ateRound"></select></div>
+            <div class="fld"><label for="ateOffer">Offer 时间</label>
+              <input id="ateOffer" placeholder="2026-10-08" /></div>
+            <div class="fld"><label for="ateClosed">结束时间</label>
+              <input id="ateClosed" placeholder="2026-10-08" /></div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn sm primary" id="appsTimeSave">保存</button>
+              <span class="note small" id="appsTimeMsg"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 看板：按阶段分列。横向滚动，列宽固定 -->
+        <div id="appsBoard" style="overflow-x:auto;padding-bottom:8px">
+          <div id="appsBoardCols" style="display:flex;gap:12px;align-items:flex-start"></div>
+        </div>
+
+        <!-- 表格视图（与看板同源，只是换个视角；原「投递记录」的表格保留在这一屏） -->
+        <div class="card" id="appsTableWrap" style="display:none">
+          <div style="overflow:auto">
+            <table class="tbl" id="appsTbl">
+              <thead><tr><th>公司</th><th>职位</th><th>阶段</th><th>平台</th><th>城市</th><th style="width:140px">投递时间</th><th>笔面 / 结果时间</th><th style="width:130px">改为</th><th style="width:170px">操作</th></tr></thead>
+              <tbody><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -752,6 +1098,301 @@
           <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
             <button class="btn primary" id="aiNameSave">保存设置</button>
             <span class="muted small" id="aiNameStatus" style="align-self:center"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ AI 匹配 ============ -->
+      <section class="view" id="view-match">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>分析对象 <span class="tag">让简历和 JD 对齐得更具体</span></h2>
+            <div class="note small">选简历 + 选岗位（或直接粘贴 JD），生成匹配度、短板与改写方向。</div>
+            <div style="margin-top:12px">
+              <label class="f">选择简历</label>
+              <select id="mtResume"></select>
+              <div class="note small" id="mtResumeNote" style="margin-top:4px"></div>
+            </div>
+            <div style="margin-top:12px">
+              <label class="f">岗位来源</label>
+              <div class="tabs" style="margin:0" id="mtSrcTabs">
+                <button data-mtsrc="pool" class="active">岗位库</button>
+                <button data-mtsrc="paste">粘贴 JD</button>
+              </div>
+            </div>
+            <div id="mtPoolBox" style="margin-top:12px">
+              <label class="f">选择岗位</label>
+              <select id="mtJob"><option value="">加载中…</option></select>
+            </div>
+            <div id="mtPasteBox" style="margin-top:12px;display:none">
+              <label class="f">岗位名称（选填）</label>
+              <input id="mtPastePosition" placeholder="例如：产品经理校招生" />
+              <label class="f" style="margin-top:8px;display:block">岗位 JD *</label>
+              <textarea id="mtPasteJd" rows="6" placeholder="粘贴岗位职责与任职要求…"></textarea>
+            </div>
+            <div style="margin-top:14px">
+              <b style="font-size:13px">岗位 JD</b>
+              <div class="note" id="mtJdPreview" style="white-space:pre-wrap;max-height:200px;overflow:auto;margin-top:6px">从上方选择岗位后显示…</div>
+            </div>
+            <button class="btn primary" id="mtRun" style="margin-top:14px">生成分析</button>
+            <span class="note small" id="mtMsg" style="margin-left:10px"></span>
+          </div>
+          <div class="card">
+            <h2>匹配结果 <span class="tag" id="mtScoreTag"></span></h2>
+            <div id="mtResult"><div class="note">还没有 AI 匹配分析报告。选择左侧的简历和目标岗位，系统会结合简历文本与岗位 JD 生成匹配度、短板与改写方向。</div></div>
+            <h2 style="margin-top:22px">历史报告</h2>
+            <div class="note small">每次分析都会留档，可随时回看（保存在本机浏览器）。</div>
+            <select id="mtHistory" style="margin-top:8px;width:100%"><option value="">选择历史报告…</option></select>
+            <div id="mtHistoryBody" style="margin-top:10px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 简历优化 ============ -->
+      <section class="view" id="view-optimize">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>全量优化对象</h2>
+            <div class="note small">综合简历文件、岗位 JD 和 AI 匹配报告，生成岗位化的改写方案。</div>
+            <div style="margin-top:12px"><label class="f">简历版本</label><select id="opResume"></select></div>
+            <div style="margin-top:12px"><label class="f">目标岗位</label><select id="opJob"><option value="">加载中…</option></select></div>
+            <div style="margin-top:12px">
+              <label class="f">岗位库 JD</label>
+              <div class="note" id="opJd" style="white-space:pre-wrap;max-height:170px;overflow:auto">选择岗位后显示…</div>
+            </div>
+            <div style="margin-top:12px"><label class="f">AI 匹配报告参考</label>
+              <select id="opReport" style="width:100%"><option value="">（无 —— 建议先在「AI 匹配」生成一次）</option></select></div>
+            <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <button class="btn primary" id="opRun">生成全量优化</button>
+              <button class="btn" id="opTailor">生成定制简历</button>
+              <span class="note small" id="opMsg"></span>
+            </div>
+          </div>
+          <div class="card">
+            <h2>匹配详情 <span class="tag" id="opScoreTag"></span></h2>
+            <div id="opResult"><div class="note">点「生成全量优化」后会在这里给出优先短板、建议方向与简历优势。</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 投递复盘 ============ -->
+      <section class="view" id="view-review">
+        <div class="note small" style="margin:0 0 12px">集中查看投递节奏、关键安排、阶段分布和下一步动作，把投递记录沉淀成可执行复盘。</div>
+        <div class="grid cols-4" style="margin-bottom:16px" id="rvStats"></div>
+        <!-- 行动清单：四段（优先处理 / 笔面安排 / 没进展 / 下周建议）整体由 /api/stats/review 给 -->
+        <div id="rvActions" style="margin-bottom:16px"></div>
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="card accent" style="grid-column:span 2">
+            <h2>本周投递节奏</h2>
+            <div class="note small">观察一周内的投递分布，避免集中投递后忘记跟进。</div>
+            <div id="rvChart" style="margin-top:12px"></div>
+            <div class="note small" id="rvChartNote" style="margin-top:8px"></div>
+          </div>
+          <div class="card">
+            <h2>阶段分布</h2>
+            <div class="note small">快速判断当前机会集中在哪些阶段。</div>
+            <div id="rvStages" style="margin-top:12px"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>投递明细 <span class="tag" id="rvCount"></span></h2>
+          <div id="rvList" style="margin-top:10px"></div>
+        </div>
+      </section>
+
+      <!-- ============ 个人中心 ============ -->
+      <section class="view" id="view-profile">
+        <div class="grid cols-2">
+          <div class="card">
+            <h2>候选人档案 <span class="tag">投递时自动带入</span></h2>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">姓名</label><input id="pfNameInput" /></div>
+              <div><label class="f">手机号</label><input id="pfPhoneInput" /></div>
+            </div>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">邮箱</label><input id="pfEmailInput" /></div>
+              <div><label class="f">期望岗位</label><input id="pfExpectInput" /></div>
+            </div>
+            <div class="row2" style="margin-top:10px">
+              <div><label class="f">期望城市</label><input id="pfCityInput" /></div>
+              <div><label class="f">简历文件路径</label><input id="pfResumeInput" /></div>
+            </div>
+            <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <button class="btn primary" id="pfSave">保存档案</button>
+              <button class="btn" id="pfReload">重新读取</button>
+              <span class="note small" id="pfMsg"></span>
+            </div>
+          </div>
+          <div class="card">
+            <h2>数据概览</h2>
+            <div id="pfStats" style="margin-top:8px"></div>
+            <h2 style="margin-top:22px">快捷入口</h2>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+              <button class="btn sm" data-goto="resume">简历管理</button>
+              <button class="btn sm" data-goto="jobs">校招信息库</button>
+              <button class="btn sm" data-goto="review">投递复盘</button>
+              <button class="btn sm" data-goto="advanced">高级功能</button>
+            </div>
+          </div>
+          <div class="card" style="grid-column:span 2">
+            <h2>AI 匹配 / 优化历史 <span class="tag">服务端为准</span></h2>
+            <div class="note small" style="margin-top:0">
+              「AI 匹配」的分数本就写回岗位库（<code>jobs.match_score</code>），这里直接读库 ——
+              换设备、换浏览器、清缓存都不会丢；「简历优化」目前只落盘台账（未进库）。
+              标着「仅本机」的，是当场粘贴 JD 那类<b>库里没有岗位行</b>的记录。
+            </div>
+            <div class="grid cols-2" style="margin-top:14px">
+              <div>
+                <div class="note small" style="margin-top:0"><b>最近 AI 匹配</b>（<span id="pfMatchCount">0</span> 条 · 已入库）</div>
+                <div id="pfMatchList" style="margin-top:8px"></div>
+              </div>
+              <div>
+                <div class="note small" style="margin-top:0"><b>简历优化产物</b>（<span id="pfTailorCount">0</span> 份 · 磁盘台账）</div>
+                <div id="pfTailorList" style="margin-top:8px"></div>
+              </div>
+            </div>
+            <div id="pfLocalList" style="margin-top:12px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 简历制作（D 批：结构化草稿 + 实时预览 + 两级出稿） ============ -->
+      <section class="view" id="view-resumemake">
+        <div class="card">
+          <h2>简历制作 <span class="tag">结构化草稿 · 存本机</span></h2>
+          <div class="note small" style="margin-top:0">
+            在这里从零或基于档案做一份简历：左侧填内容，右侧实时预览，可切换<b>版式模板</b>与<b>配色</b>，
+            导出 <b>HTML</b>（随时可用）或 <b>PDF</b>（排版更精致）。内容只存在<b>本机</b>、不上传；
+            这是<b>编辑中的草稿</b>，不是投递附件 —— 要按岗位定制一岗一简历请到「简历优化」。
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
+            <select id="rmDocSel" style="min-width:210px"></select>
+            <button class="btn sm" id="rmNew">新建草稿</button>
+            <button class="btn sm" id="rmDel">删除当前</button>
+            <input id="rmTitle" placeholder="草稿标题" style="max-width:190px" />
+            <button class="btn sm primary" id="rmSave">保存</button>
+            <span class="note small" id="rmMsg"></span>
+          </div>
+        </div>
+
+        <div class="rm-cols">
+          <!-- 左：编辑流 -->
+          <div class="rm-edit">
+            <div class="card rm-block">
+              <h2>基本信息 <span class="tag">从档案带入，可改</span></h2>
+              <div class="row2">
+                <div><label class="f">姓名</label><input id="rmName" placeholder="张同学" /></div>
+                <div><label class="f">手机</label><input id="rmPhone" placeholder="138 0000 0000" /></div>
+              </div>
+              <div class="row2" style="margin-top:8px">
+                <div><label class="f">邮箱</label><input id="rmEmail" placeholder="you@example.com" /></div>
+                <div><label class="f">城市</label><input id="rmCity" placeholder="北京 / 上海 / 昆明" /></div>
+              </div>
+              <div style="margin-top:8px"><label class="f">求职意向</label><input id="rmHeadline" placeholder="产品经理 / 数据分析 / Java 后端" /></div>
+            </div>
+
+            <div class="card rm-block">
+              <h2>个人简介 <span class="tag">4–6 行</span></h2>
+              <textarea id="rmSummary" rows="4" placeholder="两年 Java 后端实习经验，主导过日活 5w+ 小程序的服务端重构；熟悉高并发接口与压测，主导的订单服务 QPS 提升 40%。"></textarea>
+            </div>
+
+            <div class="card rm-block">
+              <h2>核心优势 <span class="tag">每行一条</span></h2>
+              <textarea id="rmHighlights" rows="4" placeholder="负责用户调研与数据分析，整理 120+ 份反馈并沉淀优化建议&#10;搭建周报看板，把关键指标复盘时间缩短约 30%"></textarea>
+            </div>
+
+            <div class="card rm-block">
+              <h2>专业技能 <span class="tag">每行一个</span></h2>
+              <textarea id="rmSkills" rows="4" placeholder="Java / Spring Boot / MySQL&#10;Python / SQL / Tableau&#10;Docker / K8s"></textarea>
+            </div>
+
+            <div class="card rm-block">
+              <h2>经历与栏目 <span class="tag">卡片化编辑</span></h2>
+              <div class="note small" style="margin-top:-4px">每一张卡是一个板块（实习 / 项目 / 校园 / 荣誉…）；卡里每行是一条内容。改完自动同步到预览。</div>
+              <div id="rmSectionCards" class="rm-sec-list"></div>
+              <div class="rm-presets">
+                <span class="note small">快速添加：</span>
+                <button class="btn sm" data-rm-preset="实习经历">实习经历</button>
+                <button class="btn sm" data-rm-preset="项目经历">项目经历</button>
+                <button class="btn sm" data-rm-preset="教育经历">教育经历</button>
+                <button class="btn sm" data-rm-preset="校园经历">校园经历</button>
+                <button class="btn sm" data-rm-preset="荣誉奖项">荣誉奖项</button>
+                <button class="btn sm" data-rm-preset="自定义板块">自定义板块</button>
+              </div>
+              <details class="rm-adv"><summary>高级：批量编辑 / 粘贴</summary>
+                <textarea id="rmSections" rows="6" placeholder="栏目名：条目（每行一条）"></textarea>
+              </details>
+            </div>
+          </div>
+
+          <!-- 右：外观 + 实时预览（sticky） -->
+          <div class="rm-side">
+            <div class="card rm-block">
+              <h2>版式模板</h2>
+              <div class="seg" id="rmVariant"></div>
+              <h2 style="margin-top:16px">配色</h2>
+              <select id="rmAccent"></select>
+              <div class="note small" style="margin-top:6px">模板改排版、配色改颜色，都不改内容。</div>
+            </div>
+            <div class="card rm-block">
+              <h2>导出 <span class="tag">A4 · 与预览同源</span></h2>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <button class="btn" id="rmHtml">下载 HTML</button>
+                <button class="btn primary" id="rmPdf">生成 PDF</button>
+              </div>
+              <div class="note small" id="rmPdfWhy"></div>
+            </div>
+            <div class="card rm-block">
+              <h2>预览 <span class="tag">实时更新</span></h2>
+              <iframe id="rmPreview" title="简历预览"></iframe>
+              <div id="rmEmpty" class="rm-empty">还没有草稿 —— 点上方「新建草稿」后，这里会实时显示你的简历。</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 自动填充：网申（企业官网 / 校招系统） + 表单记忆 ============ -->
+      <section class="view" id="view-autofill">
+        <div class="card">
+          <h2>自动填充 <span class="tag">内置 CDP 通道 · 不用插件</span></h2>
+          <div class="note warn">offerbiu 的「自动填充」靠<b>浏览器插件</b>在招聘网站表单里回填。本项目不用插件：官网 / 网申投递走<b>真实 Chrome + CDP 驱动</b>，配一张按域名存下来的表单记忆表（<b>form_memory</b>，记住「字段标签 → 值」）——你在调试窗口里人工填过一次，下次同站自动复用。下面就是这条通道的操作台。</div>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <h2>网申投递 <span class="tag">企业官网 / 校招网申</span></h2>
+          <p class="note small">网申 = 直接向<b>企业官网招聘系统 / 校招网申系统</b>投递。粘贴目标链接（每行一个），先「预览」只读探测投递入口与表单字段（不提交），确认无误后再「确认投递」真实提交。常规流程：在 9238 调试窗口打开官网 → 预览 → 人工补填必填项 →「记住当前表单」→ 确认投递。</p>
+          <label class="f">企业官网 / 校招网申链接（每行一个）</label>
+          <textarea id="wangshenUrls" class="area" placeholder="https://career.example.com/campus/apply/xxx&#10;https://job.example.com/social/apply/yyy" style="min-height:140px;margin-top:6px"></textarea>
+          <div class="row2" style="margin-top:10px;align-items:center">
+            <div style="display:flex;gap:8px">
+              <button class="btn primary sm" id="wangshenPreview">预览（只读探测）</button>
+              <button class="btn danger sm" id="wangshenApply">确认投递</button>
+              <button class="btn sm" id="wangshenRemember">记住当前表单</button>
+            </div>
+            <div class="muted small">「记住当前表单」把 9238 窗口当前页已填字段按域名存入记忆，下次同站自动填写（需先在窗口里人工补填）。</div>
+          </div>
+          <div class="progress"><i id="wangshenBar"></i></div>
+          <div class="out" id="wangshenOut" style="margin-top:10px;max-height:360px;white-space:pre-wrap"></div>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <h2>表单记忆 <span class="tag">按域名自动复用</span></h2>
+          <div class="row2" style="align-items:center">
+            <div class="muted small">这里只列<b>字段标签</b>与条数，<b>不回显值</b>——表单里回填的是姓名 / 手机号 / 邮箱，把值摊在页面上等于把个人信息暴露在界面上。</div>
+            <div style="display:flex;gap:8px"><button class="btn sm" id="fmRefresh">刷新</button></div>
+          </div>
+          <div id="fmList" class="muted small" style="margin-top:12px">点「刷新」读取已记住的表单。</div>
+        </div>
+
+        <div class="card" style="margin-top:14px">
+          <h2>自动填充信息 <span class="tag">对标 offerbiu · 投递时自动带入</span></h2>
+          <div class="note small">按真实投递表单的口径维护这 53 项。投递官网 / 网申时，后端拿表单上的<b>字段标签</b>到这份档案里取值回填（匹配顺序敏感：先「紧急联系电话 / 户籍所在地」这类具体规则，再「电话 / 城市」这类宽泛规则 —— 顺序反了会<b>填得出值但值是错的</b>，不报错）。<b>姓名 / 手机 / 邮箱 / 期望职位 / 期望城市 / 简历路径</b>仍归「个人中心 → 候选人档案」管：同一份数据不摆两份可编辑表单，免得「刚填完又被另一处覆盖」。</div>
+          <div class="af" id="afForm"></div>
+          <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button class="btn primary" id="afSave">保存</button>
+            <button class="btn" id="afReload">重新读取</button>
+            <span class="note small" id="afMsg"></span>
+            <span class="muted small" id="afStat"></span>
           </div>
         </div>
       </section>
@@ -1051,29 +1692,155 @@ window.addEventListener('resize', ()=>{ try{ refreshPwaBar(); }catch(_){ /* 忽�
 
 /* ---------- sidebar nav ---------- */
 const VIEW_META = {
-  dashboard:{t:'首页看板', s:'平台状态 · 投递漏斗 · AI 能力总览'},
+  dashboard:{t:'总览', s:'岗位 / 投递 / 面试 / Offer · 本周投递趋势 · 3 天内截止'},
+  apps:{t:'我的投递', s:'阶段看板 · 卡片/表格视图 · 快速筛选'},
+  jobs:{t:'校招信息库', s:'搜索筛选 · 截止倒计时 · 一键加入投递计划'},
+  jobsadd:{t:'添加岗位', s:'手动录入 · 从插件导入 · 保存到投递计划'},
+  resume:{t:'简历管理', s:'简历版本 · 上传解析 · 求职信模板'},
+  // ⚠️ 副标题必须跟着实现走：D 批之前这里挂的是一句占位文案，页面做出来之后不改它，
+  //    顶栏就会一直告诉用户「这页没做」—— 与实际相反且没人会报错。
+  //    （这里刻意不照抄那句旧文案：合约断言要钉「页面里不许再出现它」，写进注释会把自己弄红。）
+  resumemake:{t:'简历制作', s:'结构化草稿 · 实时预览 · 出 HTML/PDF'},
+  autofill:{t:'自动填充', s:'内置 CDP 表单通道 · 表单记忆'},
+  match:{t:'AI 匹配', s:'简历 × 岗位 · 匹配度 / 短板 / 改写方向 · 历史报告'},
+  optimize:{t:'简历优化', s:'优先短板 · 建议方向 · 简历优势'},
+  review:{t:'投递复盘', s:'投递节奏 · 阶段分布 · 推进率 · 明细'},
+  profile:{t:'个人中心', s:'候选人档案 · 数据概览 · 快捷入口'},
   deliver:{t:'投递中心', s:'批量投递 · 自动回复 · 邮箱直投'},
   records:{t:'职位记录', s:'投递漏斗 · 岗位列表 · JD 长图'},
-  resume:{t:'简历中心', s:'候选人档案 · 简历版本 · 求职信模板'},
+  logs:{t:'运行日志', s:'运行日志 · OCR 失败明细 · 投递记录'},
   advanced:{t:'高级功能', s:'定制简历 · 面试攻略 · 时间段 · 交换联系'},
   enhance:{t:'对标增强', s:'简历合规体检 · 远程筛选 · A/B 测试 · 证据回溯'},
-  logs:{t:'运行日志', s:'运行日志 · OCR 失败明细 · 投递记录'},
 };
 $$('#nav a').forEach(a=>a.addEventListener('click',()=>navigate(a.dataset.view)));
 function navigate(view){
   $$('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.view===view));
   $$('.view').forEach(v=>v.classList.toggle('active', v.id==='view-'+view));
+  // 🔴 视图必须在 VIEW_META 里有一项，否则下面两行直接 TypeError（页面白屏、什么都不发生）
   $('#viewTitle').textContent = VIEW_META[view].t;
   $('#viewSub').textContent = VIEW_META[view].s;
   if(view==='dashboard') loadDashboard();
+  if(view==='apps') loadMyApps();
+  if(view==='jobs') loadJobs();
+  if(view==='jobsadd') loadJobsAdd();
+  // 自动填充页有**两块**要初始化：表单记忆（form_memory）+ 自动填充信息（profile 53 项）。
+  // 少写一个 ⇒ 进页面看到的是「点『刷新』读取…」的静态占位，看着像加载慢、其实是没接线。
+  if(view==='autofill'){ loadFormMemory(); loadAutofillInfo(); }
+  if(view==='match') loadMatch();
+  if(view==='optimize') loadOptimize();
+  if(view==='review') loadReview();
+  if(view==='profile') loadProfile();
   if(view==='records') loadRecords();
   if(view==='resume') loadResume();
+  if(view==='resumemake') loadResumeMake();
   if(view==='deliver') loadQuota();
   if(view==='advanced') loadAdvanced();
   if(view==='enhance') loadEnhance();
   if(view==='logs') loadLogsTab();
 }
 $('#refreshBtn').addEventListener('click', ()=>{ loadDashboard(); if($('#view-records').classList.contains('active')) loadRecords(); });
+
+/* ---- 简历制作（D 批）按钮接线 ---- */
+$('#rmDocSel').addEventListener('change', ()=>{ rmOpen($('#rmDocSel').value); });
+$('#rmNew').addEventListener('click', async ()=>{
+  const btn = $('#rmNew'), msg = $('#rmMsg'); btn.disabled = true;
+  try{
+    const title = prompt('新草稿标题', '我的简历') || '我的简历';
+    const r = await api('/api/resume/docs', { method:'POST', body: JSON.stringify({ title }) });
+    if(msg) msg.textContent = '已新建';
+    await rmRefreshDocs();
+    const sel = $('#rmDocSel'); if(sel && r && r.doc) sel.value = r.doc.id;
+    await rmOpen(r.doc.id);
+  }catch(e){ if(msg) msg.textContent = '新建失败：' + e.message; }
+  finally{ btn.disabled = false; }
+});
+$('#rmSave').addEventListener('click', async ()=>{
+  const btn = $('#rmSave'), msg = $('#rmMsg');
+  if(!RM_DOC){ if(msg) msg.textContent = '还没有草稿，先点「新建草稿」'; return; }
+  btn.disabled = true;
+  try{
+    const r = await api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id),
+      { method:'PUT', body: JSON.stringify(rmDocFromForm()) });
+    // 后端会规整（截断 / 主题色白名单）⇒ 用**回显**覆盖表单，界面与库里才一致
+    rmFillForm((r && r.doc) || RM_DOC);
+    if(msg) msg.textContent = '已保存 ' + new Date().toLocaleTimeString('zh-CN');
+    await rmRefreshDocs(); await rmPreview();
+  }catch(e){ if(msg) msg.textContent = '保存失败：' + e.message; }
+  finally{ btn.disabled = false; }
+});
+$('#rmDel').addEventListener('click', async ()=>{
+  const msg = $('#rmMsg');
+  if(!RM_DOC){ if(msg) msg.textContent = '还没有草稿'; return; }
+  if(!confirm('删除草稿「' + (RM_DOC.title || RM_DOC.id) + '」？此操作不可撤销。')) return;
+  try{
+    await api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id), { method:'DELETE' });
+    if(msg) msg.textContent = '已删除';
+    await rmRefreshDocs();
+  }catch(e){ if(msg) msg.textContent = '删除失败：' + e.message; }
+});
+$('#rmAccent').addEventListener('change', ()=>{ rmPreview(); });
+/** 改内容即重渲染预览（防抖 400ms：每敲一个字都发一次请求会把后端打满）。 */
+let RM_T = null;
+['#rmName','#rmPhone','#rmEmail','#rmCity','#rmHeadline','#rmSummary','#rmHighlights','#rmSkills'].forEach((sel)=>{
+  const el = $(sel); if(!el) return;
+  el.addEventListener('input', ()=>{ clearTimeout(RM_T); RM_T = setTimeout(rmPreview, 400); });
+});
+/** #rmSections（高级文本框）改完 ⇒ 解析回卡片流 + 预览。它和卡片是真值的两种视图，互不回环。 */
+$('#rmSections').addEventListener('input', ()=>{
+  RM_SECTIONS = rmTextToSections($('#rmSections').value);
+  rmRenderSectionCards();
+  rmPreviewDebounced();
+});
+/** 版式模板分段控件：点哪格选哪格，仅同步高亮 + 触发预览（不改内容）。 */
+$('#rmVariant').addEventListener('click', (e)=>{
+  const b = e.target.closest('.seg-btn'); if(!b) return;
+  rmSetVariant(b.dataset.v); rmPreviewDebounced();
+});
+/** 快速添加板块：按预设示例把一整组条目塞进同名卡片。 */
+document.querySelectorAll('[data-rm-preset]').forEach((b)=> b.addEventListener('click', ()=> rmAddPreset(b.dataset.rmPreset)));
+/** 卡片流：结构性操作走 click 委托（重建视图）；纯文本编辑走 input 委托（就地改、不重建，保焦点）。 */
+$('#rmSectionCards').addEventListener('click', (e)=>{
+  const btn = e.target.closest('[data-act]'); if(!btn) return;
+  rmSectionCardAct(btn.dataset.act, btn.dataset.si, btn.dataset.ii);
+});
+$('#rmSectionCards').addEventListener('input', (e)=>{
+  const ta = e.target.closest('.rm-item-ta');
+  const ti = e.target.closest('.rm-sec-title');
+  if(ta){ const si = Number(ta.dataset.si), ii = Number(ta.dataset.ii); if(RM_SECTIONS[si]){ RM_SECTIONS[si].items[ii] = ta.value; rmSyncSectionsText(); rmPreviewDebounced(); } }
+  else if(ti){ const si = Number(ti.dataset.si); if(RM_SECTIONS[si]){ RM_SECTIONS[si].title = ti.value; rmSyncSectionsText(); rmPreviewDebounced(); } }
+});
+$('#rmHtml').addEventListener('click', async ()=>{
+  const msg = $('#rmMsg');
+  if(!RM_DOC){ if(msg) msg.textContent = '还没有草稿'; return; }
+  try{
+    const r = await api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id) + '/html',
+      { method:'POST', body: JSON.stringify({ doc: rmDocFromForm() }) });
+    // 🔴 走 Blob 下载，不走服务端文件：HTML 这一级**永远可用**，不依赖浏览器、也不落盘
+    const blob = new Blob([r.html || ''], { type: 'text/html;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (rmVal('#rmTitle') || '简历') + '.html';
+    a.click();
+    setTimeout(()=> URL.revokeObjectURL(a.href), 3000);
+    if(msg) msg.textContent = 'HTML 已下载';
+  }catch(e){ if(msg) msg.textContent = '下载失败：' + e.message; }
+});
+$('#rmPdf').addEventListener('click', async ()=>{
+  const btn = $('#rmPdf'), msg = $('#rmMsg');
+  if(!RM_DOC){ if(msg) msg.textContent = '还没有草稿'; return; }
+  btn.disabled = true; btn.textContent = '排版中…';
+  try{
+    const r = await api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id) + '/pdf',
+      { method:'POST', body: JSON.stringify({ doc: rmDocFromForm() }) });
+    // PDF 必须落盘（CDP 要一个文件路径）⇒ 由静态目录提供，前端只拿到相对 URL
+    if(msg) msg.innerHTML = '已生成：<a href="' + esc(r.url) + '" target="_blank" rel="noopener">打开 PDF</a>';
+  }catch(e){
+    // 503 = 浏览器不在线（不是服务端坏）。把原因如实显示，别让用户以为功能炸了
+    if(msg) msg.textContent = '生成失败：' + e.message;
+    await rmRefreshPdf();
+  }
+  finally{ btn.disabled = false; btn.textContent = '生成 PDF'; }
+});
 
 /* ================= 对标增强（LoopCV / Resumly / CareerBoom） ================= */
 async function loadEnhance(){ loadRemoteStat(); loadEvidence(); }
@@ -1262,11 +2029,34 @@ function renderFunnel(box, legend, ms, total){
   }).join('');
   legend.innerHTML = segs.map(s=>'<span><i class="'+s[0]+'"></i>'+s[2]+' '+s[1]+'</span>').join('');
 }
-/* O3：近 7 天投递趋势（内联条形，避免引入图表库） */
+/* 近 7 天投递趋势。
+ * 总览页有 #trendChart 时画**柱状图**（对齐 offerbiu 的「本周投递趋势」）；
+ * 没有时退回旧的纯文本条（追加到 #matchBasisNote 后面），保证别处的调用不受影响。
+ * 数据源 /api/stats/trend 按 created_at 的前 10 位（UTC ISO）分桶 —— 这是**入库时间**口径，
+ * 与岗位发布时间（posted_at）不是一回事，所以标题写「投递/入库」而不写「新增岗位」。 */
 async function loadTrend(){
   try{
     const t = await api('/api/stats/trend?days=7');
     if(!t || !t.items || !t.items.length) return;
+    const days = t.days || 7, total = t.total || 0;
+    const tag = document.getElementById('trendTag');
+    if(tag) tag.textContent = '近 ' + days + ' 天 · 共 ' + total + ' 份';
+    const chart = document.getElementById('trendChart');
+    if(chart){
+      const max = Math.max(1, t.max || 1);
+      chart.innerHTML = '<div class="trend">' + t.items.map(i=>{
+        const n = i.count || 0;
+        // 4–84px：0 也留一条极矮的灰柱，让「那天没有」和「没有那天」在视觉上区分开
+        const h = n ? Math.round(8 + (n / max) * 76) : 4;
+        return '<div class="col">'
+          + '<div class="n">' + n + '</div>'
+          + '<div class="bar' + (n ? '' : ' zero') + '" style="height:' + h + 'px" title="'
+          + esc(String(i.date || '')) + '：' + n + ' 份"></div>'
+          + '<div class="d">' + esc(String(i.date || '').slice(5)) + '</div>'
+          + '</div>';
+      }).join('') + '</div>';
+      return;
+    }
     let host = document.getElementById('trendLine');
     if(!host){
       host = document.createElement('div'); host.id='trendLine';
@@ -1278,10 +2068,862 @@ async function loadTrend(){
       const n = Math.max(i.count>0?1:0, Math.round((i.count/(t.max||1))*12));
       return i.date.slice(5) + '  ' + '█'.repeat(n) + '  ' + i.count;
     }).join('\n');
-    host.innerHTML = '<div class="note small" style="margin-top:8px"><b>近 '+t.days+' 天投递：</b>共 '+t.total+' 份'
+    host.innerHTML = '<div class="note small" style="margin-top:8px"><b>近 '+days+' 天投递：</b>共 '+total+' 份'
       + '<div class="muted" style="white-space:pre;font-family:ui-monospace,Consolas,monospace;line-height:1.5;margin-top:4px">'+esc(bars)+'</div></div>';
   }catch(e){ /* 趋势是只读附加信息，失败不影响看板 */ }
 }
+
+/* 总览：3 天内截止清单。
+ * 复用 deadlineInfo()（本地日历判据，不用字符串截断）——「已截止」不算，只报 0..3 天。
+ * 上限 8 条：这一栏是「今天该做什么」的提醒，不是列表页。 */
+async function renderSoon(){
+  const host = document.getElementById('soonList'); if(!host) return;
+  const tag = document.getElementById('soonTag');
+  host.innerHTML = '<div class="note small">加载中…</div>';
+  let jobs = [];
+  try{
+    const r = await api('/api/jobs');
+    jobs = (r && r.jobs) || [];
+  }catch(e){
+    host.innerHTML = '<div class="note small">读取失败：' + esc(e.message) + '</div>';
+    if(tag) tag.textContent = '不可用';
+    return;
+  }
+  const soon = jobs
+    .map(j=>({ j: j, d: deadlineInfo(j.deadline) }))
+    .filter(x=>x.d.days !== null && x.d.days >= 0 && x.d.days <= 3)
+    .sort((a,b)=>a.d.days - b.d.days);
+  // 🔴「没有岗位要截止」与「根本没有截止数据」是两件事：前者是可行动的结论，后者是缺数据。
+  //    都写「0 个」会让人以为是前者 —— 所以按「有没有任何一条带截止日」分成两套文案。
+  const dated = jobs.filter(j=>deadlineInfo(j.deadline).days !== null).length;
+  if(tag) tag.textContent = dated ? (soon.length + ' 个') : '—';
+  if(!dated){
+    host.innerHTML = jobs.length
+      ? '<div class="note small">岗位库 '+jobs.length+' 条记录<b>都没有填截止日期</b>（招聘平台也不提供）—— 这一栏现在不是「没有岗位要截止」，而是<b>算不出来</b>。<br>想让它有用：在「添加岗位」里手填「截止日期」，其余就当「招满为止」推进。</div>'
+      : '<div class="note small">岗位库为空 —— 去「添加岗位」录一条，或到「投递中心」采集。</div>';
+    return;
+  }
+  if(!soon.length){
+    host.innerHTML = '<div class="note small">近 3 天没有截止的岗位 —— 可以按自己的节奏推进。</div>';
+    return;
+  }
+  host.innerHTML = soon.slice(0,8).map(x=>{
+    const cls = x.d.days === 0 ? 'b-bad' : 'b-warn';
+    const full = (x.j.company||'–') + ' · ' + (x.j.position||'–');
+    return '<div class="kv" style="gap:10px;align-items:center">'
+      + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(full)+'">'+esc(full)+'</span>'
+      + '<span class="badge '+cls+'" style="flex:none">'+esc(x.d.text)+'</span></div>';
+  }).join('');
+}
+
+/* ================= AI 匹配 / 简历优化 / 投递复盘 / 个人中心 =================
+ * 这四页全部复用**已有后端**，不新增假数据：
+ *   AI 匹配  → POST /api/jobs/match-one（单岗位，避免全量打分的慢与贵）
+ *   简历优化 → POST /api/jobs/tailor（文案）/ POST /api/jobs/tailor-resume（出 PDF）
+ *   投递复盘 → GET /api/applications + GET /api/stats/trend
+ *   个人中心 → GET/PUT /api/profile
+ * 「历史报告」存在 localStorage（后端没有报告表）。HTML 里已如实写明「保存在本机浏览器」。
+ * ========================================================================= */
+
+const MATCH_HIST_KEY = 'ow_match_history_v1';
+let MT_SRC = 'pool';      // 'pool' = 选岗位库岗位，'paste' = 当场粘贴 JD
+let MT_JOBS = [];
+let OP_JOBS = [];
+
+function matchHistoryList(){
+  try{
+    const a = JSON.parse(localStorage.getItem(MATCH_HIST_KEY) || '[]');
+    return Array.isArray(a) ? a : [];
+  }catch(e){ return []; }
+}
+function matchHistoryPush(rec){
+  const list = [rec].concat(matchHistoryList()).slice(0, 30);
+  try{ localStorage.setItem(MATCH_HIST_KEY, JSON.stringify(list)); }catch(e){}
+  return list;
+}
+
+/** 报告正文（AI 匹配与历史回看共用）。三段结构与 offerbiu 的「简历优势 / 优先短板 / 建议方向」对齐。 */
+function matchReportHtml(r){
+  const li = (arr)=> (arr && arr.length)
+    ? '<ul style="margin:6px 0 0;padding-left:20px">' + arr.map(x=>'<li>'+esc(String(x))+'</li>').join('') + '</ul>'
+    : '<div class="note small">无</div>';
+  const job = r.job || {};
+  return '<div class="stat" style="margin-bottom:12px">'
+    + '<div class="v">'+esc(String(r.score))+'<span style="font-size:13px;color:var(--muted)"> / 100</span></div>'
+    + '<div class="l">'+esc(job.company||'（未指定公司）')+(job.position ? ' · '+esc(job.position) : '')+'</div></div>'
+    + '<b style="font-size:13px">简历优势（命中 '+((r.matched||[]).length)+' 项）</b>' + li(r.matched)
+    + '<b style="font-size:13px;display:block;margin-top:14px">优先短板（待补 '+((r.missing||[]).length)+' 项）</b>' + li(r.missing)
+    + '<b style="font-size:13px;display:block;margin-top:14px">建议方向</b>' + li(r.suggestions);
+}
+
+function renderMatchHistory(){
+  const sel = $('#mtHistory'), body = $('#mtHistoryBody');
+  if(!sel) return;
+  const list = matchHistoryList();
+  sel.innerHTML = '<option value="">选择历史报告…</option>' + list.map((r,i)=>
+    '<option value="'+i+'">'+esc(new Date(r.at).toLocaleString('zh-CN'))+' · '
+    + esc((r.job && r.job.company) || '—') + ' · ' + esc(String(r.score)) + ' 分</option>').join('');
+  if(!sel.dataset.bound){
+    sel.dataset.bound = '1';
+    sel.addEventListener('change', ()=>{
+      if(!body) return;
+      if(sel.value === ''){ body.innerHTML = ''; return; }
+      const r = matchHistoryList()[Number(sel.value)];
+      body.innerHTML = r ? matchReportHtml(r) : '';
+    });
+  }
+  if(body && !list.length){
+    body.innerHTML = '<div class="note small">还没有历史报告 —— 生成一次分析就会自动留档。</div>';
+  }
+}
+
+function mtPreviewJd(){
+  const host = $('#mtJdPreview'); if(!host) return;
+  const id = ($('#mtJob') && $('#mtJob').value) || '';
+  const j = MT_JOBS.filter(x=>x.id === id)[0];
+  if(!j){ host.textContent = '从上方选择岗位后显示…'; return; }
+  const d = deadlineInfo(j.deadline);
+  host.innerHTML = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>'
+    + '<div class="small muted" style="margin:4px 0 8px">'+esc(jobSrcName(j.source))
+    + (j.city ? ' · '+esc(j.city) : '') + (j.job_type ? ' · '+esc(j.job_type) : '')
+    + ' · '+esc(d.text)+'</div>'
+    + (j.jd && String(j.jd).trim()
+        ? esc(String(j.jd).slice(0, 1200))
+        : '<span class="muted">该岗位没有真 JD 文本（只有卡片摘要或长图）—— 直接匹配分数会偏低，建议切「粘贴 JD」手工补充。</span>');
+}
+
+async function loadMatch(){
+  const sel = $('#mtResume');
+  if(sel && !sel.dataset.filled){
+    try{
+      const v = await api('/api/resume/version');
+      sel.innerHTML = (v.options || []).map(o=>'<option value="'+esc(o.value)+'"'+(o.value===v.version?' selected':'')+'>'+esc(o.label)+'</option>').join('');
+      sel.dataset.filled = '1';
+      const note = $('#mtResumeNote');
+      if(note) note.textContent = (v.description||'') + '（原始稿：' + (v.hasOriginal?'已上传':'未上传')
+        + ' · 优化稿：' + (v.hasOptimized?'已上传':'未上传') + '）';
+    }catch(e){
+      sel.innerHTML = '<option value="">读取失败</option>';
+      const note = $('#mtResumeNote'); if(note) note.textContent = '读取简历版本失败：' + e.message;
+    }
+  }
+  const js = $('#mtJob');
+  if(js && !js.dataset.filled){
+    try{ const r = await api('/api/jobs'); MT_JOBS = (r && r.jobs) || []; }catch(e){ MT_JOBS = []; }
+    js.innerHTML = '<option value="">选择岗位…</option>' + MT_JOBS.slice(0,300).map(j=>
+      '<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('');
+    js.dataset.filled = '1';
+    js.addEventListener('change', mtPreviewJd);
+    if(js.options.length > 1){ js.selectedIndex = 1; mtPreviewJd(); }
+  }
+  renderMatchHistory();
+}
+
+async function matchRun(){
+  const btn = $('#mtRun'), msg = $('#mtMsg'), out = $('#mtResult'), tag = $('#mtScoreTag');
+  const body = {};
+  const rv = $('#mtResume');
+  if(rv && rv.value) body.version = rv.value;
+  if(MT_SRC === 'pool'){
+    const id = ($('#mtJob') && $('#mtJob').value) || '';
+    if(!id){ if(msg) msg.textContent = '请先选一个岗位，或切到「粘贴 JD」。'; return; }
+    body.jobId = id;
+  }else{
+    const jdEl = $('#mtPasteJd'), posEl = $('#mtPastePosition');
+    const jd = ((jdEl && jdEl.value) || '').trim();
+    const pos = ((posEl && posEl.value) || '').trim();
+    if(!jd && !pos){ if(msg) msg.textContent = '请至少填入岗位名称或 JD 正文。'; return; }
+    body.jd = jd; body.position = pos;
+  }
+  if(btn) btn.disabled = true;
+  if(msg) msg.textContent = 'AI 分析中…（约 5–20 秒，取决于模型）';
+  try{
+    const r = await api('/api/jobs/match-one', { method:'POST', body: JSON.stringify(body) });
+    if(tag) tag.textContent = '匹配度 ' + r.score + ' / 100';
+    if(out) out.innerHTML = matchReportHtml(r);
+    if(msg) msg.textContent = '完成 · 实际使用简历：' + (r.resumeFile ? String(r.resumeFile).split(/[\\/]/).pop() : '—');
+    matchHistoryPush({
+      at: new Date().toISOString(), job: r.job || null, score: r.score, resumeFile: r.resumeFile || null,
+      matched: r.matched || [], missing: r.missing || [], suggestions: r.suggestions || [],
+    });
+    renderMatchHistory();
+  }catch(e){
+    if(msg) msg.textContent = '失败：' + e.message;
+    if(out) out.innerHTML = '<div class="note bad">分析失败：' + esc(e.message) + '</div>';
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+/* ==================== 简历制作（D 批） ====================
+ * 三条刻意的设计：
+ *  ① 草稿是**结构化字段**（不是一段 HTML）—— 结构才能被匹配/定制/自动填充复用；
+ *     存 HTML 就又变成只能人看的死文本，且渲染时必然 innerHTML，XSS 面敞开。
+ *  ② 预览用 iframe 的 `srcdoc`、**不落盘**：草稿每敲一个字都会重渲染，
+ *     落盘会在 data/ 堆一地中间产物，还得再写一套清理。
+ *  ③ 「生成 PDF」是否可用，判据来自**服务端下发**的 `pdfVia` + 真实连接状态；
+ *     前端不硬编码平台名（否则后端改端口映射后，按钮会「看着能点、点了才 503」）。
+ * ========================================================== */
+let RM_DOC = null;        // 当前编辑中的草稿（null = 一份都没有）
+let RM_ACCENTS = [];      // 配色白名单（服务端下发，前端不另抄）
+let RM_VARIANTS = [];     // 版式模板白名单（服务端下发，前端不另抄）
+let RM_PDF_VIA = [];      // PDF 依赖哪些平台（服务端下发）
+let RM_SECTIONS = [];     // 经历/栏目卡片流的**真值**（与 #rmSections 文本框互为镜像）
+let RM_VARIANT = '';      // 当前选中的版式模板 key（与 #rmVariant 分段控件互为镜像）
+// 「快速添加板块」的示例模板：每行一条内容，会被合并进同名板块
+const RM_SECTION_TMPL = {
+  '实习经历': ['实习经历：XX 公司 · Java 后端开发实习生（2024.06 – 2024.09）',
+    '实习经历：负责订单服务接口开发与压测，单接口 QPS 提升 40%',
+    '实习经历：主导 3 人小组完成支付对账模块重构'],
+  '项目经历': ['项目经历：校园二手交易平台（Spring Boot + Vue）',
+    '项目经历：设计并落地订单与消息队列，峰值 800 QPS 无抖动',
+    '项目经历：用 Redis 缓存热点数据，接口 P95 从 320ms 降到 90ms'],
+  '教育经历': ['教育经历：XX 大学 · 计算机科学与技术（2020.09 – 2024.06）',
+    '教育经历：GPA 3.8/4.0，专业排名前 10%',
+    '教育经历：主修 数据结构、数据库系统、操作系统、计算机网络'],
+  '校园经历': ['校园经历：XX 社团 · 技术部部长（2022.09 – 2023.06）',
+    '校园经历：策划 5 场求职分享活动，累计覆盖 800+ 名同学'],
+  '荣誉奖项': ['荣誉奖项：国家奖学金（前 2%）', '荣誉奖项：xx 编程竞赛 省级二等奖'],
+  '自定义板块': ['自定义板块：在这里写板块名与内容'],
+};
+
+const rmVal = (sel)=> { const e = $(sel); return e ? String(e.value || '').trim() : ''; };
+const rmLines = (s)=> String(s || '').split('\n').map((x)=>x.trim()).filter(Boolean);
+const rmUnlines = (a)=> (Array.isArray(a) ? a : []).join('\n');
+
+/** 自定义栏目 → 文本框：`栏目名：条目`，同名栏目连写即归入同一栏（高级文本框 ↔ 卡片流 的序列化桥）。 */
+function rmSectionsToText(sections){
+  return (sections || []).map((s)=> (s.items && s.items.length)
+    ? s.items.map((i)=> s.title + '：' + i).join('\n')
+    : (s.title || '')).filter(Boolean).join('\n');
+}
+function rmTextToSections(text){
+  const out = [];
+  for(const line of rmLines(text)){
+    const parts = String(line).split(/[：:]/);
+    const title = String(parts[0] || '').trim();
+    if(!title) continue;
+    const item = parts.slice(1).join('：').trim();
+    const last = out[out.length - 1];
+    if(last && last.title === title && item){ last.items.push(item); continue; }
+    out.push({ title, items: item ? [item] : [] });
+  }
+  return out;
+}
+
+/** 卡片流 → 文本框（仅作镜像/兜底：用户在卡片里改完，把同一份数据写回 #rmSections）。
+ *  🔴 设 .value 不会触发 input 事件 ⇒ 不会有「改卡片 → 文本框监听 → 卡片重建」的回环。 */
+function rmSyncSectionsText(){
+  const t = $('#rmSections'); if(t) t.value = rmSectionsToText(RM_SECTIONS);
+}
+
+/** 渲染「经历与栏目」卡片流。RM_SECTIONS 是真值，这里只是它的视图。
+ *  ⚠️ 文本输入（条目 / 板块名）**不**触发本函数，避免正在敲字的 textarea 被重建而丢焦点/光标。 */
+function rmRenderSectionCards(){
+  const host = $('#rmSectionCards'); if(!host) return;
+  if(!RM_SECTIONS.length){
+    host.innerHTML = '<div class="rm-empty" style="padding:24px 0">还没有任何板块 —— 点下面的按钮快速添加，或在「高级」里直接粘贴。</div>';
+    rmSyncSectionsText();
+    return;
+  }
+  host.innerHTML = RM_SECTIONS.map((s, si)=> {
+    const items = (s.items || []).map((it, ii)=>
+      '<div class="rm-item" data-si="'+si+'" data-ii="'+ii+'">'
+        + '<textarea class="rm-item-ta" data-si="'+si+'" data-ii="'+ii+'" rows="2" placeholder="这一条的内容（每行一条）">'+esc(it)+'</textarea>'
+        + '<div class="rm-item-ops">'
+          + '<button class="btn xs" data-act="up" data-si="'+si+'" data-ii="'+ii+'" title="上移">↑</button>'
+          + '<button class="btn xs" data-act="down" data-si="'+si+'" data-ii="'+ii+'" title="下移">↓</button>'
+          + '<button class="btn xs danger" data-act="del" data-si="'+si+'" data-ii="'+ii+'" title="删除这条">✕</button>'
+        + '</div>'
+      + '</div>'
+    ).join('');
+    return '<div class="rm-sec-card" data-si="'+si+'">'
+      + '<div class="rm-sec-head">'
+        + '<input class="rm-sec-title" data-si="'+si+'" value="'+esc(s.title||'')+'" placeholder="板块名（如 实习经历）" />'
+        + '<div class="rm-sec-ops">'
+          + '<button class="btn xs" data-act="secup" data-si="'+si+'" title="上移板块">↑</button>'
+          + '<button class="btn xs" data-act="secdown" data-si="'+si+'" title="下移板块">↓</button>'
+          + '<button class="btn xs danger" data-act="secdel" data-si="'+si+'" title="删除板块">删除</button>'
+        + '</div>'
+      + '</div>'
+      + '<div class="rm-items">'+items+'</div>'
+    + '</div>';
+  }).join('');
+  rmSyncSectionsText();
+}
+
+/** 卡片流结构性操作（增 / 删 / 上下移），会重建视图；纯文本编辑走 input 委托不重建。 */
+function rmSectionCardAct(act, si, ii){
+  si = Number(si); ii = (ii == null ? null : Number(ii));
+  const sec = RM_SECTIONS[si];
+  if(act === 'secup' && si > 0){ RM_SECTIONS.splice(si,1); RM_SECTIONS.splice(si-1,0,sec); }
+  else if(act === 'secdown' && si < RM_SECTIONS.length-1){ RM_SECTIONS.splice(si,1); RM_SECTIONS.splice(si+1,0,sec); }
+  else if(act === 'secdel'){ RM_SECTIONS.splice(si,1); }
+  else if(act === 'additem' && sec){ sec.items = sec.items || []; sec.items.push(''); }
+  else if(act === 'up' && sec && ii > 0){ const a=sec.items, t=a[ii]; a[ii]=a[ii-1]; a[ii-1]=t; }
+  else if(act === 'down' && sec && ii < sec.items.length-1){ const a=sec.items, t=a[ii]; a[ii]=a[ii+1]; a[ii+1]=t; }
+  else if(act === 'del' && sec && ii >= 0){ sec.items.splice(ii,1); }
+  else return;
+  rmRenderSectionCards();
+  rmPreviewDebounced();
+}
+
+/** 快速添加板块：同名板块只追加条目（不重复建卡）；模板串去掉前缀「板块名：」。 */
+function rmAddPreset(key){
+  const tmpl = RM_SECTION_TMPL[key] || [key + '：在此填写内容'];
+  let sec = RM_SECTIONS.filter((s)=> s.title === key)[0];
+  if(!sec){ sec = { title: key, items: [] }; RM_SECTIONS.push(sec); }
+  const pre = key + '：';
+  tmpl.forEach((line)=> sec.items.push(line.startsWith(pre) ? line.slice(pre.length) : line));
+  rmRenderSectionCards();
+  rmPreviewDebounced();
+}
+
+/** 预览防抖：每敲一个字都发请求会把后端打满 ⇒ 400ms 合并一次。 */
+function rmPreviewDebounced(){ clearTimeout(RM_T); RM_T = setTimeout(rmPreview, 400); }
+
+/** 空态占位（没有草稿时预览区给一句说明，而不是一片空白）。 */
+function rmToggleEmpty(hide){
+  const e = $('#rmEmpty'); if(e) e.style.display = hide ? 'none' : '';
+}
+
+/** 选中版式模板：同步 RM_VARIANT 与分段控件高亮（不立即重渲染，交给调用方预览）。 */
+function rmSetVariant(key){
+  RM_VARIANT = key;
+  const seg = $('#rmVariant');
+  if(seg) seg.querySelectorAll('.seg-btn').forEach((b)=> b.classList.toggle('on', b.dataset.v === key));
+}
+
+/** 表单 → 草稿对象（未保存的内容也要能预览/导出 ⇒ 预览与导出都发这一份）。 */
+function rmDocFromForm(){
+  const d = RM_DOC || {};
+  return {
+    id: d.id || '',
+    title: rmVal('#rmTitle') || '我的简历',
+    basics: {
+      name: rmVal('#rmName'), phone: rmVal('#rmPhone'), email: rmVal('#rmEmail'),
+      city: rmVal('#rmCity'), headline: rmVal('#rmHeadline'),
+    },
+    summary: (($('#rmSummary') && $('#rmSummary').value) || '').trim(),
+    highlights: rmLines($('#rmHighlights') && $('#rmHighlights').value),
+    skills: rmLines($('#rmSkills') && $('#rmSkills').value),
+    sections: RM_SECTIONS,
+    theme: {
+      accent: rmVal('#rmAccent') || (d.theme && d.theme.accent) || '',
+      variant: RM_VARIANT || (d.theme && d.theme.variant) || '',
+    },
+  };
+}
+
+function rmFillForm(d){
+  RM_DOC = d;
+  const set = (id, v)=>{ const e = $(id); if(e) e.value = (v == null ? '' : String(v)); };
+  const b = d.basics || {};
+  set('#rmTitle', d.title); set('#rmName', b.name); set('#rmPhone', b.phone);
+  set('#rmEmail', b.email); set('#rmCity', b.city); set('#rmHeadline', b.headline);
+  set('#rmSummary', d.summary);
+  set('#rmHighlights', rmUnlines(d.highlights));
+  set('#rmSkills', rmUnlines(d.skills));
+  RM_SECTIONS = Array.isArray(d.sections)
+    ? d.sections.map((s)=> ({ title: s.title || '', items: Array.isArray(s.items) ? s.items.slice() : [] }))
+    : [];
+  rmRenderSectionCards();
+  set('#rmAccent', (d.theme && d.theme.accent) || '');
+  rmSetVariant((d.theme && d.theme.variant) || '');
+  rmToggleEmpty(false);
+}
+
+/** 预览：把「当前表单内容」交给后端渲染，用 srcdoc 显示（不落盘）。 */
+async function rmPreview(){
+  const box = $('#rmPreview');
+  if(!box || !RM_DOC) return;
+  try{
+    const r = await api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id) + '/html',
+      { method:'POST', body: JSON.stringify({ doc: rmDocFromForm() }) });
+    box.srcdoc = r.html || '';
+  }catch(e){ box.srcdoc = ''; }
+}
+
+/** 「生成 PDF」按钮：判据 = 服务端下发的 pdfVia 里**任一**平台在线。
+ *  🔴 不能用「随便哪个浏览器在线」——那样判断会失真（能点但后端用的是另一批平台）。 */
+async function rmRefreshPdf(){
+  const btn = $('#rmPdf'), why = $('#rmPdfWhy');
+  if(!btn) return;
+  let connected = {};
+  try{ const r = await api('/api/browser/connections'); connected = (r && r.connections) || {}; }catch(e){}
+  const up = RM_PDF_VIA.filter((p)=> connected[p] && connected[p].connected);
+  const ok = RM_PDF_VIA.length === 0 || up.length > 0;
+  btn.disabled = !ok;
+  if(why){
+    why.textContent = ok
+      ? (RM_PDF_VIA.length ? 'PDF 借 ' + RM_PDF_VIA.join(' / ') + ' 的浏览器排版。' : '')
+      : 'PDF 需要浏览器在线（后端要求 ' + RM_PDF_VIA.join(' / ') + '），当前都没有连接 —— 去「平台」页启动后再来。';
+  }
+}
+
+async function rmRefreshDocs(){
+  const sel = $('#rmDocSel'); if(!sel) return;
+  let items = [];
+  try{ const r = await api('/api/resume/docs'); items = (r && r.items) || []; }catch(e){}
+  sel.innerHTML = items.length
+    ? items.map((d)=>'<option value="'+esc(d.id)+'">'+esc(d.title || d.id)+'</option>').join('')
+    : '<option value="">（还没有草稿）</option>';
+  if(items.length) await rmOpen(items[0].id);
+  else { RM_DOC = null; const box = $('#rmPreview'); if(box) box.srcdoc = ''; rmToggleEmpty(true); }
+}
+
+async function rmOpen(id){
+  if(!id) return;
+  try{
+    const r = await api('/api/resume/docs/' + encodeURIComponent(id));
+    rmFillForm(r.doc || {});
+    await rmPreview();
+  }catch(e){ const m = $('#rmMsg'); if(m) m.textContent = '打开失败：' + e.message; }
+}
+
+async function loadResumeMake(){
+  // ① 服务端常量（配色白名单 + PDF 依赖的平台）—— 前端不另抄一份
+  try{
+    const c = await api('/api/resume/capabilities');
+    RM_ACCENTS = (c && c.accents) || [];
+    RM_VARIANTS = (c && c.variants) || [];
+    RM_PDF_VIA = (c && c.pdfVia) || [];
+    const sel = $('#rmAccent');
+    if(sel) sel.innerHTML = RM_ACCENTS.map((a)=>'<option value="'+esc(a.key)+'">'+esc(a.label)+'</option>').join('');
+    const seg = $('#rmVariant');
+    if(seg) seg.innerHTML = RM_VARIANTS.map((v)=> '<button type="button" class="seg-btn" data-v="'+esc(v.key)+'" title="'+esc(v.desc||'')+'">'+esc(v.label)+'</button>').join('');
+    if(!RM_VARIANT) rmSetVariant((c && c.defaultVariant) || (RM_VARIANTS[0] && RM_VARIANTS[0].key) || '');
+  }catch(e){}
+  await rmRefreshPdf();
+  await rmRefreshDocs();
+}
+
+/* ---------- 简历优化 ---------- */
+function optimizePreviewJd(){
+  const host = $('#opJd'); if(!host) return;
+  const id = ($('#opJob') && $('#opJob').value) || '';
+  const j = OP_JOBS.filter(x=>x.id === id)[0];
+  if(!j){ host.textContent = '选择岗位后显示…'; return; }
+  host.innerHTML = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>'
+    + (j.jd && String(j.jd).trim()
+        ? '<div style="margin-top:6px">'+esc(String(j.jd).slice(0,1200))+'</div>'
+        : '<div class="muted" style="margin-top:6px">该岗位无真 JD 文本 —— 定制效果会打折。</div>');
+}
+
+function optimizeReportHtml(r, sugg){
+  const li = (arr)=> (arr && arr.length)
+    ? '<ul style="margin:6px 0 0;padding-left:20px">' + arr.map(x=>'<li>'+esc(String(x))+'</li>').join('') + '</ul>'
+    : '<div class="note small">无</div>';
+  const adv = (r.highlights && r.highlights.length) ? r.highlights : (r.summary ? [r.summary] : []);
+  return '<div class="stat" style="margin-bottom:12px">'
+    + '<div class="v">'+esc(String(r.matchScore))+'<span style="font-size:13px;color:var(--muted)"> / 100</span></div>'
+    + '<div class="l">生成方式：' + (r.source === 'llm' ? 'AI 定制' : '本地规则（未配置或调用失败时的兜底）') + '</div></div>'
+    + '<b style="font-size:13px">优先短板（待补 '+((r.missing||[]).length)+' 项）</b>' + li(r.missing)
+    + '<b style="font-size:13px;display:block;margin-top:14px">建议方向</b>'
+    + (sugg && sugg.length ? li(sugg)
+        : '<div class="note small">这一项来自「AI 匹配」报告 —— 在上方「AI 匹配报告参考」里选一条，或先去「AI 匹配」生成。</div>')
+    + '<b style="font-size:13px;display:block;margin-top:14px">简历优势（可用于改写的既有事实）</b>' + li(adv)
+    + ((r.orderedSkills && r.orderedSkills.length)
+        ? '<b style="font-size:13px;display:block;margin-top:14px">技能（按岗位相关度排序）</b>'
+          + '<div class="note small" style="white-space:pre-wrap">'+esc(r.orderedSkills.join('、'))+'</div>'
+        : '');
+}
+
+/** 「建议方向」取自 AI 匹配历史报告（后端 tailor 接口不产出 suggestions，不臆造）。 */
+function pickedOptimizeSuggestions(){
+  const rp = $('#opReport');
+  if(!rp || rp.value === '') return [];
+  const r = matchHistoryList()[Number(rp.value)];
+  return (r && r.suggestions) || [];
+}
+
+async function loadOptimize(){
+  const sel = $('#opResume');
+  if(sel && !sel.dataset.filled){
+    try{
+      const v = await api('/api/resume/version');
+      sel.innerHTML = (v.options || []).map(o=>'<option value="'+esc(o.value)+'"'+(o.value===v.version?' selected':'')+'>'+esc(o.label)+'</option>').join('');
+      sel.dataset.filled = '1';
+    }catch(e){ sel.innerHTML = '<option value="">读取失败</option>'; }
+  }
+  const js = $('#opJob');
+  if(js && !js.dataset.filled){
+    try{ OP_JOBS = (await fillJobSelect(js)) || []; }catch(e){ OP_JOBS = []; }
+    js.dataset.filled = '1';
+    js.addEventListener('change', optimizePreviewJd);
+    if(js.options.length > 1){ js.selectedIndex = 1; optimizePreviewJd(); }
+  }
+  const rp = $('#opReport');
+  if(rp && !rp.dataset.filled){
+    rp.innerHTML = '<option value="">（无 —— 建议先在「AI 匹配」生成一次）</option>'
+      + matchHistoryList().map((r,i)=>'<option value="'+i+'">'+esc(new Date(r.at).toLocaleString('zh-CN'))
+        + ' · ' + esc((r.job && r.job.company) || '—') + ' · ' + esc(String(r.score)) + ' 分</option>').join('');
+    rp.dataset.filled = '1';
+  }
+}
+
+async function optimizeRun(){
+  const msg = $('#opMsg'), out = $('#opResult'), tag = $('#opScoreTag');
+  const id = ($('#opJob') && $('#opJob').value) || '';
+  if(!id){ if(msg) msg.textContent = '请先选目标岗位。'; return; }
+  const btn = $('#opRun'); if(btn) btn.disabled = true;
+  if(msg) msg.textContent = '生成中…（未配置 LLM 时会走本地规则兜底）';
+  try{
+    const r = await api('/api/jobs/tailor', { method:'POST', body: JSON.stringify({ jobId: id }) });
+    if(tag) tag.textContent = '匹配度 ' + r.matchScore + ' / 100';
+    if(out) out.innerHTML = optimizeReportHtml(r, pickedOptimizeSuggestions());
+    if(msg) msg.textContent = '完成。';
+  }catch(e){
+    if(msg) msg.textContent = '失败：' + e.message;
+    if(out) out.innerHTML = '<div class="note bad">生成失败：' + esc(e.message) + '</div>';
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+async function optimizeTailor(){
+  const msg = $('#opMsg'), out = $('#opResult'), tag = $('#opScoreTag');
+  const id = ($('#opJob') && $('#opJob').value) || '';
+  if(!id){ if(msg) msg.textContent = '请先选目标岗位。'; return; }
+  const btn = $('#opTailor'); if(btn) btn.disabled = true;
+  // ⚠️ PDF 渲染要借 Chrome（CDP）。没开调试窗口时这里会明确失败 —— 如实报错，不假装成功。
+  if(msg) msg.textContent = '正在生成 PDF…（需要本机 Chrome 调试窗口可用）';
+  try{
+    const r = await api('/api/jobs/tailor-resume', { method:'POST', body: JSON.stringify({ jobId: id }) });
+    if(!r.ok) throw new Error(r.error || 'PDF 生成失败');
+    if(tag) tag.textContent = '匹配度 ' + r.matchScore + ' / 100';
+    if(out) out.innerHTML = '<div class="note b-ok" style="background:var(--ok-soft);color:var(--ok);border-color:transparent">'
+      + '✅ 定制简历已生成' + (r.cached ? '（命中缓存，直接复用上次结果）' : '') + '</div>'
+      + '<div class="kv"><span>文件</span><b style="word-break:break-all">'+esc(String(r.pdfPath||'').split(/[\\/]/).pop())+'</b></div>'
+      + '<div style="margin-top:12px"><a class="btn" href="'+esc(r.url||'#')+'" target="_blank" rel="noopener">打开 PDF</a></div>'
+      + '<div class="note small" style="margin-top:12px">这个文件已经能被投递链路当作附件使用（邮箱直投传 tailor:true 会自动复用同一份）。</div>';
+    if(msg) msg.textContent = '完成。';
+  }catch(e){
+    if(msg) msg.textContent = '失败：' + e.message;
+    if(out) out.innerHTML = '<div class="note bad">定制简历生成失败：' + esc(e.message)
+      + '<div class="small" style="margin-top:6px">最常见原因是 Chrome 调试窗口没开 —— PDF 渲染依赖它；也可能是该岗位没有 JD 文本。</div></div>';
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+/* ---------- 投递复盘 ----------
+   🔴 4 个指标 + 4 段行动清单**全部由 /api/stats/review 给**，页面不自己算。
+   此前页面按 created_at 现算了一遍（回复率/推进率），与后端各有一套口径 ——
+   加了「笔试」阶段后，两套口径必然对不上（一边算进去、一边没算）。
+   页面只负责把结构化条目拼成中文，**判断逻辑一行都不在这里**。 */
+let RV_PLAN = null;
+
+async function loadReview(){
+  let apps = [];
+  try{ const r = await api('/api/applications'); apps = (r && r.applications) || []; }catch(e){}
+
+  let plan = null, revErr = '';
+  try{ plan = await api('/api/stats/review'); }catch(e){ revErr = e.message; }
+  RV_PLAN = plan;
+
+  renderReviewStats(plan, revErr);
+  renderReviewActions(plan, revErr);
+  await renderReviewTrend();
+  renderReviewStages(apps);
+  renderReviewList(apps);
+}
+
+function renderReviewStats(plan, revErr){
+  const box = $('#rvStats'); if(!box) return;
+  const cell = (v,l,note)=> '<div class="card"><div class="stat"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>'
+    + '<div class="note small" style="margin-top:8px">'+note+'</div></div>';
+  if(!plan){
+    // 🔴 取不到复盘数据时**不许悄悄退回「前端现算」**：那样会得到一份看起来正常的旧口径数字，
+    //    用户根本不知道自己在看哪套口径。说清楚比给个数好。
+    box.innerHTML = '<div class="card" style="grid-column:span 4"><div class="note bad">'
+      + '复盘数据取不到：'+esc(revErr||'未知错误')
+      + '<div class="small" style="margin-top:6px">下方明细仍可查看，但指标与行动清单不可用。'
+      + '若是刚改完后端，多半是还没重启（新接口没生效）。</div></div></div>';
+    return;
+  }
+  const m = plan.metrics, th = plan.thresholds || {};
+  const wd = th.weekDays || 7;
+  box.innerHTML =
+      cell(m.total, '投递总数', '本周新增 '+m.weekNew+' 条（近 '+wd+' 个日历日）')
+    + cell(m.replied, '有回复', '回复率 '+m.repliedRate+'% — 有回复 ÷ 已投出 '+m.sent+' 条；已拒绝 '+m.rejected+' 条单列')
+    + cell(m.flowNext7 + (m.unscheduledFlow ? ' <span style="font-size:14px;color:var(--warn)">+'+m.unscheduledFlow+'</span>' : ''),
+           '近期笔面安排',
+           '今天起 '+wd+' 天内 '+m.flowNext7+' 场'
+           + (m.unscheduledFlow ? '；另有 <b style="color:var(--warn)">'+m.unscheduledFlow+' 条没记时间</b>' : ''))
+    + cell(m.advanceRate+'%', '推进率',
+           '已推进 '+m.advanced+' 条（笔试 '+m.written+' / 面试 '+m.interview+' / Offer '+m.offer+'）÷ 已投出 '+m.sent+' 条');
+}
+
+/** 行动清单：结构化条目 → 中文。
+ *  ⚠️ item() 只转义 title；sub 是**预先转义好的 HTML**（里面要放 <b> 之类），
+ *     所以 sub 里凡是来自数据源的部分都必须自己 esc()。 */
+function renderReviewActions(plan, revErr){
+  const host = $('#rvActions'); if(!host) return;
+  if(!plan){
+    host.innerHTML = '<div class="card"><div class="note bad">行动清单不可用：'+esc(revErr||'复盘数据取不到')+'</div></div>';
+    return;
+  }
+  const b = plan.blocks || {}, th = plan.thresholds || {};
+  const item = (cls, tag, title, sub) => '<div class="it '+cls+'"><span class="tag2">'+esc(tag)+'</span>'
+    + '<span class="tx"><b>'+esc(title)+'</b>'+(sub ? '<span class="sm">'+sub+'</span>' : '')+'</span></div>';
+  const none = (t) => '<div class="none">'+t+'</div>';
+
+  const pri = (b.priority||[]).map(p=>{
+    const days = p.daysLeft === 0 ? '今天' : '剩 '+p.daysLeft+' 天';
+    const what = p.kind === 'deadline' ? ('截止 '+String(p.at).slice(5)) : (String(p.at).slice(5)+' 笔面');
+    return item(p.daysLeft === 0 ? 'd0' : 'd1', days, p.company+' · '+p.position,
+      esc(jobSrcName(p.platform)) + ' · ' + esc(what));
+  }).join('') || none('这几天没有临近截止的岗位，也没有安排在即的笔面。');
+
+  const sch = (b.schedule||[]).slice(0,20).map(s=>{
+    const kind = s.kind === 'written' ? '笔试' : '面试';
+    if(!s.scheduled){
+      return item('', '时间未定', s.company+' · '+s.position,
+        esc(jobSrcName(s.platform))+' · '+kind+' · 还没记时间 —— 去「我的投递」那条记录上点「改时间」');
+    }
+    const rel = s.daysLeft === 0 ? '今天' : (s.daysLeft > 0 ? '剩 '+s.daysLeft+' 天' : '已过去 '+(-s.daysLeft)+' 天');
+    return item(s.daysLeft === 0 ? 'd0' : '', rel, s.company+' · '+s.position,
+      esc(jobSrcName(s.platform))+' · '+kind+' '+esc(s.at)+(s.round ? ' · '+esc(s.round) : ''));
+  }).join('') || none('还没有记录笔试或面试时间。');
+
+  const stl = (b.stalled||[]).slice(0,20).map(x=>{
+    const isMiss = x.reason === 'unscheduled-written';
+    const tag = isMiss ? '缺时间' : (x.days + ' 天');
+    const sub = isMiss
+      ? esc(jobSrcName(x.platform)) + ' · 状态已是「' + (APP_STATUS[x.status] || x.status) + '」但没记时间'
+      : esc(jobSrcName(x.platform)) + ' · 投出去 ' + x.days + ' 天了，一直停在「' + (APP_STATUS[x.status] || x.status) + '」';
+    return item(isMiss ? 'd1' : '', tag, x.company+' · '+x.position, sub);
+  }).join('') || none('没有长期无进展的投递。');
+
+  const sug = (b.nextWeek||[]).map((s,i)=>
+    '<div class="sug"><span class="n">'+(i+1)+'</span><span>'+esc(s.text)+'</span></div>').join('')
+    || none('暂时没有建议。');
+
+  host.innerHTML = '<div class="grid cols-2" style="gap:16px">'
+    + '<div class="card"><h2>近期需要优先处理 <span class="tag">'+((b.priority||[]).length)+' 项</span></h2>'
+    +   '<div class="note small">剩 N 天 ≤ '+(th.priorityDays)+' 的截止岗位，以及安排在即的笔面。</div>'
+    +   '<div class="act" style="margin-top:10px">'+pri+'</div></div>'
+    + '<div class="card"><h2>近期笔面安排 <span class="tag">'+((b.schedule||[]).length)+' 场</span></h2>'
+    +   '<div class="note small">已排定的按时间先后；没记时间的排在后面。</div>'
+    +   '<div class="act" style="margin-top:10px">'+sch+'</div></div>'
+    + '<div class="card"><h2>长时间没进展 <span class="tag">'+((b.stalled||[]).length)+' 条</span></h2>'
+    +   '<div class="note small">投出去 ≥ '+(th.stalledDays)+' 天没进笔面，以及状态到了却没记时间的。</div>'
+    +   '<div class="act" style="margin-top:10px">'+stl+'</div></div>'
+    + '<div class="card"><h2>下周行动建议</h2>'
+    +   '<div class="act" style="margin-top:10px">'+sug+'</div>'
+    +   '<div class="note" style="margin-top:12px;background:var(--brand-soft);border-radius:9px;padding:10px 12px">'
+    +     '<b>复盘重点：</b>'+esc(b.focus||'—')+'</div></div>'
+    + '</div>';
+}
+
+// 本周投递节奏（/api/stats/trend 统计的就是 applications.created_at ⇒ 口径就是「投递」）
+async function renderReviewTrend(){
+  try{
+    const t = await api('/api/stats/trend?days=7');
+    const note = $('#rvChartNote');
+    if(note) note.textContent = '近 ' + (t.days||7) + ' 天共 ' + (t.total||0) + ' 份；峰值 ' + (t.max||0) + ' 份/天。';
+    const host = $('#rvChart');
+    if(host && t.items && t.items.length){
+      const max = Math.max(1, t.max || 1);
+      host.innerHTML = '<div class="rvb">' + t.items.map(i=>{
+        const w = Math.round(((i.count||0) / max) * 100);
+        return '<div class="row"><span class="lb">'+esc(String(i.date||'').slice(5))+'</span>'
+          + '<span class="tk"><i style="width:'+w+'%"></i></span>'
+          + '<span class="vl">'+(i.count||0)+'</span></div>';
+      }).join('') + '</div>';
+    }
+  }catch(e){ /* 附加信息，失败不影响 */ }
+}
+
+function renderReviewStages(apps){
+  const stages = $('#rvStages'); if(!stages) return;
+  const cnt = {};
+  for(const a of apps){ const k = a.status || 'unknown'; cnt[k] = (cnt[k]||0)+1; }
+  const total = apps.length || 1;
+  stages.innerHTML = Object.keys(APP_STATUS).map(k=>{
+    const n = cnt[k] || 0;
+    const w = Math.round(n / total * 100);
+    return '<div class="row" style="display:flex;align-items:center;gap:9px;font-size:12.5px;padding:5px 0">'
+      + '<span style="width:56px;flex:none;color:var(--muted)">'+esc(APP_STATUS[k])+'</span>'
+      + '<span style="flex:1;background:#eef1f5;border-radius:6px;height:14px;overflow:hidden">'
+      +   '<i style="display:block;height:100%;width:'+w+'%;background:linear-gradient(90deg,var(--brand),var(--brand2))"></i></span>'
+      + '<span style="width:34px;text-align:right;font-weight:700">'+n+'</span></div>';
+  }).join('') + '<div class="note small" style="margin-top:10px">口径：投递台账 ' + apps.length
+    + ' 条。「笔试」单列；面试**不拆**成一面/二面四个列 —— 轮次记在每条记录的「面试轮次」上。</div>';
+}
+
+function renderReviewList(apps){
+  const listHost = $('#rvList');
+  const c = $('#rvCount'); if(c) c.textContent = apps.length + ' 条';
+  if(!listHost) return;
+  if(!apps.length){
+    listHost.innerHTML = '<div class="empty">还没有投递记录 —— 去「投递中心」跑一轮，或先在「校招信息库」挑岗位。</div>';
+    return;
+  }
+  const sorted = apps.slice().sort((a,b)=> String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  listHost.innerHTML = '<div style="overflow:auto"><table class="tbl"><thead><tr>'
+    + '<th>公司</th><th>职位</th><th>阶段</th><th>平台</th><th>城市</th><th style="width:150px">投递时间</th><th>笔面 / 结果时间</th></tr></thead><tbody>'
+    + sorted.slice(0,100).map(a=>{
+      const n = appNodeText(a);
+      return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(a.position||'–')+'</td>'
+        + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span></td>'
+        + '<td>'+esc(jobSrcName(a.platform))+'</td><td>'+esc(a.city||'–')+'</td>'
+        + '<td class="small muted">'+esc(fmtTs(a.created_at))+'</td>'
+        + '<td class="small"'+(n.cls==='warn'?' style="color:var(--warn)"':' class="small muted"')+'>'+esc(n.text)+'</td></tr>';
+    }).join('')
+    + '</tbody></table></div>'
+    + (sorted.length > 100 ? '<div class="note small">只显示最近 100 条，共 '+sorted.length+' 条。</div>' : '');
+}
+
+/* ---------- 个人中心 ---------- */
+async function loadProfile(){
+  const msg = $('#pfMsg');
+  try{
+    const r = await api('/api/profile'); const p = (r && r.profile) || {};
+    const set = (id, v)=>{ const e = $(id); if(e) e.value = (v == null ? '' : String(v)); };
+    set('#pfNameInput',   p.name);
+    set('#pfPhoneInput',  p.phone);
+    set('#pfEmailInput',  p.email);
+    // 期望岗位在后端是**顿号/逗号分隔的字符串**（parsePositions 会拆），这里就按字符串编辑
+    set('#pfExpectInput', p.expectedPositions);
+    set('#pfCityInput',   p.expectedCity || p.city);
+    set('#pfResumeInput', p.resume_path);
+    if(msg) msg.textContent = '';
+    await loadProfileStats(p);
+  }catch(e){
+    if(msg) msg.textContent = '读取失败：' + e.message;
+  }
+}
+
+/* 个人中心「数据概览」+「AI 匹配 / 优化历史」。
+ * ⚠️ 这里刻意**不再拉 /api/jobs 与 /api/applications 全量**：原来为了显示 5 个数字，
+ *    把整个岗位池（真实库 2500+ 条）和全部投递记录搬过网，页面越用越慢。
+ *    计数改走 /api/stats/summary（后端 SQL 聚合，返回体与数据规模无关）。 */
+async function loadProfileStats(p){
+  const st = $('#pfStats');
+  let sum = null;
+  try{ sum = await api('/api/stats/summary'); }catch(e){}
+  if(st){
+    const kv = (k, v)=> '<div class="kv"><span>'+k+'</span><b>'+v+'</b></div>';
+    if(!sum){
+      st.innerHTML = '<div class="note small">概览暂时取不到（后端未重启或接口异常）。</div>';
+    }else{
+      const s = sum.jobsByStatus || {}, m = sum.match || {};
+      st.innerHTML = kv('岗位池', (sum.jobs || 0) + ' 个')
+        + kv('待投 / 已投', (s.candidate || 0) + ' / ' + (s.applied || 0))
+        + kv('投递台账', (sum.applications || 0) + ' 条')
+        + kv('已匹配岗位', (m.scored || 0) + ' 个（均分 ' + (m.avg || 0) + '）')
+        + kv('简历文件', p.resume_path ? '已配置' : '<span style="color:var(--warn)">未配置</span>')
+        + kv('AI 署名', p.aiName ? esc(String(p.aiName)) : '（未设置，用本机默认）')
+        + kv('档案更新', p.updatedAt ? esc(new Date(p.updatedAt).toLocaleString('zh-CN')) : '—');
+    }
+  }
+  loadProfileHistory();
+}
+
+/* 「AI 匹配 / 优化历史」两块 + 「仅本机」补位。
+ * 🔴 来源**必须分开显示**：匹配分数本来就在库里（换设备也在）；
+ *    localStorage 那份只有「当场粘贴 JD」这类**库里没有岗位行**的记录才需要补位。
+ *    混在一起显示会让用户误以为「历史只存在自己这台机器上」。 */
+async function loadProfileHistory(){
+  const mList = $('#pfMatchList'), tList = $('#pfTailorList'), lHost = $('#pfLocalList');
+  const mCnt = $('#pfMatchCount'), tCnt = $('#pfTailorCount');
+  // ① AI 匹配（服务端为准）
+  try{
+    const r = await api('/api/stats/match-history?limit=8');
+    const items = (r && r.items) || [];
+    if(mCnt) mCnt.textContent = String((r && r.total) != null ? r.total : items.length);
+    if(mList){
+      mList.innerHTML = items.length ? items.map(pfMatchRow).join('')
+        : '<div class="note small">还没有 —— 在「AI 匹配」页跑一次分析后，这里会自动出现。</div>';
+    }
+  }catch(e){ if(mList) mList.innerHTML = '<div class="note small">取不到：'+esc(e.message)+'</div>'; }
+  // ② 简历优化产物（磁盘台账，未进库）
+  try{
+    const r = await api('/api/resume/tailored-history');
+    const items = (r && r.items) || [];
+    if(tCnt) tCnt.textContent = String((r && r.total) != null ? r.total : items.length);
+    if(tList){
+      tList.innerHTML = items.length ? items.map(pfTailorRow).join('')
+        : '<div class="note small">还没有 —— 在「简历优化」页生成一次定制简历后，这里会自动出现。</div>';
+    }
+  }catch(e){ if(tList) tList.innerHTML = '<div class="note small">取不到：'+esc(e.message)+'</div>'; }
+  // ③ 「仅本机」补位：localStorage 里没有对应岗位行的记录
+  if(lHost){
+    const local = matchHistoryList().filter(function(r){ return !(r && r.job && r.job.id); });
+    lHost.innerHTML = local.length
+      ? '<div class="note small" style="margin-top:0"><b>仅本机（'+local.length+' 条）</b>：'
+        + '这些是当场粘贴 JD 跑的匹配，库里没有对应岗位行，所以只存在这台浏览器 —— 清缓存会丢。'
+        + '<div style="margin-top:6px">' + local.slice(0, 5).map(function(r){
+            return '<div class="kv"><span>'+esc(((r.job&&r.job.company)||'—')+' · '+((r.job&&r.job.position)||''))+'</span>'
+              + '<b>'+esc(String(r.score))+' 分</b></div>';
+          }).join('') + '</div></div>'
+      : '';
+  }
+}
+
+/** AI 匹配历史行。`atUnknown` = 老数据只有 updated_at，不伪装成精确匹配时刻。 */
+function pfMatchRow(x){
+  const when = x.at ? new Date(x.at).toLocaleString('zh-CN') : '—';
+  return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+x.position : ''))
+    + ' <span class="muted small">'+(x.atUnknown ? '（时间未知）' : esc(when))+'</span></span>'
+    + '<b>'+esc(String(x.score))+' 分</b></div>';
+}
+
+/** 简历优化台账行。产物可能被清理策略删掉 ⇒ 只有 hasPdf 时才给链接，不给死链。 */
+function pfTailorRow(x){
+  const when = x.generatedAt ? new Date(x.generatedAt).toLocaleString('zh-CN') : '';
+  const link = x.hasPdf ? ' <a href="'+esc(x.url)+'" target="_blank" rel="noopener">PDF</a>' : '';
+  return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+x.position : ''))
+    + (when ? ' <span class="muted small">'+esc(when)+'</span>' : '') + '</span>'
+    + '<b>'+(x.matchScore == null ? '—' : esc(String(x.matchScore))+' 分')+link+'</b></div>';
+}
+
+async function profileSave(){
+  const msg = $('#pfMsg'), btn = $('#pfSave');
+  const val = (id)=> { const e = $(id); return e ? e.value.trim() : ''; };
+  // ⚠️ 必须走 PUT（后端只注册了 PUT /api/profile；POST/PATCH 会 404）。
+  //    这里**只提交本表单负责的 6 个字段**，其余键（aiName / signAi / school / skills…）保持不动。
+  const profile = {
+    name: val('#pfNameInput'),
+    phone: val('#pfPhoneInput'),
+    email: val('#pfEmailInput'),
+    expectedPositions: val('#pfExpectInput'),
+    expectedCity: val('#pfCityInput'),
+    resume_path: val('#pfResumeInput'),
+  };
+  if(btn) btn.disabled = true;
+  if(msg) msg.textContent = '保存中…';
+  try{
+    await api('/api/profile', { method: 'PUT', body: JSON.stringify({ profile: profile }) });
+    if(msg) msg.textContent = '✅ 已保存。';
+    await loadProfile();
+    if(msg) msg.textContent = '✅ 已保存。';
+  }catch(e){
+    if(msg) msg.textContent = '保存失败：' + e.message;
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+/* ---------- 一次性绑定（这些入口与视图状态无关，绑一次就够） ---------- */
+const btnOvMatch = $('#ovMatch');
+if(btnOvMatch) btnOvMatch.addEventListener('click', ()=>navigate('match'));
+const btnOvAddJob = $('#ovAddJob');
+if(btnOvAddJob) btnOvAddJob.addEventListener('click', ()=>navigate('jobsadd'));
+// 「岗位来源」切换：岗位库 / 粘贴 JD
+$$('#mtSrcTabs [data-mtsrc]').forEach(b=>b.addEventListener('click', ()=>{
+  MT_SRC = b.dataset.mtsrc;
+  $$('#mtSrcTabs [data-mtsrc]').forEach(x=>x.classList.toggle('active', x === b));
+  const pool = $('#mtPoolBox'), paste = $('#mtPasteBox');
+  if(pool)  pool.style.display  = (MT_SRC === 'pool')  ? '' : 'none';
+  if(paste) paste.style.display = (MT_SRC === 'paste') ? '' : 'none';
+}));
+const btnMtRun = $('#mtRun');
+if(btnMtRun) btnMtRun.addEventListener('click', matchRun);
+const btnOpRun = $('#opRun');
+if(btnOpRun) btnOpRun.addEventListener('click', optimizeRun);
+const btnOpTailor = $('#opTailor');
+if(btnOpTailor) btnOpTailor.addEventListener('click', optimizeTailor);
+const btnPfSave = $('#pfSave');
+if(btnPfSave) btnPfSave.addEventListener('click', profileSave);
+const btnPfReload = $('#pfReload');
+if(btnPfReload) btnPfReload.addEventListener('click', loadProfile);
+// data-goto：跨页快捷入口（D 批起「简历制作」已不是占位页，这里只剩个人中心的四个入口）
+$$('[data-goto]').forEach(b=>b.addEventListener('click', ()=>navigate(b.dataset.goto)));
 
 /* ---------- 开箱自检：首跑「还差什么」清单 ---------- */
 // 背景（2026-09-25 开箱实测）：接收方解压后无从下手 —— 窗口没开、简历没传、平台没登录，
@@ -1392,17 +3034,35 @@ async function runWizardAction(kind){
 async function loadDashboard(){
   let f=null;
   try{ f = await api('/api/stats/funnel'); }catch(e){}
+  // 投递台账（applications）——4 张统计卡里的「已投递 / 面试中 / Offer」取自这里。
+  // ⚠️ 不能用 f.byStatus.applied：那是 **jobs 表里被标成「已投」的岗位数**（池子状态），
+  //    和「投递台账有多少条」不是一回事；混用会让「已投递数量」在从没跑过投递时也不为 0。
+  let apps = [];
+  try{ const r = await api('/api/applications'); apps = (r && r.applications) || []; }catch(e){}
+  const ac = {};
+  for(const a of apps){ const k = a.status || 'unknown'; ac[k] = (ac[k]||0) + 1; }
+  // 「已投递」= 真投出去且还有后续可能的：已投递 / 已回复 / 面试中 / 已录用。
+  // 刻意**不含**「已跳过 / 未通过」——那两个是「这次没成」，不属于「投出去多少」。
+  const acApplied = (ac.applied||0) + (ac.replied||0) + (ac.interview||0) + (ac.offer||0);
   if(f){
-    $('#dTotal').textContent = f.total||0;
-    const ap = f.byStatus? (f.byStatus.applied||0):0;
-    $('#dApplied').textContent = ap + ' / ' + (f.appliedRate||0) + '%';
     const ms = f.matchScore||{};
+    $('#dTotal').textContent = f.total||0;
+    $('#dApplied').textContent = acApplied;
+    $('#dInterview').textContent = ac.interview||0;
+    $('#dOffer').textContent = ac.offer||0;
     $('#dRealJd').textContent = ms.jdBased||0;
     $('#dImgJd').textContent = ms.imageJd||0;
+    // 「尚未 AI 匹配」= 池子总数 − 已打分的（scored 是 match_score 非空的行数）
+    $('#dUnscored').textContent = Math.max(0, (f.total||0) - (ms.scored||0));
+    const nT = $('#dTotalNote');
+    if(nT) nT.textContent = (f.byStatus? (f.byStatus.candidate||0):0) + ' 个待投递 · 覆盖 ' + (f.total||0) + ' 个岗位';
+    const nA = $('#dAppliedNote');
+    if(nA) nA.textContent = apps.length ? ('台账共 ' + apps.length + ' 条记录') : '还没投过 —— 去「投递中心」跑一轮';
     renderFunnel($('#funnelBar'), $('#funnelLegend'), ms, f.total);
     const real = ms.jdBased||0, img = ms.imageJd||0, card = ms.cardTextOnly||0, nojd = ms.titleOnly||0;
     $('#matchBasisNote').textContent = '⚠️ 覆盖口径：真 JD '+real+'（'+(ms.realJdRate||0)+'%）· 长图 '+img+'（可看不可匹配）· 卡片摘要 '+card+'（非岗位描述）· 无 JD '+nojd+'（不参与排序）。只有真 JD 那 '+real+' 个能用于匹配 / 求职信 / 定制简历。';
   }
+  renderSoon();
   loadAi();
   loadHealth();
   loadTrend();
@@ -1795,7 +3455,11 @@ $('#batchLocate').addEventListener('click', async ()=>{
 $('#deliverTabs').addEventListener('click', e=>{
   const b = e.target.closest('button'); if(!b) return;
   $$('#deliverTabs button').forEach(x=>x.classList.toggle('active', x===b));
-  ['batch','reply','email','wangshen'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
+  // ⚠️ 这里的 tab 名必须与 #deliverTabs 里的 data-tab 集合**完全一致**：
+  //    多一个 ⇒ 切到别的 tab 时那一格永远不被 display:none；
+  //    少一个 ⇒ 该面板一旦切走就再也回不来（$('#tab-'+t) 为 null 会直接 TypeError）。
+  //    「网申」已迁到「自动填充」页（同一个功能不留两个入口），故列表里去掉 wangshen。
+  ['batch','reply','email'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
   // 切到「自动回复」页时顺手探一次登录态，避免用户盲跑
   if(b.dataset.tab==='reply') checkReplyLogin();
 });
@@ -2133,7 +3797,10 @@ $('#emailApply').addEventListener('click', async ()=>{
   b.disabled=false;
 });
 
-/* ---------- 网申（独立平台，复用企业官网投递引擎；端口 9238 / 上下文 'wangshen'）---------- */
+/* ---------- 网申（独立平台，复用企业官网投递引擎；端口 9238 / 上下文 'wangshen'）
+   面板在「自动填充」页（#view-autofill），不再是「投递中心」的一个 tab。
+   ▶ 为什么搬：同一份功能不该有两个入口 —— 若两处各留一套 DOM 又共用同一批 id，
+     $$() 会命中两个元素、$('#x') 却只取第一个 ⇒ 改一半、看得见的那半还没变。---------- */
 async function wangshenRun(mode){
   const urls = ($('#wangshenUrls').value||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   if(!urls.length){ $('#wangshenOut').textContent='请先粘贴至少一个企业官网 / 校招网申链接。'; return; }
@@ -2170,9 +3837,221 @@ $('#wangshenRemember').addEventListener('click', async ()=>{
     $('#wangshenOut').textContent = (r&&r.ok)
       ? '已记录「'+(r.site||'未知域名')+'」的 '+(r.saved||0)+' 个表单字段（下次同站自动填写）。'
       : '记录失败：'+((r&&r.error)||'未知');
+    // 记完立刻回读下面的「表单记忆」卡：让「刚才到底存进去没有」当场可见，
+    // 而不是只信这一行成功文案（文案成功但库没变是可能的）。
+    if(r&&r.ok) loadFormMemory();
   }catch(e){ $('#wangshenOut').textContent='记录失败：'+e.message; }
   finally{ b.disabled=false; b.textContent=old; }
 });
+
+/* ---------- 表单记忆（自动填充页）：只列域名 + 字段标签，绝不回显值 ----------
+   ⚠️ 端点刻意用 POST 而不是 GET：非回环部署时只有写方法走令牌鉴权，
+     GET 是免鉴权的 ⇒ 做成 GET 等于给局域网开了个「读候选人表单内容」的口子。 */
+async function loadFormMemory(){
+  const box = $('#fmList'); if(!box) return;
+  box.textContent = '读取中…';
+  try{
+    const r = await api('/api/offerbiu/form-memory/list', {method:'POST', body:'{}'});
+    const items = (r && r.items) || [];
+    if(!items.length){
+      box.textContent = '还没有任何表单记忆。在网申调试窗口打开企业官网、人工填一次表单，再点上面的「记住当前表单」。';
+      return;
+    }
+    box.innerHTML = items.map(it=>{
+      const labels = (it.labels||[]).map(l=>'<span class="tag" style="display:inline-block;margin:2px 4px 2px 0">'+esc(l)+'</span>').join('');
+      const when = String(it.updatedAt||'').slice(0,16).replace('T',' ');
+      return '<div style="padding:9px 0;border-bottom:1px solid var(--line)">'
+        + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">'
+        + '<b style="font-size:12.5px;color:var(--ink)">'+esc(it.site)+'</b>'
+        + '<span class="muted small">'+it.count+' 个字段 · '+esc(when)
+        + ' <button class="btn sm" data-fmdel="'+esc(it.site)+'" style="margin-left:6px">删除</button></span>'
+        + '</div><div style="margin-top:7px">'+(labels || '<span class="muted small">（空）</span>')+'</div></div>';
+    }).join('');
+    $$('#fmList [data-fmdel]').forEach(btn=>btn.addEventListener('click', async ()=>{
+      const site = btn.dataset.fmdel;
+      if(!confirm('删除「'+site+'」的表单记忆？下次该站需要重新人工填一次。')) return;
+      btn.disabled = true;
+      try{
+        await api('/api/offerbiu/form-memory/delete', {method:'POST', body:JSON.stringify({site})});
+      }catch(e){ box.textContent = '删除失败：'+e.message; return; }
+      loadFormMemory();
+    }));
+  }catch(e){ box.textContent = '读取失败：'+e.message; }
+}
+$('#fmRefresh').addEventListener('click', loadFormMemory);
+
+/* ---------- 自动填充信息：53 个单值字段（对标 offerbiu 的「结构化简历信息」）----------
+   🔴 字段**数据驱动**渲染，刻意不手写 53 段 HTML。理由：这么长的表单，标签不配对
+      是常态；而 typecheck 与 console:check 都只查语法 / 容器配对，查不出这类语义错误。
+      数据表还让「字段清单」和「标签→档案键映射」在同一处可审。
+
+   🔴 这张表与后端 `PROFILE_LABEL_RULES`（server/services/apply/offerbiu.ts）**必须成对**：
+      · 字段表里有、规则表里没有 ⇒ 界面上填了值、投递表单里永远填不上，**不报错**；
+      · 规则表里有、字段表里没有 ⇒ 规则是死的（没有任何界面能设置这个键）。
+      两条都由 scripts/contract_tests.ts「自动填充信息（对标 offerbiu）」一节机械核对，
+      不靠人记。
+
+   🔴 姓名 / 手机 / 邮箱 / 期望职位 / 期望城市 / 简历路径 6 个键**刻意不在这里**：
+      它们是「个人中心 → 候选人档案」的既有职责。同一份数据不留两份可编辑表单 ——
+      两处各留一份 ⇒ 谁后保存谁赢，用户会觉得「我刚填的怎么又没了」。
+
+   🔴 键名一旦上线就别改：老用户的 data/chat.db 里存的是 JSON 里的键，
+      改名等于把他们已经填过的值丢掉。 */
+const AF_SECTIONS = [
+  {title:'个人属性', fields:[
+    {k:'gender', label:'性别', type:'select', options:['男','女']},
+    {k:'nation', label:'民族', type:'text', ph:'如：汉族'},
+    {k:'country', label:'国家 / 地区', type:'text', ph:'如：中国'},
+    {k:'birthday', label:'出生日期', type:'text', ph:'如：1998-06-01'},
+    {k:'politicalStatus', label:'政治面貌', type:'select', options:['中共党员','中共预备党员','共青团员','群众','民主党派']},
+    {k:'maritalStatus', label:'婚姻状况', type:'select', options:['未婚','已婚','离异']},
+    {k:'health', label:'健康状况', type:'select', options:['良好','一般']},
+    {k:'height', label:'身高（cm）', type:'text', ph:'如：175'},
+    {k:'weight', label:'体重（kg）', type:'text', ph:'如：65'},
+  ]},
+  {title:'证件与籍贯', fields:[
+    {k:'idType', label:'证件类型', type:'select', options:['身份证','护照','港澳居民来往内地通行证','台湾居民来往大陆通行证']},
+    {k:'idNo', label:'证件号码', type:'text', ph:'与证件一致'},
+    {k:'domicile', label:'户籍所在地', type:'text', ph:'如：山东省济南市历下区'},
+    {k:'hometown', label:'籍贯', type:'text', ph:'如：山东济南'},
+  ]},
+  {title:'联系与现居', fields:[
+    {k:'city', label:'现居城市', type:'text', ph:'如：北京'},
+    {k:'address', label:'通讯地址', type:'text', ph:'如：北京市海淀区 XX 路 1 号'},
+    {k:'zipCode', label:'邮政编码', type:'text', ph:'如：100084'},
+    {k:'wechat', label:'微信', type:'text', ph:''},
+    {k:'qq', label:'QQ', type:'text', ph:''},
+    {k:'website', label:'个人网站', type:'text', ph:'https://…'},
+    {k:'blog', label:'博客 / 个人主页', type:'text', ph:'https://…'},
+    {k:'github', label:'GitHub', type:'text', ph:'https://github.com/<账号>'},
+    {k:'gitee', label:'Gitee（码云）', type:'text', ph:'https://gitee.com/<账号>'},
+    {k:'linkedin', label:'领英', type:'text', ph:''},
+    {k:'socialAccount', label:'其他社交账号', type:'text', ph:''},
+  ]},
+  {title:'紧急联系人', fields:[
+    {k:'emergencyContact', label:'紧急联系人姓名', type:'text', ph:'如：张某某'},
+    {k:'emergencyRelation', label:'与本人关系', type:'text', ph:'如：父亲'},
+    {k:'emergencyPhone', label:'紧急联系电话', type:'text', ph:'注意：不是本人手机号'},
+  ]},
+  {title:'教育与技能', fields:[
+    {k:'school', label:'毕业院校', type:'text', ph:'如：山东大学'},
+    {k:'major', label:'专业', type:'text', ph:'如：软件工程'},
+    {k:'education', label:'最高学历', type:'select', options:['博士','硕士','本科','大专','高中及以下']},
+    {k:'skills', label:'技能特长', type:'text', ph:'用顿号分隔，如：Java、Spring Boot、MySQL'},
+  ]},
+  {title:'投递偏好', fields:[
+    {k:'expectWorkCity', label:'期望工作城市', type:'text', ph:'留空则用现居城市'},
+    {k:'interviewCity', label:'可面试城市', type:'text', ph:''},
+    {k:'workYears', label:'工作年限', type:'select', options:['应届生','1 年以内','1-3 年','3-5 年','5-10 年','10 年以上']},
+    {k:'expectSalary', label:'期望薪资', type:'text', ph:'如：15-20K'},
+    {k:'onboardTime', label:'到岗时间', type:'select', options:['随时到岗','一周内','一个月内','面议']},
+    {k:'jobType', label:'求职类型', type:'select', options:['校招','社招','实习','不限']},
+    {k:'workNature', label:'工作性质', type:'select', options:['全职','兼职','实习']},
+    {k:'workMode', label:'工作方式', type:'select', options:['坐班','远程','混合办公']},
+    {k:'internPeriod', label:'实习周期', type:'text', ph:'如：3 个月'},
+    {k:'internDays', label:'每周实习天数', type:'text', ph:'如：5 天'},
+  ]},
+  {title:'调剂意向', fields:[
+    {k:'acceptRemote', label:'接受异地工作', type:'select', options:['是','否']},
+    {k:'acceptAdjust', label:'接受调剂', type:'select', options:['是','否']},
+    {k:'acceptCityAdjust', label:'接受地点调剂', type:'select', options:['是','否']},
+    {k:'acceptDeptAdjust', label:'接受部门调剂', type:'select', options:['是','否']},
+  ]},
+  {title:'意向与来源', fields:[
+    {k:'industry', label:'意向行业', type:'text', ph:'如：互联网'},
+    {k:'direction', label:'意向方向', type:'text', ph:'如：后端开发'},
+    {k:'businessGroup', label:'意向事业群', type:'text', ph:'如：云与智慧产业事业群'},
+    {k:'department', label:'意向部门', type:'text', ph:''},
+    {k:'referralCode', label:'内推码', type:'text', ph:''},
+    {k:'applySource', label:'招聘信息来源', type:'select', options:['官网','BOSS直聘','猎聘','智联招聘','前程无忧','牛客网','内推','朋友推荐','其他']},
+    {k:'hasRelative', label:'有亲属在本公司', type:'select', options:['否','是']},
+    {k:'otherCityNote', label:'其他城市说明', type:'text', ph:'如：可接受苏州 / 杭州'},
+  ]},
+];
+
+/** 字段键 → DOM id。**确定性**生成（不用人工维护第二张映射表，避免两表漂移） */
+function afFieldId(k){ return 'af_' + k; }
+
+/** 把 53 个字段渲染成表单。当前值不在 select 候选里时**追加一项**保留它，
+    否则用户一保存，这个值就被静默抹成空。 */
+function renderAutofillInfo(profile){
+  const host = document.getElementById('afForm'); if(!host) return;
+  const cur = (k)=>{ const v = profile ? profile[k] : ''; return v == null ? '' : String(v); };
+  host.innerHTML = AF_SECTIONS.map(sec=>{
+    const rows = sec.fields.map(f=>{
+      const id = afFieldId(f.k), v = cur(f.k);
+      let ctl;
+      if(f.type === 'select'){
+        const base = [''].concat(f.options || []);
+        const all = base.indexOf(v) >= 0 ? base : base.concat([v]);
+        ctl = '<select id="'+id+'">' + all.map(o=>
+          '<option value="'+esc(o)+'"'+(o === v ? ' selected' : '')+'>'+(o ? esc(o) : '（未填写）')+'</option>'
+        ).join('') + '</select>';
+      }else{
+        ctl = '<input id="'+id+'" type="text" value="'+esc(v)+'"'+(f.ph ? ' placeholder="'+esc(f.ph)+'"' : '')+'>';
+      }
+      return '<div><label for="'+id+'">'+esc(f.label)+'</label>'+ctl+'</div>';
+    }).join('');
+    return '<div class="sec"><h3>'+esc(sec.title)+'</h3><div class="row2">'+rows+'</div></div>';
+  }).join('');
+  // 标记「表单确实渲染过」。没有这面旗子的话，「进了页面但读档失败」时点保存
+  // 会把 53 个键全部提交成空串 —— 浅合并直接抹掉用户已经存好的值。
+  host.dataset.afLoaded = '1';
+}
+
+async function loadAutofillInfo(){
+  const host = document.getElementById('afForm'), msg = $('#afMsg'), st = $('#afStat');
+  if(!host) return;
+  if(host.dataset) host.dataset.afLoaded = '';
+  if(msg) msg.textContent = '';
+  try{
+    const r = await api('/api/profile'); const p = (r && r.profile) || {};
+    renderAutofillInfo(p);
+    if(st){
+      const total = AF_SECTIONS.reduce((n, s)=> n + s.fields.length, 0);
+      const filled = AF_SECTIONS.reduce((n, s)=> n + s.fields.filter(f=>{
+        const v = p[f.k]; return v != null && String(v).trim() !== '';
+      }).length, 0);
+      st.textContent = '已填 ' + filled + ' / ' + total + ' 项';
+    }
+  }catch(e){
+    host.innerHTML = '';
+    if(msg) msg.textContent = '读取失败：' + e.message;
+  }
+}
+
+async function autofillSave(){
+  const host = document.getElementById('afForm'), msg = $('#afMsg'), btn = $('#afSave');
+  // 没渲染过就不许保存（见 renderAutofillInfo 里的说明）
+  if(!host || !host.dataset || host.dataset.afLoaded !== '1'){
+    if(msg) msg.textContent = '表单还没加载出来，先点「重新读取」。';
+    return;
+  }
+  const patch = {}; let n = 0;
+  AF_SECTIONS.forEach(sec=>sec.fields.forEach(f=>{
+    const e = document.getElementById(afFieldId(f.k));
+    if(!e) return;
+    patch[f.k] = String(e.value == null ? '' : e.value).trim();
+    n++;
+  }));
+  if(n === 0){ if(msg) msg.textContent = '没有读到任何字段，先点「重新读取」。'; return; }
+  if(btn) btn.disabled = true;
+  if(msg) msg.textContent = '保存中…';
+  try{
+    // ⚠️ 必须走 PUT（后端只注册了 PUT /api/profile，POST / PATCH 会 404）。
+    //    这里**只提交本表单负责的 53 个键**：后端内部是浅合并
+    //    （{...getProfile(), ...incoming}），别的键（aiName / signAi / resume_path…）不受影响。
+    await api('/api/profile', {method:'PUT', body:JSON.stringify({profile:patch})});
+    if(msg) msg.textContent = '✅ 已保存 ' + n + ' 项。';
+    await loadAutofillInfo();
+    if(msg) msg.textContent = '✅ 已保存 ' + n + ' 项。';
+  }catch(e){
+    if(msg) msg.textContent = '保存失败：' + e.message;
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+$('#afSave').addEventListener('click', autofillSave);
+$('#afReload').addEventListener('click', loadAutofillInfo);
 
 /* ---------- records ---------- */
 async function loadRecords(){
@@ -2437,6 +4316,1021 @@ $('#exRun').addEventListener('click', async ()=>{
   catch(e){ $('#exOut').textContent='错误：'+e.message; }
 });
 
+/* ================= 岗位台：校招信息库 / 添加岗位 / 我的投递 =================
+   三个面板都只是**已有后端的界面出口**：GET /api/jobs、POST /api/jobs、/api/applications。
+   刻意不新增任何写库路径 —— 岗位的清洗、去重、发布时间解析、远程识别全部复用 upsertJob，
+   在这里再写一份必然与后端走样（而且出错时不报错）。 */
+
+/** 岗位类型的**唯一枚举来源**：只服务「添加岗位」表单（录入时确实需要一份候选清单）。
+ *  🔴 校招信息库的「类型」**筛选**下拉刻意**不用**它 —— 筛选项只能来自数据本身。
+ *     曾经把这份清单并进筛选候选兜底，后果是 `job_type` 一列全空时也凭空造出 10 个选项，
+ *     用户点进去必然 0 条，而页面看起来完全正常（「控件在 ≠ 功能生效」）。
+ *     合约里有一条断言把这个常量与表单 #jaType 的 option 集合钉在一起，防两处走样。 */
+const JOB_TYPES = ['产品岗','运营岗','技术岗','算法岗','数据岗','设计岗','市场岗','职能岗','销售岗','其他'];
+
+/** 来源名补充。`manual` 不是招聘平台，PLATFORMS 里没有它 ——
+ *  直接用 pfName 会把英文 id 原样显示出来（`manual`），看起来像坏掉了。 */
+const SOURCE_LABEL = { manual: '手动录入' };
+function jobSrcName(id){ return SOURCE_LABEL[id] || pfName(id); }
+
+/** 投递记录的状态中文名。**全站只此一份** —— 看板列、快速筛选、状态下拉、复盘阶段分布都读它。
+ *  🔴 加一个阶段要同时改四处，缺一处就是「半注册」：
+ *     ① 这里（中文名）② APP_STAGES（看板列）③ APPS_QUICK（筛选）④ 后端 db.ts 的
+ *     APPLICATION_UPDATABLE_COLUMNS（否则改完状态 PATCH 静默不生效）。
+ *  为什么要加「笔试」：offerbiu 的 8 阶段里它是独立一步。本项目此前没有它 ⇒ 笔试中的投递
+ *  只能挤进「已回复」或「面试中」，于是「最近有几场笔试」「笔试完多久没消息」根本没人答得出来。 */
+const APP_STATUS = { applied:'已投递', replied:'已回复', written:'笔试', interview:'面试中', offer:'已录用', rejected:'未通过', skipped:'已跳过' };
+
+/**
+ * 这条记录「该有、但还没记」的时间节点。判据与后端 reviewPlan 完全一致：
+ * **状态决定该有什么时间**（不是「有哪个字段就显示哪个」）。
+ * 返回 null 表示不缺。
+ */
+function appMissingTime(a){
+  if(!a) return null;
+  if(a.status === 'written'   && !a.written_at)   return 'written';
+  if(a.status === 'interview' && !a.interview_at) return 'interview';
+  if(a.status === 'offer'     && !a.offer_at)     return 'offer';
+  return null;
+}
+
+/**
+ * 卡片/表格上那行「时间节点」——把这条投递**已经发生的每一步**串起来（对标 offerbiu 卡片节点行）。
+ *  · 只列**真的填了**的节点：没填的不编造，缺的单独用一行黄字点出来（提示去补）；
+ *  · 「已投出 N 天」直接写在节点行上：这是判断「有没有进展」最关键的那个数字；
+ *  · 返回 {text, cls}，cls ∈ '' / 'warn'（该注意）/ 'done'（已落定）。
+ */
+function appNodeText(a){
+  const seg = [];
+  let cls = '';
+  const sh = (v)=>{ const t = String(v==null?'':v).trim(); return t ? t.slice(5) : ''; };
+  if(a.created_at) seg.push('投递 ' + sh(String(a.created_at).replace('T',' ').slice(0,10)));
+  if(a.written_at)   seg.push('笔试 ' + sh(a.written_at));
+  if(a.interview_at) seg.push((a.interview_round ? a.interview_round + ' ' : '') + '面试 ' + sh(a.interview_at));
+  if(a.offer_at)     seg.push('Offer ' + sh(a.offer_at));
+  if(a.closed_at)    seg.push('结束 ' + sh(a.closed_at));
+  const miss = appMissingTime(a);
+  if(miss){
+    cls = 'warn';
+    seg.push(miss === 'written' ? '笔试时间未记' : (miss === 'interview' ? '面试时间未记' : 'Offer 时间未记'));
+  }
+  // 停在「已投递/已回复」的：把「多久了」说出来（≥7 天标黄，与复盘页「长时间没进展」同阈值）
+  if(a.status === 'applied' || a.status === 'replied'){
+    const ts = Date.parse(String(a.created_at||'').replace(' ','T'));
+    const d = ts ? Math.floor((Date.now() - ts) / 86400000) : null;
+    if(d != null && d >= 0){
+      seg.push(d + ' 天没动静');
+      if(d >= 7 && !cls) cls = 'warn';
+    }
+  }
+  if(a.status === 'offer') cls = cls || 'done';
+  return { text: seg.join(' · ') || '—', cls };
+}
+
+/** 截止日期倒计时（只到「日」粒度）。
+ *  · 没填 ⇒ 「招满为止」——这是**默认语义**（与「添加岗位」里的说明一致），不是缺数据；
+ *  · 已过 ⇒ 已截止；今天 ⇒ 今天截止；≤7 天 ⇒ 临近（黄色）。
+ *  ⚠️ 必须用**本地日历**构造 Date 再比：直接截字符串前 10 位在 UTC+8 的 00:00–08:00 会差一天。 */
+function deadlineInfo(dl, now){
+  const raw = String(dl==null?'':dl).trim();
+  if(!raw) return { text:'招满为止', cls:'b-mut', days:null };
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return { text:raw.slice(0,10), cls:'b-mut', days:null };
+  const due = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+  // 「现在」可注入（只给单测 / 破坏性对照用）；不传就是真实当前时间，线上行为不变。
+  // ⚠️ 判据刻意不放 `now instanceof Date`：`vm` 沙箱里的 Date 与宿主的 Date 不是同一个
+  //    构造函数，`instanceof` 会跨 realm 失败 ⇒ 单测注入的 now 被静默忽略、断言"看着在跑"却测的是真实时钟。
+  const okNow = now && typeof now.getFullYear === 'function' && typeof now.getTime === 'function' && !isNaN(now.getTime());
+  const base = okNow ? now : new Date();
+  const today = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const days = Math.round((due - today) / 86400000);
+  if(days < 0) return { text:'已截止', cls:'b-bad', days:days };
+  if(days === 0) return { text:'今天截止', cls:'b-warn', days:0 };
+  if(days <= 7) return { text:'剩 '+days+' 天', cls:'b-warn', days:days };
+  return { text:'剩 '+days+' 天', cls:'b-ok', days:days };
+}
+
+/** 「截止状态」下拉的匹配判据。**唯一**的判据来源 —— 表格筛选与「3 天内截止」都走它，
+ *  避免两处各写一套后走样；独立成函数也是为了能直接被单测调用。
+ *
+ *  🔴 `days === null`（没填截止）**不等于**「未截止」—— 它有独立的「未填截止」档。
+ *     曾经写成 `days === null || days >= 0`，于是「未截止」把库里**所有没填截止日**的
+ *     岗位都放过去（＝整个库）：筛选器看着在工作、实际什么都没筛，而且不报错。
+ *     招聘平台普遍不提供截止日，所以这不是理论风险。 */
+function deadlineMatch(key, days){
+  if(!key) return true;                                     // 不筛
+  if(key === 'none')    return days === null;               // 未填截止
+  if(key === 'expired') return days !== null && days < 0;   // 已截止
+  if(key === 'open')    return days !== null && days >= 0;  // 未截止（没填的**不算**）
+  if(key === 'soon')    return days !== null && days >= 0 && days <= 7;
+  return true;                                              // 未知档位不过滤（档位写死在 HTML 里，不该出现）
+}
+
+/* ---------- 校招信息库 ---------- */
+let JOBS_CACHE = [];
+/** 服务端下发的快捷标签定义（GET /api/jobs 的 tagDefs）—— 顺序与文案的**唯一真相源**，
+ *  前端刻意不另抄一份：抄一份就是第二个真相源，改一边漏一边时会渲染出后端根本不认识的
+ *  标签（点下去恒 0 条，且没有任何地方会报错）。 */
+let JOBS_TAG_DEFS = [];
+/** 当前激活的快捷标签。**多选**：「免笔试 ∩ 央国企」这类组合是真实诉求。 */
+let JOBS_TAGS = new Set();
+/** 当前视图：'table' | 'card'（与「我的投递」同一约定，刻意不做成两套写法） */
+let JOBS_VIEW = 'table';
+/** 「数据变了、你先前选的那一档已经不存在了」的筛选项名 —— 静默撤掉筛选条件比报错更伤人。 */
+let JOBS_FILTER_DROPPED = [];
+/**
+ * 参与「重置筛选」与事件绑定的**全部**筛选控件 —— 一处声明，两处使用。
+ * 🔴 为什么必须是常量：重置按钮和 change 绑定各抄一份清单的话，将来加一个下拉很容易只加进
+ *    其中一份 —— 表现是「重置之后有一个下拉还留着上次选的值」，界面看着正常，没人会报错。
+ */
+const JOBS_FILTER_SELECTS = ['#jobsSource','#jobsCity','#jobsType','#jobsGrad','#jobsDeadline'];
+
+/** 卡片上的标签列（落库是 JSON 数组串）→ 数组。
+ *  🔴 这里**只做 JSON 解析**，不重做一遍白名单/归一化：落库值由服务端 serializeTags() 保证
+ *     是「白名单内的 JSON 数组」（见 server/services/parseCardMeta.ts）。前端再实现一份归一化
+ *     就是第二个真相源，早晚与后端漂移 —— 而漂移的表现是「筛不到」，不会有任何报错。
+ *  解析失败返回 [] 而不是抛出：库里存了脏值不该让整个列表页白屏。 */
+function jobTags(j){
+  if(!j || !j.tags) return [];
+  try{
+    const a = JSON.parse(String(j.tags));
+    return Array.isArray(a) ? a : [];
+  }catch(e){ return []; }
+}
+function jobHasTag(j, k){ return jobTags(j).indexOf(k) >= 0; }
+/** 届别（规范化后的 4 位年份串）；空串 = 未识别。 */
+function jobGrad(j){ return (j && j.grad_year != null) ? String(j.grad_year).trim() : ''; }
+
+/** 读控件 value；控件不存在时返回 ''（单测沙箱里只摆被测函数需要的那几个控件）。 */
+function jobsCtlVal(sel){
+  const e = $(sel);
+  return (e && e.value != null) ? String(e.value) : '';
+}
+
+/**
+ * 按当前筛选条件过滤岗位 —— 表格、卡片、chip 条数、届别条数**共用这一个判据**。
+ *
+ * @param opt.skipGrad  算「届别」下拉里各档条数时用：届别这一维不参与过滤。否则选中某一届之后
+ *                      其它届的条数全变成 0，用户无从知道还有没有别的届别可切。
+ * @param opt.tags      算某个 chip 的条数时用：传入「已选标签 ∪ 这个 chip」，于是 chip 上显示的
+ *                      数字**恰好等于点下去会得到的条数**。多选时这是唯一自洽的口径 ——
+ *                      若只跳过标签这一维，选中「秋招」后「免笔试」会显示 529 而点下去只剩 400 多，
+ *                      数字与结果对不上比没有数字更糟。
+ */
+function jobsFiltered(opt){
+  const o = opt || {};
+  const tags = o.tags || JOBS_TAGS;
+  const q = jobsCtlVal('#jobsQ').trim().toLowerCase();
+  const src = jobsCtlVal('#jobsSource'), city = jobsCtlVal('#jobsCity');
+  const type = jobsCtlVal('#jobsType');
+  // opt.dl：算「近 7 天截止」chip 的数字时，要按**点下去之后**的档位算，
+  //        而不是下拉当前的值（下拉现在可能是「已截止」，chip 的数字却必须是选 soon 的结果）。
+  const dl = (o.dl !== undefined) ? o.dl : jobsCtlVal('#jobsDeadline');
+  const grad = o.skipGrad ? '' : jobsCtlVal('#jobsGrad');
+  return JOBS_CACHE.filter(j=>{
+    if(src && j.source !== src) return false;
+    if(city && String(j.city==null?'':j.city).trim() !== city) return false;
+    if(type && String(j.job_type==null?'':j.job_type).trim() !== type) return false;
+    if(grad && jobGrad(j) !== grad) return false;
+    if(dl && !deadlineMatch(dl, deadlineInfo(j.deadline).days)) return false;
+    if(tags.size){
+      let hit = false;
+      for(const t of tags){ if(jobHasTag(j, t)){ hit = true; break; } }
+      if(!hit) return false;
+    }
+    if(q){
+      const blob = [j.company,j.position,j.city,j.job_type,jobSrcName(j.source),j.jd,j.card_text]
+        .map(x=>String(x==null?'':x)).join(' ').toLowerCase();
+      if(blob.indexOf(q) < 0) return false;
+    }
+    return true;
+  });
+}
+
+/** 重建某个筛选下拉的 option，并尽量保住用户原来的选择。
+ *  @param label 用于「你先前选的那一档已经不存在了」这句说明（用户看不懂 jobsGrad 是什么）。 */
+function setJobsOptions(sel, html, want, label){
+  const el = $(sel); if(!el) return;
+  el.innerHTML = html;
+  const w = (want == null) ? '' : String(want);
+  el.value = w;
+  // 赋不进去 = 这个取值在数据里已经没有了。浏览器会静默把 value 归空（selectedIndex = -1），
+  // 于是筛选条件**悄无声息地消失** —— 必须显式记一笔，在说明行里讲清楚。
+  if(w && el.value !== w){ el.value = ''; JOBS_FILTER_DROPPED.push(label); }
+}
+
+/**
+ * 重建全部筛选下拉的候选值 —— **每次渲染都整体重建**，并保住用户已选的值。
+ *
+ * 为什么不能「只建一次」（旧写法用 dataset.filled 做的）：候选来自数据实测值
+ * （平台 / 城市 / 类型 / 届别都是开放集合），而数据会变（采集、删除、回填）。
+ * 建一次就意味着**新出现的取值永远不会出现在下拉里** —— 用户筛不到自己刚采回来的岗位，
+ * 而且没有任何地方会报错。这与 A 批那两个恒空下拉同属一类：控件在，但不跟着数据走。
+ */
+function fillJobsFilters(){
+  JOBS_FILTER_DROPPED = [];
+  const keep = {};
+  // ⚠️ 刻意排除 #jobsDeadline：它的档位（未截止 / 7 天内 / 已截止 / 未填）是**业务口径**，
+  //    写死在 HTML 里而不是从数据推；只有它一条数据也筛不出来时才整体禁用（见 jobsFilterAvailability）。
+  JOBS_FILTER_SELECTS.filter(sel=> sel !== '#jobsDeadline').forEach(sel=>{ keep[sel] = jobsCtlVal(sel); });
+
+  const ids = Array.from(new Set(JOBS_CACHE.map(j=>j.source).filter(Boolean)));
+  setJobsOptions('#jobsSource', '<option value="">全部平台</option>'
+    + ids.map(i=>'<option value="'+esc(i)+'">'+esc(jobSrcName(i))+'</option>').join(''), keep['#jobsSource'], '平台');
+
+  const cs = Array.from(new Set(JOBS_CACHE.map(j=>String(j.city==null?'':j.city).trim()).filter(Boolean))).sort();
+  setJobsOptions('#jobsCity', '<option value="">全部城市</option>'
+    + cs.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join(''), keep['#jobsCity'], '城市');
+
+  // 🔴 候选**只取数据实测值**。写死清单（JOB_TYPES）在数据为空时会凭空造出 10 个筛不出东西的
+  //    选项 —— 正是「控件在 ≠ 功能生效」。用户手填过的自定义类型照样筛得到（它就在数据里）。
+  const ts = Array.from(new Set(JOBS_CACHE.map(j=>String(j.job_type==null?'':j.job_type).trim()).filter(Boolean))).sort();
+  setJobsOptions('#jobsType', '<option value="">全部类型</option>'
+    + ts.map(t=>'<option value="'+esc(t)+'">'+esc(t)+'</option>').join(''), keep['#jobsType'], '岗位类型');
+
+  // 届别：候选同样只取数据实测值，并**带上条数**。真实库里 2027 届占绝大多数，
+  // 只有一个可取值的下拉看着像废话（选它和不选结果一样）—— 带条数，用户立刻明白为什么。
+  const gs = Array.from(new Set(JOBS_CACHE.map(j=>jobGrad(j)).filter(Boolean))).sort().reverse();
+  const rest = jobsFiltered({ skipGrad: true });
+  setJobsOptions('#jobsGrad', '<option value="">全部届别</option>' + gs.map(g=>
+    '<option value="'+esc(g)+'">'+esc(g)+' 届（'+rest.filter(j=>jobGrad(j) === g).length+'）</option>').join(''),
+    keep['#jobsGrad'], '届别');
+}
+
+/** 被禁用的筛选项名（供 #jobsStat 说明原因）。 */
+let JOBS_FILTER_OFF = [];
+
+/** 靠**某一列**筛的控件，在该列一个非空值都没有时必然恒空 —— 禁用并说明原因，
+ *  绝不留下「选了没有任何反应、也不解释」的下拉。判据取自真实数据，幂等（可重复调用）。
+ *  「有数据但当前筛出来为空」**不算**：那是正常的筛选结果，不是坏控件。 */
+function jobsFilterAvailability(){
+  // 🔴 判据必须与筛选器**同一套**：deadline 只有能被解析成日期，才能让「未截止 / 已截止 /
+  //    7 天内」筛出东西；自由文本（如「招满为止」）与没填等价 —— 若只判「非空」，
+  //    会留下一个看着能用、仍然筛不出东西的下拉（正是本次要消灭的那种控件）。
+  const specs = [
+    { sel:'#jobsType',     label:'岗位类型', has: j=> String(j.job_type==null?'':j.job_type).trim() !== '' },
+    { sel:'#jobsGrad',     label:'届别',     has: j=> jobGrad(j) !== '' },
+    { sel:'#jobsDeadline', label:'截止状态', has: j=> deadlineInfo(j.deadline).days !== null },
+  ];
+  JOBS_FILTER_OFF = [];
+  for(const s of specs){
+    const el = $(s.sel); if(!el) continue;
+    if(JOBS_CACHE.some(s.has)){ el.disabled = false; el.removeAttribute('title'); continue; }
+    el.value = ''; el.disabled = true;
+    el.title = '岗位库里没有任何一条记录带「' + s.label + '」—— 选它只会得到 0 条，已禁用';
+    JOBS_FILTER_OFF.push(s.label);
+  }
+  return JOBS_FILTER_OFF;
+}
+
+/**
+ * 数据里**真的存在**的快捷标签。
+ * 🔴 判据只有这一处：chip 行渲染（渲染哪些）与已选状态校准（撤回哪些）必须同源 ——
+ *    各写一份的话，会出现「渲染了但不算可用」或「撤回了却还在显示」这种自相矛盾的界面。
+ * 🔴 候选**只取数据实测值**：写死标签清单会凭空造出点了必然 0 条的假控件（A 批同款坑）。
+ */
+function jobsAvailTags(){
+  return JOBS_TAG_DEFS.filter(d=> JOBS_CACHE.some(j=>jobHasTag(j, d.key)));
+}
+
+/** 让「已选标签」与「数据里真的有的标签」对齐。
+ *  数据里没有的标签不渲染，已选的也必须一并撤回 —— 否则用户会停在一个筛不出任何东西的状态，
+ *  而界面上连那个标签都找不到了（无从取消）。 */
+function syncJobsTags(){
+  const avail = new Set(jobsAvailTags().map(d=>d.key));
+  for(const k of Array.from(JOBS_TAGS)) if(!avail.has(k)) JOBS_TAGS.delete(k);
+  return avail;
+}
+
+/**
+ * 渲染快捷标签 chip（多选，对标 offerbiu 的「免笔试 / 央国企 / 研究所 / 外企」）。
+ * chip 上的数字 = **点下去会得到的条数**（见 jobsFiltered 的 opt.tags）。
+ * 当前筛选下必然 0 条、且**未被选中**的 chip 会被禁用并写明原因 —— 不留点了没反应的按钮。
+ * ⚠️ **已选中的 chip 永不禁用**：禁用会让用户无法取消它，等于把自己锁死在空结果上。
+ */
+/** 「近 7 天截止」快捷 chip 的 HTML。
+ *
+ *  🔴 判据**必须复用 `deadlineMatch('soon', days)`**（它本来就有这一档：`days >= 0 && days <= 7`），
+ *     不许另写一份日期比较 —— 另写就是第二个「几天内」口径，两边迟早漂移；而漂移的表现是
+ *     「chip 显示 3 条、点下去 0 条」，全程没有任何报错。
+ *  🔴 状态**写在 `#jobsDeadline` 上**，刻意不另设变量：另设一个 `JOBS_SOON_ON` 就会与下拉、
+ *     与「重置筛选」各成一份状态 —— 重置清了下拉、chip 还亮着（正是本仓库反复出现的那种
+ *     「界面看着正常、筛选条件其实还在」）。走下拉值 ⇒ 三者天然同步。
+ *  🔴 **不进 tagDefs**：tagDefs 是**卡片标签**（免笔试 / 央国企…），服务端是唯一真相源；
+ *     截止状态是另一个维度、且是本地固定的业务档位，混进去会让服务端背上它不该管的口径。
+ */
+function jobsSoonChipHtml(){
+  const on = jobsCtlVal('#jobsDeadline') === 'soon';
+  // 与 jobsFilterAvailability 同判据：库里一条「能解析成日期」的截止日都没有 ⇒ 一起禁用，
+  // 绝不留下点了没反应、也不解释的按钮。
+  const hasData = JOBS_CACHE.some(j=> deadlineInfo(j.deadline).days !== null);
+  const n = jobsFiltered({ dl:'soon' }).length;
+  const off = !on && n === 0;
+  const why = !hasData
+    ? '岗位库里没有任何一条记录带可解析的截止日期（与「截止状态」下拉同一判据，已禁用）'
+    : (off ? '当前其它筛选条件下它会筛出 0 条，已禁用' : '截止日在今天起 7 天内（含今天）');
+  const tail = (!hasData || off) ? '（0 条）' : (on ? ' ✓' : '');
+  // ⚠️ 已选中的 chip 永不禁用：禁用会让用户无法取消它，等于把自己锁死在空结果上
+  const dis = ((off || !hasData) && !on) ? ' disabled' : '';
+  return '<button class="btn sm'+(on?' primary':'')+'"'+dis+' data-jdl="soon" title="'+esc(why)+'">'
+    + '近 7 天截止 ' + n + esc(tail) + '</button>';
+}
+
+/**
+ * 渲染快捷 chip 行。两**种** chip 同排但不同维度，刻意分开渲染、分开绑定：
+ *   ① 「近 7 天截止」—— 截止状态维度，**本地固定档**（见 jobsSoonChipHtml）；
+ *   ② 卡片标签（免笔试 / 央国企…）—— 顺序与文案来自服务端 tagDefs，是否出现由数据实测值决定。
+ */
+function renderJobsChips(){
+  const host = $('#jobsChips'); if(!host) return;
+  const avail = jobsAvailTags();
+  // 🔴 截止 chip **无条件渲染**：它与「标签有没有数据」无关。旧写法在 `!avail.length` 时直接
+  //    return —— 那种早退会把「近 7 天截止」一起吞掉，于是它又变成了一个看数据脸色的控件。
+  let html = '<span class="note small" style="align-self:center">快捷关注</span>' + jobsSoonChipHtml();
+  html += avail.length
+    ? avail.map(d=>{
+        const on = JOBS_TAGS.has(d.key);
+        const n = jobsFiltered({ tags: new Set([...JOBS_TAGS, d.key]) }).length;
+        const off = !on && n === 0;
+        const dis = off ? ' disabled' : '';
+        const tail = off ? '（当前筛选下 0 条）' : (on ? ' ✓' : '');
+        const why = String(d.hint || '') + (off ? '；当前其它筛选条件下它会筛出 0 条，已禁用' : '');
+        return '<button class="btn sm'+(on?' primary':'')+'"'+dis+' data-jtag="'+esc(d.key)+'" '
+          + 'title="'+esc(why)+'">' + esc(d.label) + ' ' + n + esc(tail) + '</button>';
+      }).join('')
+    // 一个标签都没有 ⇒ 不留空行，而是说清原因。两种原因完全不同，不能共用一句话。
+    : '<span class="note small">' + (JOBS_TAG_DEFS.length
+        ? '暂无快捷标签：岗位库里没有任何一条记录带标签（标签由校招卡片摘要解析而来，存量可跑 scripts/backfill_card_meta.ts 补齐）'
+        : '当前后端未下发标签定义（GET /api/jobs 的 tagDefs 字段）—— 重启后端即可；标签定义刻意不在前端另抄一份，否则两边会漂移') + '</span>';
+  host.innerHTML = html;
+  // 两种 chip 各绑各的（data 属性区分），避免一个 $$ 选择器把另一类的点击也顶掉
+  $$('#jobsChips [data-jdl]').forEach(b=>b.addEventListener('click', ()=>{
+    const el = $('#jobsDeadline'); if(!el || el.disabled) return;
+    // 再点一次 = 取消（回到「全部截止状态」），而不是卡在 soon 上
+    el.value = (jobsCtlVal('#jobsDeadline') === 'soon') ? '' : 'soon';
+    renderJobs();
+  }));
+  $$('#jobsChips [data-jtag]').forEach(b=>b.addEventListener('click', ()=>{
+    const k = b.dataset.jtag;
+    if(JOBS_TAGS.has(k)) JOBS_TAGS.delete(k); else JOBS_TAGS.add(k);
+    renderJobs();
+  }));
+}
+
+/** 表格与卡片**共用**的行级按钮绑定（两处各写一遍删除逻辑必然漂移成两种行为：
+ *  一处确认、一处不确认；一处删完刷新、一处留个幽灵行）。 */
+function bindJobsRows(scope){
+  $$(scope+' [data-jv]').forEach(b=>b.addEventListener('click',()=>showJob(b.dataset.jv)));
+  $$(scope+' [data-jdel]').forEach(b=>b.addEventListener('click', async ()=>{
+    const job = JOBS_CACHE.find(x=>x.id===b.dataset.jdel) || {};
+    if(!confirm('从岗位库删除「'+(job.position||job.company||'该岗位')+'」？\n只删本地岗位池记录，不影响平台上已发生的投递。')) return;
+    try{
+      await api('/api/jobs/'+encodeURIComponent(b.dataset.jdel), {method:'DELETE'});
+      loadJobs();
+    }catch(e){ alert('删除失败：'+e.message); }
+  }));
+}
+
+/** 表格 / 卡片两块容器**互斥显示**。两块都在 DOM 里、只切 display —— 与「我的投递」同一套做法，
+ *  于是切视图不需要重新取数（也就不会因为切视图而丢掉已选条件）。 */
+function jobsApplyView(){
+  const tw = $('#jobsTableWrap'), cw = $('#jobsCards');
+  if(tw) tw.style.display = (JOBS_VIEW === 'card') ? 'none' : '';
+  if(cw) cw.style.display = (JOBS_VIEW === 'card') ? '' : 'none';
+  $$('#jobsViewTabs [data-jobview]').forEach(b=>b.classList.toggle('active', b.dataset.jobview === JOBS_VIEW));
+}
+
+/** 表格视图。 */
+function renderJobsTable(list){
+  const tb = $('#jobsTbl tbody'); if(!tb) return;
+  if(!list.length){ tb.innerHTML = '<tr><td colspan="9" class="empty">没有匹配的岗位</td></tr>'; return; }
+  tb.innerHTML = list.slice(0,300).map(j=>{
+    const d = deadlineInfo(j.deadline);
+    const sc = (j.match_score != null) ? j.match_score : '–';
+    const applied = j.status === 'applied' ? ' <span class="badge b-ok">已投</span>' : '';
+    const gy = jobGrad(j);
+    return '<tr><td>'+esc(j.company||'–')+'</td>'
+      + '<td>'+esc(j.position||'–')+applied+'</td>'
+      + '<td>'+(j.job_type ? '<span class="badge b-pur">'+esc(j.job_type)+'</span>' : '<span class="muted small">–</span>')+'</td>'
+      + '<td>'+(gy ? '<span class="badge b-info">'+esc(gy)+' 届</span>' : '<span class="muted small">–</span>')+'</td>'
+      + '<td>'+esc(j.city||'–')+'</td>'
+      + '<td><span class="badge b-info">'+esc(jobSrcName(j.source))+'</span></td>'
+      + '<td><span class="badge '+d.cls+'">'+esc(d.text)+'</span></td>'
+      + '<td>'+esc(sc)+'</td>'
+      + '<td><button class="btn sm" data-jv="'+esc(j.id)+'">详情</button> '
+      + '<button class="btn sm" data-jdel="'+esc(j.id)+'">删</button></td></tr>';
+  }).join('');
+  bindJobsRows('#jobsTbl');
+}
+
+/** 卡片视图。复用「我的投递」的 jobCardHtml —— 同一份渲染器，两处显示的字段不可能漂移。 */
+function renderJobsCards(list){
+  const host = $('#jobsCards'); if(!host) return;
+  if(!list.length){ host.innerHTML = '<div class="none">没有匹配的岗位</div>'; return; }
+  host.innerHTML = list.slice(0,300).map(j=>
+    jobCardHtml(j, '<button class="btn sm" data-jv="'+esc(j.id)+'">详情</button>'
+      + '<button class="btn sm" data-jdel="'+esc(j.id)+'">删</button>')).join('');
+  bindJobsRows('#jobsCards');
+}
+
+async function loadJobs(){
+  const tb = $('#jobsTbl tbody'); if(!tb) return;
+  tb.innerHTML = '<tr><td colspan="9" class="empty">加载中…</td></tr>';
+  const cd = $('#jobsCards'); if(cd) cd.innerHTML = '<div class="none">加载中…</div>';
+  try{
+    const r = await api('/api/jobs');
+    JOBS_CACHE = (r && r.jobs) || [];
+    // 标签定义随列表一起下发（服务端是唯一真相源）。老后端没有这个字段 ⇒ 退化成 []，
+    // chip 行会写明「当前后端未下发标签定义」，而不是静默留一片空白。
+    JOBS_TAG_DEFS = (r && r.tagDefs) || [];
+  }catch(e){
+    tb.innerHTML = '<tr><td colspan="9" class="empty">加载失败：'+esc(e.message)+'</td></tr>';
+    const s = $('#jobsStat'); if(s) s.textContent = '';
+    return;
+  }
+  renderJobs();
+}
+
+function renderJobs(){
+  const tb = $('#jobsTbl tbody'); if(!tb) return;
+  // 🔴 候选集与禁用态都必须是**数据的函数**，所以每次渲染开头整体重算（不再用 dataset.filled
+  //    那种「只建一次」的缓存 —— 见 fillJobsFilters 的注释）。
+  fillJobsFilters();
+  // 靠**某一列**筛的下拉，在该列全空时必须禁用并说明原因 —— 否则是个恒空的假控件
+  jobsFilterAvailability();
+  syncJobsTags();
+
+  const q = jobsCtlVal('#jobsQ').trim().toLowerCase();
+  const all = JOBS_CACHE;
+  const list = jobsFiltered();
+  // chip 的条数依赖当前条件 ⇒ 必须在本轮重算，不能沿用上一次渲染的字符串
+  renderJobsChips();
+
+  const cnt = $('#jobsCount');
+  if(cnt) cnt.textContent = (list.length === all.length) ? (all.length+' 个岗位') : (list.length+' / '+all.length+' 个');
+  const st = $('#jobsStat');
+  if(st){
+    const base = all.length
+      ? '岗位池共 '+all.length+' 个，当前筛出 '+list.length+' 个' + (q ? '（关键词「'+q+'」）' : '')
+      : '岗位库为空 —— 去「添加岗位」录一条，或到「投递中心」采集。';
+    let extra = '';
+    if(JOBS_TAGS.size) extra += '　｜　快捷标签：'+Array.from(JOBS_TAGS).join(' + ');
+    // 被禁用的筛选器必须在这里说清原因：否则用户只看到「下拉是灰的」，分不清是自己没选对
+    // 还是数据压根没有 —— 这正是「静默失效」最伤人的地方。
+    if(JOBS_FILTER_OFF.length) extra += '　｜　「'+JOBS_FILTER_OFF.join('」「')+'」筛选已禁用：岗位库里没有任何记录带这一项（选它必然 0 条）';
+    // 数据变了、先前选的那一档没了：条件是我们撤掉的，必须讲出来，否则用户以为筛还在生效
+    if(JOBS_FILTER_DROPPED.length) extra += '　｜　「'+JOBS_FILTER_DROPPED.join('」「')+'」已重置为「全部」：刷新后数据里已经没有你先前选的那一档';
+    st.textContent = base + extra;
+  }
+  // 只渲染**当前可见**的那一个视图：两个都渲染会让每次按键都建两遍 DOM，
+  // 而隐藏的那个还可能与可见的那个不同步（各自一套数据 ⇒ 迟早分成两种结果）。
+  // 切视图走 renderJobs 重跑，代价是一次本地过滤（无网络请求）。
+  if(JOBS_VIEW === 'card') renderJobsCards(list); else renderJobsTable(list);
+  jobsApplyView();
+}
+
+/** 重置筛选：搜索框 + 全部下拉 + 快捷标签一起恢复成「不筛」。
+ *  ⚠️ **不动视图**：表格/卡片是「我怎么看」，不是「我筛什么」；顺手重置会让人以为按钮把页面弄坏了。 */
+function jobsResetFilters(){
+  const q = $('#jobsQ'); if(q) q.value = '';
+  JOBS_FILTER_SELECTS.forEach(sel=>{
+    const e = $(sel); if(e) e.value = '';
+  });
+  JOBS_TAGS.clear();
+  renderJobs();
+}
+
+$('#jobsQ').addEventListener('input', renderJobs);
+JOBS_FILTER_SELECTS.forEach(sel=>{
+  const e = $(sel); if(e) e.addEventListener('change', renderJobs);
+});
+$('#jobsReset').addEventListener('click', jobsResetFilters);
+$('#jobsRefresh').addEventListener('click', loadJobs);
+// 切视图只改 JOBS_VIEW 再重跑 renderJobs：单一渲染入口，不存在「隐藏的那半没更新」。
+$$('#jobsViewTabs [data-jobview]').forEach(b=>b.addEventListener('click', ()=>{
+  JOBS_VIEW = b.dataset.jobview;
+  renderJobs();
+}));
+
+/* ---------- 添加岗位 ---------- */
+function loadJobsAdd(){
+  // 表单是静态 HTML，进入页面时把焦点给第一个必填项即可（省一次点击）
+  const c = $('#jaCompany'); if(c) c.focus();
+}
+
+function jaMsg(text, bad){
+  const el = $('#jaMsg'); if(!el) return;
+  el.innerHTML = bad ? '<span style="color:var(--bad)">'+esc(text)+'</span>' : esc(text);
+}
+
+/* 从「插件导入」的文本里抽字段。**只认带字段名的写法**，识别不出就留空 ——
+   宁可让用户手填，也不要写进一个猜出来的公司名（脏值会一路污染匹配与投递）。 */
+function jaParse(text){
+  const t = String(text==null?'':text).trim();
+  const got = {};
+  if(!t) return got;
+  const grab = (labels)=>{
+    for(const lb of labels){
+      const m = t.match(new RegExp(lb + '\\s*[:：]\\s*([^\\n\\r]{1,50})'));
+      if(m && m[1].trim()) return m[1].trim();
+    }
+    return '';
+  };
+  const url = (t.match(/https?:\/\/[^\s"'<>）)】\]]+/)||[])[0];
+  if(url) got.applyUrl = url;
+  const company = grab(['公司名称','公司简称','公司']);
+  const position = grab(['岗位名称','职位名称','岗位','职位']);
+  const city = grab(['工作城市','工作地点','城市','地点']);
+  if(company) got.company = company;
+  if(position) got.position = position;
+  if(city) got.city = city;
+  // 整段足够长 ⇒ 当作 JD 正文（用户粘贴的就是岗位描述，截断反而丢信息）
+  if(t.length > 60) got.jd = t;
+  return got;
+}
+
+/** 把解析结果**只填进空着的框**，绝不覆盖用户已经写好的内容。 */
+function jaFill(got){
+  let n = 0;
+  const put = (sel, val)=>{
+    const el = $(sel); if(!el || !val) return;
+    if(String(el.value||'').trim()) return;   // 已有内容不动
+    el.value = val; n++;
+  };
+  put('#jaCompany', got.company);
+  put('#jaPosition', got.position);
+  put('#jaCity', got.city);
+  put('#jaUrl', got.applyUrl);
+  put('#jaJd', got.jd);
+  return n;
+}
+
+$('#jaImportBtn').addEventListener('click', ()=>{
+  const box = $('#jaImportBox');
+  box.style.display = (box.style.display === 'none') ? 'block' : 'none';
+  if(box.style.display === 'block') $('#jaImportText').focus();
+});
+$('#jaImportClose').addEventListener('click', ()=>{ $('#jaImportBox').style.display = 'none'; });
+$('#jaImportParse').addEventListener('click', ()=>{
+  const got = jaParse($('#jaImportText').value);
+  const n = jaFill(got);
+  const msg = $('#jaImportMsg');
+  msg.textContent = n ? ('已填充 '+n+' 个字段，请核对后保存') : '没识别出可用字段（支持「公司名称：X」这类写法或直接粘贴链接），请手动填写';
+});
+
+$('#jaReset').addEventListener('click', ()=>{
+  ['#jaCompany','#jaPosition','#jaCity','#jaUrl','#jaDeadline','#jaJd','#jaImportText'].forEach(s=>{ $(s).value=''; });
+  $('#jaType').value = '';
+  jaMsg('');
+});
+
+$('#jaSave').addEventListener('click', async ()=>{
+  const btn = $('#jaSave');
+  const company = $('#jaCompany').value.trim();
+  const position = $('#jaPosition').value.trim();
+  // 与后端同一条判据（company / position 至少填一个），但在前端先拦一次，避免只看到 400
+  if(!company && !position) return jaMsg('公司与岗位至少填一个', true);
+  const body = {
+    source: 'manual',
+    company: company || null,
+    position: position || null,
+    city: $('#jaCity').value.trim() || null,
+    jobType: $('#jaType').value || null,
+    applyUrl: $('#jaUrl').value.trim() || null,
+    deadline: $('#jaDeadline').value || null,
+    jd: $('#jaJd').value.trim() || null,
+  };
+  btn.disabled = true; jaMsg('保存中…');
+  try{
+    const r = await api('/api/jobs', { method:'POST', body: JSON.stringify(body) });
+    const j = r && r.job;
+    jaMsg('已保存：'+(j && (j.position || j.company) || '岗位')+'（可在「校招信息库」里筛选）');
+    ['#jaCompany','#jaPosition','#jaCity','#jaUrl','#jaDeadline','#jaJd','#jaImportText'].forEach(s=>{ $(s).value=''; });
+    $('#jaType').value = '';
+    $('#jaImportBox').style.display = 'none';
+    $('#jaImportMsg').textContent = '';
+  }catch(e){
+    jaMsg('保存失败：'+e.message, true);
+  }finally{ btn.disabled = false; }
+});
+
+/* ---------- 我的投递（阶段看板 + 表格双视图） ----------
+ * 看板数据来自**两张表**（这是有意的，也是唯一诚实的做法）：
+ *   · applications —— 真实投递台账，有 status、可改、可删；
+ *   · jobs(status='candidate') —— 岗位池里还没投的，对应第一列「待投递」。
+ * 阶段列现在含「笔试」（2026-10 对标 offerbiu 补上）。**面试刻意不拆成
+ *   一面/二面/HR 面/终面四列**：轮次是新出现就会被改写的自由文本，拆列会得到四个
+ *   经常为空的列（＝假控件）；改用 applications.interview_round 一个字段承载轮次，
+ *   它跟着记录走、不占用看板宽度。同理不做「已收藏」：applications 没有 favorite 列。
+ * 快速筛选分两类，各自落**真实存在的字段**上：
+ *   · 台账侧（状态 / 未记时间 / 本周新增 / 搜索词）—— 作用于除「待投递」外的所有列；
+ *   · 岗位池侧（3 天内截止 / 高匹配度）—— 只作用于「待投递」列，因为截止日与匹配分
+ *     只存在于 jobs 表。**在台账上「按截止日筛」是筛不出东西的**（applications 没这列）。
+ * 注意：轮次用于显示，但「面试中」这一列的归属仍只看 status —— 不按轮次再分列。 */
+const APP_STAGES = [
+  { key:'candidate', label:'待投递', from:'job' },
+  { key:'applied',   label:'已投递' },
+  { key:'replied',   label:'已回复' },
+  { key:'written',   label:'笔试' },
+  { key:'interview', label:'面试中' },
+  { key:'offer',     label:'已录用' },
+  { key:'rejected',  label:'未通过' },
+  { key:'skipped',   label:'已跳过' },
+];
+const APPS_QUICK = [
+  { k:'all',       label:'全部',      scope:'both' },
+  { k:'pending',   label:'待跟进',    scope:'app' },
+  { k:'replied',   label:'有回复',    scope:'app' },
+  { k:'written',   label:'笔试中',    scope:'app' },
+  { k:'interview', label:'面试中',    scope:'app' },
+  { k:'offer',     label:'已录用',    scope:'app' },
+  { k:'rejected',  label:'未通过',    scope:'app' },
+  { k:'notime',    label:'未记时间',  scope:'app' },
+  { k:'week',      label:'本周新增',  scope:'app' },
+  { k:'soon',      label:'3 天内截止', scope:'pool' },
+  { k:'highmatch', label:'高匹配度',  scope:'pool' },
+];
+// ⚠️ 这三个 + 下面那个 = 看板的状态变量，**必须原样保留**。
+//    段落替换的终点若选得比「要改的内容」更靠后，会**静默吃掉**中间的真实声明 ——
+//    本次就真踩过：JOBS_POOL_READY 被吃掉后 loadMyApps 抛 ReferenceError，
+//    被自己的 try 吞住 ⇒ 看板只剩一句「加载失败」，而 typecheck / console:check / 合约全绿。
+let APPS_CACHE = [];      // 投递台账全量
+let JOBS_POOL = [];       // 岗位池里 status='candidate' 的岗位（看板「待投递」列）
+let JOBS_POOL_READY = false;
+let APPS_QUICK_K = 'all';
+let APPS_VIEW = 'card';   // 'card' = 看板，'table' = 表格
+let APPS_Q_T = null;
+
+/** 池侧快筛项的数据前提：`deadline` / `match_score` 在**候选池**里一个非空值都没有时，
+ *  点它就是恒定空结果 —— 禁用并说明。别留一个「点了没反应也不解释」的按钮。
+ *  ⚠️ 这两列只存在于 jobs 表，且招聘平台普遍不提供截止日 ⇒ 真实库里常常为空。 */
+function appsQuickReady(k){
+  // 与 #jobsDeadline 用同一个判据（能解析成日期才算有截止日），否则两处口径会分叉
+  if(k === 'soon')      return JOBS_POOL.some(j=> deadlineInfo(j.deadline).days !== null);
+  if(k === 'highmatch') return JOBS_POOL.some(j=> j.match_score != null && String(j.match_score).trim() !== '');
+  return true;
+}
+
+/** 快筛条**每次整体重建**。
+ *  原先用 `dataset.filled` 只建一次 ⇒ 岗位池重新拉取后，禁用 / 可用状态不会跟着变，
+ *  用户会看到「明明有数据却是灰的」（或反过来）。整体重建是幂等的，代价可忽略。 */
+function renderAppsQuick(){
+  const qk = $('#appsQuick'); if(!qk) return;
+  if(!appsQuickReady(APPS_QUICK_K)) APPS_QUICK_K = 'all';   // 当前档失效就退回「全部」，别停在空结果上
+  qk.innerHTML = APPS_QUICK.map(q=>{
+    const off = !appsQuickReady(q.k);
+    const why = off
+      ? '岗位池里没有任何候选岗位带「' + (q.k === 'soon' ? '截止时间' : '匹配分') + '」（招聘平台不提供）—— 点它必然 0 条，已禁用'
+      : (q.scope === 'pool' ? '只筛「待投递」列（岗位池）' : '筛投递台账');
+    return '<button class="btn sm" data-appq="'+q.k+'"' + (off ? ' disabled' : '')
+      + ' title="'+esc(why)+'">'
+      + (q.scope==='pool' ? '待投递 · ' : '') + esc(q.label) + (off ? '（无数据）' : '') + '</button>';
+  }).join('');
+  $$('#appsQuick [data-appq]').forEach(b=>{
+    b.classList.toggle('primary', b.dataset.appq === APPS_QUICK_K);
+    b.addEventListener('click', ()=>{
+      APPS_QUICK_K = b.dataset.appq;
+      renderMyApps();
+    });
+  });
+}
+
+async function loadMyApps(){
+  const board = $('#appsBoardCols');
+  if(board) board.innerHTML = '<div class="none">加载中…</div>';
+  try{
+    // 岗位池只在首次（或 force）拉：它最多 1000 行，而改一次状态就要重渲染看板一次
+    const jobs = JOBS_POOL_READY ? Promise.resolve(null) : api('/api/jobs');
+    const [ra, rj] = await Promise.all([ api('/api/applications'), jobs ]);
+    APPS_CACHE = (ra && ra.applications) || [];
+    if(rj){ JOBS_POOL = ((rj && rj.jobs) || []).filter(j=>j.status === 'candidate'); JOBS_POOL_READY = true; }
+  }catch(e){
+    if(board) board.innerHTML = '<div class="none">加载失败：'+esc(e.message)+'</div>';
+    return;
+  }
+  renderMyApps();
+}
+
+/** 当前快速筛选项（找不到就退回 all —— 筛选键是常量，不该出现这种情况）。 */
+function appsQuickItem(){
+  const k = APPS_QUICK_K;
+  return APPS_QUICK.filter(q=>q.k===k)[0] || APPS_QUICK[0];
+}
+/** 「高匹配度」阈值 70 —— 与后端投递漏斗的 high 档（match_score>=70）用同一个数。 */
+const HIGH_MATCH_SCORE = 70;
+
+/** 筛选后的投递台账（表格与看板的应用卡片同源）。
+ *  ⚠️ scope='pool' 的筛选项**不作用于台账**（截止日/匹配分是 jobs 表的列）。 */
+function myAppsFiltered(){
+  const qEl = $('#appsQ');
+  const q = ((qEl && qEl.value) || '').trim().toLowerCase();
+  const weekAgo = Date.now() - 7*86400000;
+  const onlyPool = appsQuickItem().scope === 'pool';
+  return APPS_CACHE.filter(a=>{
+    if(!onlyPool){
+      if(APPS_QUICK_K === 'pending'   && a.status !== 'applied') return false;
+      // 「有回复」把笔试算进来：笔试就是 HR 给的正面回应
+      if(APPS_QUICK_K === 'replied'   && ['replied','written','interview','offer'].indexOf(a.status) < 0) return false;
+      if(APPS_QUICK_K === 'written'   && a.status !== 'written') return false;
+      if(APPS_QUICK_K === 'interview' && a.status !== 'interview') return false;
+      if(APPS_QUICK_K === 'offer'     && a.status !== 'offer') return false;
+      if(APPS_QUICK_K === 'rejected'  && a.status !== 'rejected') return false;
+      // 「未记时间」：状态配不齐时间。这与复盘页「未定时间」用的是同一个判据函数。
+      if(APPS_QUICK_K === 'notime'    && !appMissingTime(a)) return false;
+      if(APPS_QUICK_K === 'week'){
+        const ts = Date.parse(String(a.created_at || '').replace(' ', 'T'));
+        if(!(ts && ts >= weekAgo)) return false;
+      }
+    }
+    if(q){
+      const blob = [a.company, a.position, a.city, a.platform, jobSrcName(a.platform), a.message, a.strategy]
+        .map(x=>String(x==null?'':x)).join(' ').toLowerCase();
+      if(blob.indexOf(q) < 0) return false;
+    }
+    return true;
+  });
+}
+
+/** 「待投递」列：受搜索词 + **岗位池侧**筛选项（3 天内截止 / 高匹配度）影响。
+ *  它来自 jobs 表，与投递台账的状态筛选无关。 */
+function jobsPoolFiltered(){
+  const qEl = $('#appsQ');
+  const q = ((qEl && qEl.value) || '').trim().toLowerCase();
+  let pool = JOBS_POOL;
+  if(APPS_QUICK_K === 'soon'){
+    // 复用 deadlineInfo()（本地日历判据，不用字符串截断）——「今天截止」算在内，已截止不算
+    pool = pool.filter(j=>{ const d = deadlineInfo(j.deadline); return d.days != null && d.days >= 0 && d.days <= 3; });
+  }
+  if(APPS_QUICK_K === 'highmatch'){
+    pool = pool.filter(j=> Number(j.match_score || 0) >= HIGH_MATCH_SCORE);
+  }
+  if(!q) return pool;
+  return pool.filter(j=>{
+    const blob = [j.company, j.position, j.city, j.job_type, jobSrcName(j.source)]
+      .map(x=>String(x==null?'':x)).join(' ').toLowerCase();
+    return blob.indexOf(q) >= 0;
+  });
+}
+
+function appStatusOptions(a){
+  // 历史行可能是任意状态文本（后端 status 是自由列）⇒ 用一条额外 option 兜住，别让它显示成错的值
+  const known = Object.keys(APP_STATUS);
+  const extra = (a.status && known.indexOf(a.status) < 0)
+    ? '<option value="'+esc(a.status)+'" selected>'+esc(a.status)+'</option>' : '';
+  return extra + known.map(k=>'<option value="'+k+'"'+(a.status===k?' selected':'')+'>'+APP_STATUS[k]+'</option>').join('');
+}
+
+function appCardHtml(a){
+  const n = appNodeText(a);
+  return '<div class="kcard">'
+    + '<div class="t">'+esc(a.company||'–')+'</div>'
+    + '<div class="m"><span>'+esc(a.position||'–')+'</span></div>'
+    + '<div class="m"><span class="badge b-info">'+esc(jobSrcName(a.platform))+'</span>'
+    +   (a.city ? '<span>'+esc(a.city)+'</span>' : '')
+    +   '<span class="small">'+esc(fmtTs(a.created_at))+'</span></div>'
+    + '<div class="tn'+(n.cls?' '+n.cls:'')+'">'+esc(n.text)+'</div>'
+    + '<div class="m"><select data-appst="'+esc(a.id)+'">'+appStatusOptions(a)+'</select>'
+    +   '<button class="btn sm" data-apptime="'+esc(a.id)+'">改时间</button>'
+    +   (a.job_url ? '<a class="btn sm" href="'+esc(a.job_url)+'" target="_blank" rel="noopener">原岗位</a>' : '')
+    +   '<button class="btn sm" data-appdel="'+esc(a.id)+'">删</button></div>'
+    + '</div>';
+}
+
+/**
+ * @param actions 可选：追加在卡片底部的一行操作按钮。
+ *   为什么要这个参数而不是让调用方自己包一层 —— 「校招信息库」的卡片视图需要「详情 / 删」，
+ *   而卡片的外层 div 在函数里。让调用方各自拼一个外壳，就会出现两份卡片结构，
+ *   两份迟早长得不一样（一边有淘汰线、一边没有）。一个参数，一个结构。
+ */
+function jobCardHtml(j, actions){
+  const d = deadlineInfo(j.deadline);
+  const seg = [];
+  if(d.days != null) seg.push(d.text); else seg.push('招满为止');
+  if(j.posted_at) seg.push('发布 '+String(j.posted_at).slice(5));
+  if(j.match_score != null) seg.push('匹配 '+Math.round(Number(j.match_score))+' 分');
+  // 与「3 天内截止」筛选用同一个判据，避免标签说「剩 2 天」而筛选把它漏掉
+  const hot = (d.days != null && d.days >= 0 && d.days <= 3);
+  // 届别 / 标签徽章：**只读库里的 grad_year / tags 列**，不在这里重新解析 card_text ——
+  // 「校招信息库」的筛选器读的是同一对列，卡片若自行解析就会与筛选结果对不上
+  // （卡片上写着「免笔试」，筛选却筛不到它）。列的写入口径在 server/services/parseCardMeta.ts。
+  const gy = jobGrad(j);
+  const tg = jobTags(j);
+  return '<div class="kcard">'
+    + '<div class="t">'+esc(j.company||'–')+'</div>'
+    + '<div class="m"><span>'+esc(j.position||'–')+'</span></div>'
+    + '<div class="m"><span class="badge b-mut">'+esc(jobSrcName(j.source))+'</span>'
+    +   (j.job_type ? '<span class="badge b-pur">'+esc(j.job_type)+'</span>' : '')
+    +   (gy ? '<span class="badge b-info">'+esc(gy)+' 届</span>' : '')
+    +   '<span class="badge '+d.cls+'">'+esc(d.text)+'</span></div>'
+    + (tg.length ? '<div class="m">'+tg.slice(0,4).map(t=>'<span class="badge b-info">'+esc(t)+'</span>').join('')+'</div>' : '')
+    + '<div class="tn'+(hot?' warn':'')+'">'+esc(seg.join(' · '))+'</div>'
+    + (actions ? '<div class="m" style="margin-top:7px">'+actions+'</div>' : '')
+    + '</div>';
+}
+
+/* ---------- 流程时间节点编辑（看板与表格共用同一条编辑条） ----------
+   为什么不做「卡片里就地展开输入框」：看板列宽 236px，塞三个输入框会把公司/职位挤没；
+   而且看板与表格两处各写一套，必然漂移成两种行为（一处能清空、一处不能）。 */
+const ROUND_OPTIONS = ['', '一面', '二面', '三面', 'HR 面', '终面', '群面', '笔试后沟通'];
+
+/** 轮次下拉。历史值可能是任意文本（列是自由文本）⇒ 用一条额外 option 兜住，
+ *  否则渲染时会把不在候选里的值默默丢成空 —— 一保存就抹掉用户之前填的轮次。 */
+function roundOptions(a){
+  const cur = String((a && a.interview_round) || '').trim();
+  const extra = (cur && ROUND_OPTIONS.indexOf(cur) < 0)
+    ? '<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>' : '';
+  return extra + ROUND_OPTIONS.map(k=>
+    '<option value="'+esc(k)+'"'+(k===cur?' selected':'')+'>'+(k?esc(k):'（未填写）')+'</option>').join('');
+}
+
+function openAppsTimeEditor(id){
+  const a = (APPS_CACHE||[]).filter(x=>x.id===id)[0];
+  const card = $('#appsTimeEditCard');
+  if(!card || !a) return;
+  card.dataset.appid = id;
+  const set = (sel, v)=>{ const e = $(sel); if(e) e.value = (v==null?'':String(v)); };
+  set('#ateWritten', a.written_at);
+  set('#ateInterview', a.interview_at);
+  set('#ateOffer', a.offer_at);
+  set('#ateClosed', a.closed_at);
+  const rs = $('#ateRound'); if(rs) rs.innerHTML = roundOptions(a);
+  const who = $('#appsTimeWho'); if(who) who.textContent = (a.company||'–') + ' · ' + (a.position||'–');
+  const msg = $('#appsTimeMsg'); if(msg) msg.textContent = '';
+  card.hidden = false;
+  card.scrollIntoView({ block:'nearest' });
+}
+
+function closeAppsTimeEditor(){
+  const card = $('#appsTimeEditCard');
+  if(card){ card.hidden = true; delete card.dataset.appid; }
+}
+
+/**
+ * 保存前的**粗校验**：只判「像不像一个日期」，不把后端的规整规则抄一遍（抄一遍必然漂移）。
+ * 🔴 为什么必须有这一步：后端 normalizeFlowTime 对认不出的串会规整成 NULL
+ *    ⇒ 用户手抖打成 `2026/10/08`，点保存会**静默清掉**他刚填的时间，界面还显示「已保存」。
+ *    宁可拦住并说清楚格式，也不要「保存成功但什么都没存」。
+ */
+const FLOW_TIME_SHAPE = /^\d{4}-\d{2}-\d{2}(\s\d{2}:\d{2})?$/;
+function flowTimeLoose(v){
+  const s = String(v==null?'':v).trim();
+  if(!s) return { ok:true, value:'' };          // 空 = 清除该节点，是允许的
+  if(!FLOW_TIME_SHAPE.test(s)) return { ok:false, value:'' };
+  return { ok:true, value:s };
+}
+
+async function saveAppsTime(){
+  const card = $('#appsTimeEditCard'), msg = $('#appsTimeMsg'), btn = $('#appsTimeSave');
+  if(!card || !card.dataset.appid) return;
+  const fields = [
+    ['written_at',   '#ateWritten',   '笔试时间'],
+    ['interview_at', '#ateInterview', '面试时间'],
+    ['offer_at',     '#ateOffer',     'Offer 时间'],
+    ['closed_at',    '#ateClosed',    '结束时间'],
+  ];
+  const patch = {};
+  for(const f of fields){
+    const el = $(f[1]);
+    const r = flowTimeLoose(el ? el.value : '');
+    if(!r.ok){
+      if(msg) msg.textContent = f[2] + '格式不对：写成 2026-10-08 或 2026-10-08 14:00。';
+      return;
+    }
+    patch[f[0]] = r.value;    // 空串 = 清除（后端会把空串落成 NULL）
+  }
+  const rs = $('#ateRound');
+  patch.interview_round = rs ? rs.value : '';
+  if(btn) btn.disabled = true;
+  if(msg) msg.textContent = '保存中…';
+  try{
+    await api('/api/applications/'+encodeURIComponent(card.dataset.appid), { method:'PATCH', body: JSON.stringify(patch) });
+    if(msg) msg.textContent = '已保存。';
+    closeAppsTimeEditor();
+    await loadMyApps();
+  }catch(e){
+    if(msg) msg.textContent = '保存失败：' + e.message;
+  }finally{ if(btn) btn.disabled = false; }
+}
+
+function bindAppActions(rootSel){
+  $$(rootSel+' [data-appst]').forEach(s=>s.addEventListener('change', async ()=>{
+    s.disabled = true;
+    try{
+      await api('/api/applications/'+encodeURIComponent(s.dataset.appst), { method:'PATCH', body: JSON.stringify({ status: s.value }) });
+      await loadMyApps();
+    }catch(e){ alert('改状态失败：'+e.message); s.disabled = false; }
+  }));
+  $$(rootSel+' [data-apptime]').forEach(b=>b.addEventListener('click', ()=>{
+    openAppsTimeEditor(b.dataset.apptime);
+  }));
+  $$(rootSel+' [data-appdel]').forEach(b=>b.addEventListener('click', async ()=>{
+    if(!confirm('删除这条投递记录？\n只影响本地台账，不影响平台上已经发生的投递。')) return;
+    try{
+      await api('/api/applications/'+encodeURIComponent(b.dataset.appdel), { method:'DELETE' });
+      await loadMyApps();
+    }catch(e){ alert('删除失败：'+e.message); }
+  }));
+}
+
+function renderAppsBoard(list){
+  const host = $('#appsBoardCols'); if(!host) return;
+  const byStage = {};
+  for(const a of list){ const k = a.status || 'applied'; (byStage[k] = byStage[k] || []).push(a); }
+  // 「待投递」永远来自岗位池（两张表天然不重叠：台账里的都是投过的）
+  const pool = jobsPoolFiltered();
+  host.innerHTML = APP_STAGES.map(s=>{
+    const items = (s.from === 'job') ? pool : (byStage[s.key] || []);
+    const cap = items.length > 60 ? items.slice(0, 60) : items;
+    const body = cap.length
+      ? cap.map(x=> s.from === 'job' ? jobCardHtml(x) : appCardHtml(x)).join('')
+      : '<div class="none">—</div>';
+    const more = items.length > cap.length
+      ? '<div class="none">…另有 '+(items.length - cap.length)+' 条，用搜索缩小范围</div>' : '';
+    return '<div class="kb"><h3><span>'+esc(s.label)+'</span><em>'+items.length+'</em></h3>'+body+more+'</div>';
+  }).join('');
+  bindAppActions('#appsBoardCols');
+}
+
+function renderAppsTable(list){
+  const tb = $('#appsTbl tbody'); if(!tb) return;
+  if(!list.length){
+    tb.innerHTML = '<tr><td colspan="9" class="empty">当前筛选下没有记录 —— 到「投递中心」跑一轮，或先在「校招信息库」挑岗位</td></tr>';
+    return;
+  }
+  tb.innerHTML = list.slice(0,300).map(a=>{
+    const n = appNodeText(a);
+    return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(a.position||'–')+'</td>'
+      + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span></td>'
+      + '<td>'+esc(jobSrcName(a.platform))+'</td>'
+      + '<td>'+esc(a.city||'–')+'</td>'
+      + '<td class="small muted">'+esc(fmtTs(a.created_at))+'</td>'
+      + '<td class="small"'+(n.cls==='warn'?' style="color:var(--warn)"':' class="small muted"')+'>'+esc(n.text)+'</td>'
+      + '<td><select data-appst="'+esc(a.id)+'">'+appStatusOptions(a)+'</select></td>'
+      + '<td><button class="btn sm" data-apptime="'+esc(a.id)+'">改时间</button> '
+      + (a.job_url ? '<a class="btn sm" href="'+esc(a.job_url)+'" target="_blank" rel="noopener">原岗位</a> ' : '')
+      + '<button class="btn sm" data-appdel="'+esc(a.id)+'">删</button></td></tr>';
+  }).join('');
+  bindAppActions('#appsTbl');
+}
+
+function renderMyApps(){
+  const list = myAppsFiltered();
+  const cnt = {};
+  for(const a of APPS_CACHE){ const k = a.status || 'unknown'; cnt[k] = (cnt[k]||0)+1; }
+  const box = $('#appsStats');
+  if(box){
+    const cell = (v,l)=> '<div class="card"><div class="stat"><div class="v">'+v+'</div><div class="l">'+l+'</div></div></div>';
+    box.innerHTML = cell(APPS_CACHE.length, '投递总数')
+      + cell(cnt.applied||0, '已投递（待跟进）')
+      + cell((cnt.replied||0)+(cnt.written||0)+(cnt.interview||0)+(cnt.offer||0), '有回复')
+      + cell(cnt.written||0, '笔试中')
+      + cell(cnt.offer||0, '已录用');
+  }
+  const c2 = $('#appsCount'); if(c2) c2.textContent = list.length+' 条';
+  // 池侧筛选项带「待投递 ·」前缀，免得点了「3 天内截止」却发现台账那几列毫无变化而以为坏了
+  renderAppsQuick();
+  renderAppsBoard(list);
+  renderAppsTable(list);
+}
+
+/** 导出**当前筛选结果**为 CSV（带 BOM，Excel 打开中文不乱码）——所见即所得。 */
+function exportAppsCsv(){
+  const list = myAppsFiltered();
+  if(!list.length){ alert('当前筛选结果为空，没有可导出的记录。'); return; }
+  const q = (v)=> '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const head = ['公司','职位','阶段','平台','城市','投递时间','岗位链接','备注'].map(q).join(',');
+  const body = list.map(a=>[ a.company, a.position, APP_STATUS[a.status]||a.status||'',
+    jobSrcName(a.platform), a.city, fmtTs(a.created_at), a.job_url, a.message ].map(q).join(','));
+  const csv = '\ufeff' + head + '\n' + body.join('\n');
+  const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
+  const a = document.createElement('a');
+  a.href = url; a.download = 'offer-where-投递记录-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+// 搜索框：防抖后重渲染（本地数组过滤，不打接口）
+$('#appsQ').addEventListener('input', ()=>{ clearTimeout(APPS_Q_T); APPS_Q_T = setTimeout(()=>renderMyApps(), 180); });
+// 卡片 / 表格视图切换
+$$('#appsViewTabs [data-appview]').forEach(b=>b.addEventListener('click', ()=>{
+  APPS_VIEW = b.dataset.appview;
+  $$('#appsViewTabs [data-appview]').forEach(x=>x.classList.toggle('active', x === b));
+  const bd = $('#appsBoard'), tw = $('#appsTableWrap');
+  if(bd) bd.style.display = (APPS_VIEW === 'card') ? '' : 'none';
+  if(tw) tw.style.display = (APPS_VIEW === 'table') ? '' : 'none';
+}));
+const appsAddBtn = $('#appsAddJob');
+if(appsAddBtn) appsAddBtn.addEventListener('click', ()=>navigate('jobsadd'));
+const appsExpBtn = $('#appsExport');
+if(appsExpBtn) appsExpBtn.addEventListener('click', exportAppsCsv);
+// 「刷新」按钮必须把岗位池缓存一并作废，否则点了只重取台账、看板「待投递」列纹丝不动。
+$('#appsRefresh').addEventListener('click', ()=>{ JOBS_POOL_READY = false; loadMyApps(); });
+// 时间节点编辑条：这两个按钮在**脚本顶层**绑定。它们引用的元素全在静态 HTML 里，
+// 所以不存在「先有卡片才绑得上」的问题；反过来，若这里写错 id，顶层 TypeError 会让
+// 它之后的全部脚本（含 init）不执行 —— 正是 console:check 那条 id 合约要拦的事。
+$('#appsTimeSave').addEventListener('click', saveAppsTime);
+$('#appsTimeClose').addEventListener('click', closeAppsTimeEditor);
+
 /* ---------- logs ---------- */
 let logTab = 'run';
 function loadLogsTab(){
@@ -2536,7 +5430,10 @@ $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') $('#modal')
 fillPlatformSelects();
 initCityPicker();
 checkSvc();
-loadDashboard();
+// 走 navigate('dashboard') 而不是直接 loadDashboard()：
+// 顶栏标题/副标题的唯一真相源是 VIEW_META，直接调 loadDashboard 会让静态 HTML 里的
+// 初始标题（改名前是「首页看板」）留在页面上，与侧栏选中项对不上。
+navigate('dashboard');
 </script>
 </body>
 </html>

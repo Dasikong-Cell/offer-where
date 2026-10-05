@@ -3013,6 +3013,899 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     '此前 UI 没有 realSend 入口，官网通道恒为预览 —— 用户以为在真投，其实只填了表');
 }
 
+/* ===== 岗位台（校招信息库 / 添加岗位 / 我的投递） =====
+   这批断言刻意**锚在 console.html 的具体元素上**，而不是只 `includes` 一个字符串。
+   理由：「面板 → 端点」这类功能最危险的失效形态是**后端闸门还在、前端入口没了** ——
+   此时门禁全绿（后端断言只测后端），用户点了没反应也不报错。
+   而只 `includes('jaCompany')` 同样会因 JS 里出现的同名字符串恒绿，
+   所以每条都要求「元素 id」与「真实端点调用」同时**恰好命中 1 次**。 */
+{
+  const cH = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  // ⚠️ HTML 注释里也写着 `<a>` / `data-view` 这类字样，会去「满足」下面第一条断言 ⇒ 先剥注释再匹配。
+  //    （stripComments 不认 HTML 的 <!-- -->，所以这里单独剥一遍。）
+  const cHtml = cH.replace(/<!--[\s\S]*?-->/g, '');
+  const n1 = (hay: string, needle: string) => hay.split(needle).length - 1;
+
+  check('侧栏分两组：求职工作台 / 投递执行',
+    n1(cHtml, '<div class="grp">求职工作台</div>') === 1
+    && n1(cHtml, '<div class="grp">投递执行</div>') === 1);
+
+  check('三个新导航项都在侧栏（各恰好 1 次）',
+    n1(cHtml, 'data-view="jobs"') === 1
+    && n1(cHtml, 'data-view="jobsadd"') === 1
+    && n1(cHtml, 'data-view="apps"') === 1);
+
+  check('#nav 里每个导航项都带 data-view（没有的会被当成「切到 undefined 视图」）',
+    (() => {
+      const nav = (cHtml.match(/<nav class="nav" id="nav">([\s\S]*?)<\/nav>/) || [])[1] || '';
+      const as = nav.match(/<a\b[^>]*>/g) || [];
+      return as.length >= 10 && as.every((a) => /\bdata-view="/.test(a));
+    })());
+
+  check('三个新视图容器存在',
+    n1(cHtml, 'id="view-jobs"') === 1
+    && n1(cHtml, 'id="view-jobsadd"') === 1
+    && n1(cHtml, 'id="view-apps"') === 1);
+
+  check('VIEW_META 补齐三项（缺一项 navigate 里就直接 TypeError，整页白屏）',
+    n1(cH, "jobs:{t:'校招信息库'") === 1
+    && n1(cH, "jobsadd:{t:'添加岗位'") === 1
+    && n1(cH, "apps:{t:'我的投递'") === 1);
+
+  check('添加岗位：表单元素齐全（公司/岗位/城市/类型/链接/截止/JD）',
+    ['jaCompany', 'jaPosition', 'jaCity', 'jaType', 'jaUrl', 'jaDeadline', 'jaJd']
+      .every((id) => n1(cHtml, 'id="' + id + '"') === 1));
+
+  check('添加岗位：保存真的打到 POST /api/jobs（不是只画了个按钮）',
+    n1(cH, "api('/api/jobs', { method:'POST', body: JSON.stringify(body) })") === 1,
+    '前端入口在、端点调用没了 ⇒ 点了没有任何反应，且不报任何错');
+
+  check('添加岗位：岗位类型以 jobType 提交（后端不认直传的 job_type）',
+    n1(cH, "jobType: $('#jaType').value || null,") === 1);
+
+  check('校招信息库：loadJobs 真的向 /api/jobs 取数并渲染进 jobsTbl',
+    // ⚠️ 这里**不能**用 `n1(cH, "api('/api/jobs')") === 1`：showJob（职位记录面板在用）里
+    //    也有同一句 ⇒ 计数恒为 2 而失败。改成在 loadJobs 的**函数体内**找调用 ——
+    //    既不受别处同名调用影响，也不会因为将来多一处调用而假红。
+    (() => {
+      const body = (cH.match(/async function loadJobs\(\)\{([\s\S]*?)\n\}/) || [])[1] || '';
+      return body.length > 0 && /api\('\/api\/jobs'\)/.test(body);
+    })()
+    && n1(cHtml, 'id="jobsTbl"') === 1
+    // 详情/删除的绑定已抽成 bindJobsRows(scope)：表格与卡片**共用一份**删除逻辑
+    // （两处各写一遍必然漂移成「一处确认、一处不确认」）。断言随之钉住
+    // 「绑定函数在」+「两个容器都调了它」+「选择器仍取 [data-jv]」。
+    && n1(cH, 'function bindJobsRows(scope){') === 1
+    && n1(cH, "$$(scope+' [data-jv]')") === 1
+    && n1(cH, "bindJobsRows('#jobsTbl');") === 1
+    && n1(cH, "bindJobsRows('#jobsCards');") === 1);
+
+  check('校招信息库：截止倒计时按本地日历构造（不是截字符串前 10 位）',
+    n1(cH, 'function deadlineInfo(dl, now){') === 1
+    && n1(cH, 'new Date(Number(m[1]), Number(m[2])-1, Number(m[3]))') === 1);
+
+  check('我的投递：状态流转真的打 PATCH /api/applications/:id',
+    n1(cHtml, 'id="appsTbl"') === 1
+    && n1(cH, "bindAppActions('#appsBoardCols');") === 1
+    && n1(cH, "bindAppActions('#appsTbl');") === 1
+    && n1(cH, "api('/api/applications/'+encodeURIComponent(s.dataset.appst), { method:'PATCH', body: JSON.stringify({ status: s.value }) })") === 1);
+}
+
+// ── 对齐 offerbiu 的六页：总览 / 我的投递看板 / AI 匹配 / 简历优化 / 投递复盘 / 个人中心 ──
+// 这一节的断言全部**锚到元素或锚到整条语句**：前端「换皮」时后端闸门还在、UI 入口没了，
+// 门禁却照样全绿 —— 所以「面板 → 端点」类功能必须证明「控件在」且「真打这个端点」。
+{
+  const pH = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  const pHtml = pH.replace(/<!--[\s\S]*?-->/g, '');   // ⚠️ stripComments 不认 HTML 的 <!-- -->
+  const cnt = (hay: string, needle: string) => hay.split(needle).length - 1;
+  const navMatch = pHtml.match(/<nav class="nav" id="nav">([\s\S]*?)<\/nav>/);
+  const navHtml = navMatch ? navMatch[1] : '';
+  const sectionOf = (id: string) => {
+    const m = pHtml.match(new RegExp(`<section class="view[^"]*" id="${id}">([\\s\\S]*?)</section>`));
+    return m ? m[1] : '';
+  };
+  const jsBody = (name: string) => {
+    const m = pH.match(new RegExp(`(?:async )?function ${name}\\(([\\s\\S]*?)\\n\\}`));
+    return m ? m[1] : '';
+  };
+
+  // ---- 侧栏：前段完全按 offerbiu 的顺序，末尾另起「投递执行」组 ----
+  const OB_ORDER = ['dashboard', 'apps', 'jobs', 'jobsadd', 'resume', 'resumemake', 'autofill', 'match', 'optimize', 'review', 'profile'];
+  check('侧栏前 11 项按 offerbiu 顺序排（总览 → … → 个人中心），且恰好分两组',
+    navHtml.length > 0
+    && OB_ORDER.every((v, i) => {
+      const a = navHtml.indexOf(`data-view="${v}"`);
+      const next = i + 1 < OB_ORDER.length ? navHtml.indexOf(`data-view="${OB_ORDER[i + 1]}"`) : Number.MAX_SAFE_INTEGER;
+      return a >= 0 && a < next;
+    })
+    && cnt(navHtml, 'class="grp"') === 2, '');
+  check('本项目的投递执行组排在 offerbiu 组之后（不能机械照搬、把自家入口删了）',
+    ['deliver', 'records', 'logs', 'advanced', 'enhance'].every((v) => {
+      const i = navHtml.indexOf(`data-view="${v}"`);
+      return i > navHtml.indexOf('data-view="profile"');
+    }), '');
+  check('不设「会员中心 / 免费福利」（本地免费工具放这两个入口就是假的）',
+    !/会员中心|免费福利/.test(pHtml), '');
+
+  // ---- 总览页 ----
+  const dash = sectionOf('view-dashboard');
+  check('总览页：4 张统计卡 + 本周投递趋势 + 3 天内截止 齐备',
+    dash.length > 0
+    && ['dTotal', 'dApplied', 'dInterview', 'dOffer', 'trendChart', 'soonList', 'ovMatch', 'ovAddJob']
+      .every((id) => cnt(pHtml, `id="${id}"`) === 1), '');
+  check('总览页：「已投递」写的是纯数字（取自投递台账，不再混进 appliedRate 百分比）',
+    cnt(pH, "dApplied').textContent = acApplied") === 1
+    && cnt(pH, 'appliedRate') === 0, '');
+  check('总览页：趋势图真的调 GET /api/stats/trend',
+    cnt(pH, "api('/api/stats/trend?days=7')") >= 1, '');
+  check('总览页：3 天内截止清单真读 /api/jobs，且用 deadlineInfo 的本地日历判据',
+    /api\('\/api\/jobs'\)/.test(jsBody('renderSoon')) && /deadlineInfo\(/.test(jsBody('renderSoon')), '');
+  check('总览页：hero 两个按钮接的是真视图（AI 匹配 / 添加岗位）',
+    cnt(pH, "btnOvMatch) btnOvMatch.addEventListener('click', ()=>navigate('match'))") === 1
+    && cnt(pH, "btnOvAddJob) btnOvAddJob.addEventListener('click', ()=>navigate('jobsadd'))") === 1, '');
+
+  // ---- A 批：三个「静默失效」的筛选控件（2026-10-04 功能对齐检测发现）----
+  // 背景：`jobs.job_type` 与 `jobs.deadline` 在真实库里是 **0 / 2506**（招聘平台不提供），
+  // 于是「全部类型」「全部截止状态」「3 天内截止」三类控件**恒空**，而且页面看着完全正常、
+  // 点了也不报错 —— 「控件在 ≠ 功能生效」。判据升级：靠某一列筛/数的功能，
+  // 验收必须先问「这一列的覆盖率是多少」。
+  // ⚠️ 以下计数一律先剥注释：本批的注释里**引用**了反例串（`days === null || days >= 0`），
+  //    不剥注释会让 `=== 0` 那类断言被注释满足或弄红。
+  {
+    const pCode = stripComments(pHtml);
+    const jobsSection = sectionOf('view-jobs');
+    const jobsAddSection = sectionOf('view-jobsadd');
+
+    // 反向护栏：先证明「还有足量内联脚本可扫」。否则提取逻辑一旦失效，
+    // 下面所有 `=== 0` 断言都会**恒绿**（该抓的没抓到，还看着一切正常）。
+    check('A 批断言自检：剥注释后仍扫到足量内联脚本（防「扫描量为 0 ⇒ ==0 恒绿」）',
+      pCode.length > 150000 && cnt(pCode, 'function renderJobs(){') === 1,
+      `pCode.length=${pCode.length}`);
+
+    check('校招信息库：类型筛选候选**只取数据实测值**（不再并写死的 JOB_TYPES 清单）',
+      cnt(pCode, "const ts = Array.from(new Set(JOBS_CACHE.map(j=>String(j.job_type==null?'':j.job_type).trim()).filter(Boolean))).sort();") === 1
+      && cnt(pCode, '.concat(JOB_TYPES)') === 0,
+      '写死清单在数据为空时会凭空造出 10 个筛不出东西的选项');
+
+    check('校招信息库：两个筛选下拉仍在（**禁用 ≠ 删除**，数据补上后必须能自动解禁）',
+      cnt(jobsSection, 'id="jobsType"') === 1 && cnt(jobsSection, 'id="jobsDeadline"') === 1
+      && cnt(jobsSection, 'value="open"') === 1 && cnt(jobsSection, 'value="soon"') === 1
+      && cnt(jobsSection, 'value="expired"') === 1 && cnt(jobsSection, 'value="none"') === 1, '');
+
+    check('校招信息库：某一列全空 ⇒ 禁用该下拉 + 给出原因；有数据时解禁并清掉 title',
+      cnt(pCode, 'function jobsFilterAvailability(){') === 1
+      && cnt(pCode, 'el.disabled = true;') === 1
+      && cnt(pCode, "el.removeAttribute('title');") === 1
+      && cnt(pCode, 'jobsFilterAvailability();') === 1,
+      '函数 / 禁用 / 解禁 / 调用点，四处缺一不可');
+
+    check('校招信息库 / 我的投递：「有截止数据」的判据共用同一套（自由文本截止日不算「有数据」）',
+      cnt(pCode, "has: j=> deadlineInfo(j.deadline).days !== null") === 1
+      && cnt(pCode, "if(k === 'soon')      return JOBS_POOL.some(j=> deadlineInfo(j.deadline).days !== null);") === 1,
+      '两处若各写一套（一处非空、一处可解析），会出现「下拉可用但筛出来是空的」');
+
+    check('校招信息库：「截止状态」的唯一判据是 deadlineMatch，且「未截止」排除「没填」',
+      cnt(pCode, 'function deadlineMatch(key, days){') === 1
+      && cnt(pCode, "if(key === 'open')    return days !== null && days >= 0;") === 1
+      && cnt(pCode, 'days === null || days >= 0') === 0,
+      '「没填截止」有独立档位，不能算进「未截止」——曾因此让这一档等于全量');
+
+    check('校招信息库：表格筛选走同一个判据（不许两处各写一套）',
+      cnt(pCode, 'if(dl && !deadlineMatch(dl, deadlineInfo(j.deadline).days)) return false;') === 1
+      && cnt(pCode, "if(dl==='open'") === 0, '');
+
+    check('校招信息库：被禁用的筛选器在说明行里写明原因（不能只让它变灰）',
+      cnt(pCode, 'JOBS_FILTER_OFF.length') === 1
+      && /筛选已禁用：岗位库里没有任何记录带这一项/.test(pCode), '');
+
+    check('添加岗位：写明「岗位类型 / 截止日期」正是那两个筛选器的数据来源（给用户上架入口）',
+      cnt(jobsAddSection, 'id="jaDeadline"') === 1
+      && /两个筛选器的数据来源/.test(jobsAddSection), '');
+
+    check('总览「3 天内截止」：区分「没有要截止的」与「根本没有截止数据」（后者显示 — 而不是 0）',
+      cnt(pCode, 'const dated = jobs.filter(j=>deadlineInfo(j.deadline).days !== null).length;') === 1
+      && cnt(pCode, "if(tag) tag.textContent = dated ? (soon.length + ' 个') : '—';") === 1
+      && cnt(pCode, "if(tag) tag.textContent = soon.length + ' 个';") === 0, '');
+
+    check('我的投递：池侧快筛项在无数据时被禁用，并写明「（无数据）」（不留点了没反应的按钮）',
+      cnt(pCode, 'function appsQuickReady(k){') === 1
+      && cnt(pCode, "if(k === 'soon')      return JOBS_POOL.some(j=> deadlineInfo(j.deadline).days !== null);") === 1
+      && cnt(pCode, "(off ? ' disabled' : '')") === 1
+      && cnt(pCode, "(off ? '（无数据）' : '')") === 1, '');
+
+    check('我的投递：快筛条每次整体重建 + 失效档位自动退回「全部」（岗位池刷新后状态要跟着变）',
+      cnt(pCode, 'function renderAppsQuick(){') === 1
+      && cnt(pCode, 'renderAppsQuick();') === 1
+      && cnt(pCode, "if(!appsQuickReady(APPS_QUICK_K)) APPS_QUICK_K = 'all';") === 1
+      && cnt(pCode, 'qk.dataset.filled') === 0,
+      '用 dataset.filled 只建一次 ⇒ 刷新后会留下「明明有数据却是灰的」');
+  }
+
+  // ---- B 批：校招信息库补齐（届别 + 快捷标签 + 重置筛选 + 卡片视图）----
+  // 背景：A 批把「控件在 ≠ 功能生效」变成可验收的不变量，但当时**数据是空的**。
+  // B 批把数据补上（`grad_year` / `tags` / `deadline` 三列 + 存量回填），
+  // 顺带证明 A 批那套「无数据禁用 ⇒ 有数据自动解禁」真的会解禁。
+  // ⚠️ 计数前一律先剥注释：本批注释里**引用**了被禁用的写法（`dataset.filled`、
+  //    `(off ? ' disabled' : '')`），不剥会被自己的注释满足 ⇒ 假绿。
+  {
+    const pCode = stripComments(pHtml);
+    const jobsSection = sectionOf('view-jobs');
+    const dbSrc = fs.readFileSync(new URL('../server/db.ts', import.meta.url), 'utf8');
+    const idxSrc = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+    const metaSrc = fs.readFileSync(new URL('../server/services/parseCardMeta.ts', import.meta.url), 'utf8');
+    const bfSrc = fs.readFileSync(new URL('../scripts/backfill_card_meta.ts', import.meta.url), 'utf8');
+    /** 抠出一个顶层函数的函数体（A 批同款手法）。抠不到返回空串 ⇒ 下面的 `>= 0` / `=== 0` 会红。 */
+    const fnBody = (src: string, name: string) => {
+      const m = src.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}'));
+      return m ? m[1] : '';
+    };
+
+    // 反向护栏：先证明「新结构的函数确实被扫到」。否则本块里的 `=== 0` 类断言会恒绿。
+    check('B 批断言自检：本批新增的函数/元素都在（防「扫描量为 0 ⇒ 整段恒绿」）',
+      cnt(pCode, 'function jobsFiltered(opt){') === 1
+      && cnt(pCode, 'function jobsAvailTags(){') === 1
+      && cnt(pCode, 'function renderJobsChips(){') === 1
+      && cnt(pCode, 'function jobsResetFilters(){') === 1
+      && cnt(pCode, 'function renderJobsTable(list){') === 1
+      && cnt(pCode, 'function renderJobsCards(list){') === 1
+      && cnt(pCode, 'function jobsApplyView(){') === 1
+      && cnt(jobsSection, 'id="jobsGrad"') === 1, `pCode.length=${pCode.length}`);
+    check('B 批断言自检：抠函数体的正则确有产出（防「fnBody 恒空 ⇒ 下面几条恒绿」）',
+      fnBody(pCode, 'jobsResetFilters').length > 40 && fnBody(pCode, 'fillJobsFilters').length > 800,
+      `reset=${fnBody(pCode, 'jobsResetFilters').length} fill=${fnBody(pCode, 'fillJobsFilters').length}`);
+
+    // ① 届别
+    check('校招信息库：届别下拉的候选**只取数据实测值**，并带条数（只有一个届时用户才明白为什么）',
+      cnt(pCode, "const gs = Array.from(new Set(JOBS_CACHE.map(j=>jobGrad(j)).filter(Boolean))).sort().reverse();") === 1
+      && cnt(pCode, 'rest.filter(j=>jobGrad(j) === g).length') === 1
+      && cnt(pCode, 'jobGrad(j)') >= 3,
+      '写死届别清单会造出筛不出东西的选项；不带条数则「只有一个可选值」看着像个坏了下拉');
+    check('届别入库前被收敛成「4 位年份」单一形态（否则下拉会出现两个看着一样的选项，各筛一部分）',
+      cnt(metaSrc, 'export function normalizeGradYear(') === 1
+      && cnt(dbSrc, "if (k === 'grad_year') return normalizeGradYear(v);") === 1
+      && cnt(dbSrc, 'cleaned.grad_year = normalizeGradYear(job.grad_year);') === 1,
+      '库里混进 2027届 / 2027 届 时，用户完全无法察觉');
+
+    // ② 标签
+    check('快捷标签：「数据里真的有这个标签」只判一处（渲染哪些 与 撤回哪些 必须同源）',
+      cnt(pCode, 'function jobsAvailTags(){') === 1
+      && cnt(pCode, 'JOBS_CACHE.some(j=>jobHasTag(j, d.key))') === 1
+      && cnt(pCode, 'const avail = jobsAvailTags();') === 1
+      && cnt(pCode, 'new Set(jobsAvailTags().map(d=>d.key))') === 1, '');
+    check('快捷标签：chip 上的数字 = **点下去会得到的条数**（多选时唯一自洽的口径）',
+      cnt(pCode, 'jobsFiltered({ tags: new Set([...JOBS_TAGS, d.key]) }).length') === 1,
+      '只跳过标签这一维的话，选中「秋招」后「免笔试」显示的是总条数，点下去却少一截 —— 数字与结果对不上比没数字更糟');
+    check('快捷标签：当前筛选下 0 条的 chip 被禁用并写明原因；**已选中的永不禁用**',
+      // ⚠️ E 批后 `const off = !on && n === 0;` 在**两个**函数里各有一份（标签 chip 与
+      //    「近 7 天截止」chip，语义相同但分属两个维度）⇒ 全文件计数会是 2。
+      //    这里要钉的是**标签 chip** 那一份 ⇒ 必须限定在 renderJobsChips 的函数体内。
+      cnt(fnBody(pCode, 'renderJobsChips'), 'const off = !on && n === 0;') === 1
+      && cnt(pCode, "const dis = off ? ' disabled' : '';") === 1
+      && cnt(pCode, '（当前筛选下 0 条）') === 1,
+      '禁用已选中的 chip = 用户无法取消它 = 被锁死在空结果上');
+    check('快捷标签：一条数据都没有时说明原因，且区分「后端没下发定义」与「数据里没有标签」',
+      cnt(pCode, '当前后端未下发标签定义（GET /api/jobs 的 tagDefs 字段）') === 1
+      && cnt(pCode, '暂无快捷标签：岗位库里没有任何一条记录带标签') === 1, '');
+    check('快捷标签：定义由服务端下发（前端不另抄一份 —— 抄了就是第二个真相源）',
+      cnt(idxSrc, 'tagDefs: CARD_UI_TAGS });') === 1
+      && cnt(pCode, 'JOBS_TAG_DEFS = (r && r.tagDefs) || [];') === 1
+      && cnt(pCode, 'const JOBS_TAG_ORDER') === 0
+      && cnt(pCode, "'免笔试','秋招','春招'") === 0,
+      '前端再抄一份标签表：改一边漏一边时会渲染出后端不认识的标签，点下去恒 0 条且不报错');
+    check('后端：标签取值受白名单约束（库里不可能有表外标签，前端才能只做 JSON.parse）',
+      cnt(metaSrc, 'export const CARD_TAG_KEYS') === 1
+      && cnt(metaSrc, '(CARD_TAG_KEYS as string[]).includes(k)') === 1
+      && cnt(pCode, 'JSON.parse(String(j.tags))') === 1
+      // ⚠️ 不能写 `cnt(pCode, 'catch(e){ return []; }') === 1`：别处（JD 长图 JSON 解析）
+      //    也有一份一模一样的兜底 ⇒ 那条断言测的是**别人家的代码**，这里删了它照样绿。
+      && fnBody(pCode, 'jobTags').indexOf('return [];') >= 0,
+      '前端刻意不重做归一化，靠的就是后端这层白名单；解析失败必须返回 [] 而不是让整页白屏');
+    check('「研究所」不是企业性质取值，而是公司名关键词（语义与字面不一致 ⇒ 写进 hint）',
+      cnt(metaSrc, '公司名里含「研究所」') === 1
+      && cnt(metaSrc, "head.includes('研究所')") === 1
+      && cnt(metaSrc, 'isNatureToken') >= 3,
+      '子串匹配会把它算成企业性质；实测 token 等值 0 条、公司名关键词 39 条');
+
+    // ③ 重置筛选
+    check('校招信息库：重置筛选把搜索框 + 全部下拉 + 快捷标签一起清掉（控件清单只声明一处）',
+      cnt(pCode, "const JOBS_FILTER_SELECTS = ['#jobsSource','#jobsCity','#jobsType','#jobsGrad','#jobsDeadline'];") === 1
+      && cnt(pCode, 'JOBS_FILTER_SELECTS.forEach(sel=>{') === 2
+      && cnt(pCode, 'JOBS_TAGS.clear();') === 1
+      && cnt(pCode, "const q = $('#jobsQ'); if(q) q.value = '';") === 1
+      && cnt(pCode, "JOBS_FILTER_SELECTS.filter(sel=> sel !== '#jobsDeadline')") === 1,
+      '重置与事件绑定各抄一份清单 ⇒ 将来加下拉只会加进一份，表现是「重置后某个下拉还留着上次的值」');
+    check('校招信息库：重置**不动视图**（视图是「我怎么看」不是「我筛什么」）',
+      cnt(fnBody(pCode, 'jobsResetFilters'), 'JOBS_VIEW') === 0
+      && cnt(fnBody(pCode, 'jobsResetFilters'), 'jobsApplyView') === 0, '');
+
+    // ④ 双视图
+    check('校招信息库：表格/卡片双视图齐备（两个容器 + 两个切档按钮 + 网格类）',
+      cnt(jobsSection, 'id="jobsTableWrap"') === 1
+      && cnt(jobsSection, 'id="jobsCards"') === 1
+      && cnt(jobsSection, 'id="jobsViewTabs"') === 1
+      && cnt(jobsSection, 'data-jobview="table"') === 1
+      && cnt(jobsSection, 'data-jobview="card"') === 1
+      && cnt(jobsSection, 'class="kcg"') === 1, '');
+    check('校招信息库：两块容器**互斥显示**，切视图走同一个渲染入口（不留「隐藏的那半是旧的」）',
+      cnt(fnBody(pCode, 'jobsApplyView'), "JOBS_VIEW === 'card'") === 2
+      && cnt(pCode, "if(JOBS_VIEW === 'card') renderJobsCards(list); else renderJobsTable(list);") === 1
+      && cnt(pCode, 'JOBS_VIEW = b.dataset.jobview;') === 1,
+      '两个视图各渲染一次的话，每次按键建两遍 DOM，且隐藏的那个会与可见的不同步');
+    check('校招信息库：卡片视图复用「我的投递」的**同一份**卡片渲染器（两处各写一份必然漂移）',
+      cnt(pCode, 'function jobCardHtml(j, actions){') === 1
+      && cnt(pCode, 'jobCardHtml(x)') === 1
+      && fnBody(pCode, 'renderJobsCards').indexOf('jobCardHtml(') >= 0
+      && fnBody(pCode, 'jobCardHtml').indexOf('const tg = jobTags(j);') >= 0,
+      '卡片只读库里的 grad_year / tags 列：自行解析 card_text 会出现「卡片写着免笔试、筛选却筛不到它」');
+    check('卡片样式选择器覆盖**两个**容器（只写 .kb 的话卡片视图没有边框/淘汰线，且不报错）',
+      cnt(pCode, '.kb .kcard, .kcg .kcard{') === 1
+      && cnt(pCode, '.kb .kcard .m, .kcg .kcard .m{') === 1
+      && cnt(pCode, '.kb .kcard .tn, .kcg .kcard .tn{') === 1
+      && cnt(pCode, '.kb .kcard .tn.warn, .kcg .kcard .tn.warn{') === 1, '');
+
+    // ⑤ 判据唯一化 + 候选不再是「只建一次」
+    check('校招信息库：表格 / 卡片 / chip 计数 / 届别计数**共用同一个**筛选判据',
+      cnt(pCode, 'function jobsFiltered(opt){') === 1
+      && cnt(pCode, 'const list = jobsFiltered();') === 1
+      && cnt(pCode, 'jobsFiltered({ skipGrad: true })') === 1
+      && cnt(pCode, 'jobsFiltered({ tags: new Set([...JOBS_TAGS, d.key]) })') === 1
+      && cnt(pCode, 'const list = all.filter(') === 0,
+      '各写一套的话，chip 上显示 12 条、点下去出来 7 条，谁都不知道该信哪个');
+    check('校招信息库：下拉候选不再「只建一次」（采集到新平台/新城市后下拉必须跟着变）',
+      // ⚠️ 不能写 `cnt(pCode, 'dataset.filled') === 0`：**另外 4 个页面**（职位记录 / 简历 /
+      //    复盘 / 高级）还有 13 处既有用法，A 批只删掉了 renderAppsQuick 里的那一处。
+      //    断言必须钉在**本页这个函数**里，否则测的是别人家的代码。
+      fnBody(pCode, 'fillJobsFilters').indexOf('dataset.filled') < 0
+      && cnt(pCode, 'function setJobsOptions(sel, html, want, label){') === 1
+      && cnt(pCode, 'JOBS_FILTER_DROPPED.push(label);') === 1
+      && cnt(pCode, 'JOBS_FILTER_DROPPED.length') === 1,
+      '只建一次 ⇒ 新出现的取值永远进不了下拉，用户筛不到自己刚采回来的岗位，且不报错');
+    check('校招信息库：重建候选时**保住用户已选的值**，取值消失了必须显式记一笔',
+      cnt(fnBody(pCode, 'fillJobsFilters'), 'keep[sel] = jobsCtlVal(sel);') === 1
+      && cnt(fnBody(pCode, 'fillJobsFilters'), 'setJobsOptions(') === 4
+      && cnt(pCode, "if(w && el.value !== w){ el.value = ''; JOBS_FILTER_DROPPED.push(label); }") === 1, '');
+
+    // ⑥ 数据层
+    check('jobs 表用 PRAGMA 判定后 ALTER 加列（CREATE TABLE IF NOT EXISTS 对已存在的表完全无用）',
+      cnt(dbSrc, "addJobCol('grad_year');") === 1
+      && cnt(dbSrc, "addJobCol('tags');") === 1
+      && cnt(dbSrc, 'ALTER TABLE jobs ADD COLUMN ${name} TEXT') === 1, '');
+    check('grad_year / tags 在**四处**写入链路上同步（漏一处 ⇒ 列存在但永远写不进去）',
+      cnt(dbSrc, "'grad_year', 'tags',") === 1
+      && cnt(dbSrc, "'grad_year', 'tags'] as const;") === 1
+      && cnt(dbSrc, 'grad_year, tags, match_score') === 1
+      && cnt(dbSrc, '@posted_at, @grad_year, @tags, @match_score') === 1
+      && cnt(dbSrc, "'grad_year' | 'tags'") === 1
+      && cnt(dbSrc, 'grad_year: job.grad_year ?? null,') === 1,
+      '列清单 / 白名单 / upsertJob 的 UPDATABLE / INSERT / 绑定参数 / PATCH 的 Pick，任何一处漏掉都是「列在、值永远为空」');
+    check('届别/标签/截止日的派生口径只有一份（upsertJob 与回填脚本共用 parseCardMeta）',
+      cnt(dbSrc, "from './services/parseCardMeta.js'") === 1
+      && cnt(bfSrc, "from '../server/services/parseCardMeta.js'") === 1
+      // ⚠️ 三个 needle 都给到**整行**：`parseCardMeta(job.card_text)` 这种短串在注释里
+      //    也会出现（本批的注释就在解释这段逻辑），计数会凭空多 1 而让断言红在错的地方。
+      && cnt(dbSrc, 'const gy = (job.card_text ? parseCardMeta(job.card_text).gradYear : null)') === 1
+      && cnt(dbSrc, 'const tg = job.card_text ? serializeTags(parseCardMeta(job.card_text).tags) : null;') === 1
+      && cnt(bfSrc, 'const meta = r.card_text ? parseCardMeta(r.card_text) : null;') === 1
+      && cnt(bfSrc, 'const jdGy = parseGradYear(r.jd);') === 1
+      // 两份文件都不许再出现自己的「20xx 届」正则（那才是真正的第二份解析规则）
+      && cnt(dbSrc, '/20\\d\\d\\s*届/') === 0
+      && cnt(bfSrc, '/20\\d\\d\\s*届/') === 0,
+      '两份规则必然漂移，而漂移的表现是「新采集的筛得到、老岗位筛不到」，不会有任何报错');
+    check('tags / deadline 刻意**只认 card_text**（正文里的「无需笔试」与卡片字段不是一回事）',
+      cnt(dbSrc, 'const tg = job.card_text ? serializeTags(parseCardMeta(job.card_text).tags) : null;') === 1
+      && cnt(dbSrc, 'if (job.deadline === undefined && job.card_text) {') === 1
+      && cnt(dbSrc, 'parseCardMeta(job.jd).tags') === 0, '');
+    check('回填脚本可预览、只填空值（不许用低置信度来源覆盖显式值）',
+      cnt(bfSrc, 'const has = (v: string | null) => !!(v && String(v).trim());') === 1
+      && cnt(bfSrc, "const DRY_RUN = flag('dry-run');") === 1
+      && cnt(bfSrc, 'if (!has(r.grad_year) && d.gradYear) patch.grad_year = d.gradYear;') === 1
+      && cnt(bfSrc, 'if (!has(r.tags) && d.tags) patch.tags = d.tags;') === 1
+      && cnt(bfSrc, 'if (!has(r.deadline) && d.deadline) patch.deadline = d.deadline;') === 1, '');
+  }
+
+  // ---- C 批：个人中心汇总（三源：岗位库 / 磁盘台账 / 本机 localStorage） ----
+  // ⚠️ 三源必须分开显示，合并显示 = 用户以为「历史只存在自己这台机器上」。
+  {
+    const pCode = stripComments(pHtml);
+    const dbSrc = fs.readFileSync(new URL('../server/db.ts', import.meta.url), 'utf8');
+    // 🔴 server/index.ts 是 **CRLF**（db.ts / console.html 是 LF，本仓库 EOL 本就不统一）。
+    //    跨行 needle 里写死 `\n` 在 CRLF 文件上**静默不匹配**（不报错、断言直接红在错的地方）——
+    //    本批写 `'[limit]\n    );'` 时实测就中了。这里统一归一成 `\n` 再断言。
+    const iSrc = stripComments(fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8'))
+      .replace(/\r\n/g, '\n');
+    const fnBody = (src: string, name: string) => {
+      const m = src.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}'));
+      return m ? m[1] : '';
+    };
+    /** 抠出「端点 A 到端点 B 之间」的那段源码 —— 用来断言某个 handler 内部没干坏事。 */
+    const between = (src: string, a: string, b: string) => {
+      const i = src.indexOf(a), j = src.indexOf(b);
+      return i >= 0 && j > i ? src.slice(i, j) : '';
+    };
+
+    // 反向护栏：先证明扫到了东西，否则下面所有 `=== 0` / `< 0` 类断言都会恒绿。
+    check('C 批断言自检：新增的三个端点与两个函数都在（防「扫描量 0 ⇒ 整段恒绿」）',
+      cnt(iSrc, 'app.get("/api/stats/summary"') === 1
+      && cnt(iSrc, 'app.get("/api/stats/match-history"') === 1
+      && cnt(iSrc, 'app.get("/api/resume/tailored-history"') === 1
+      && cnt(pCode, 'async function loadProfileStats(p){') === 1
+      && cnt(pCode, 'async function loadProfileHistory(){') === 1
+      && fnBody(pCode, 'loadProfile').length > 200
+      && fnBody(pCode, 'loadProfileStats').length > 600,
+      `loadProfile=${fnBody(pCode, 'loadProfile').length} stats=${fnBody(pCode, 'loadProfileStats').length}`);
+
+    check('个人中心「数据概览」不再为数个数拉全量（改走 /api/stats/summary 的 SQL 聚合）',
+      cnt(pCode, "api('/api/stats/summary')") === 1
+      // 🔴 判据必须是「loadProfile 函数体内不再出现全量拉取」：只查「文件里有 /api/stats/summary」
+      //    会恒绿（别处也能用到这个端点），证明不了老的全量拉取被去掉了。
+      && fnBody(pCode, 'loadProfile').indexOf("/api/jobs'") < 0
+      && fnBody(pCode, 'loadProfile').indexOf("/api/applications'") < 0,
+      '原来为 5 个数字拉 2500+ 条岗位 + 全量投递记录，岗位池越大页面越慢');
+    check('/api/stats/summary 只做 SQL 聚合（handler 内不许出现 listJobs / listApplications 全量捞取）',
+      between(iSrc, 'app.get("/api/stats/summary"', 'app.get("/api/stats/match-history"').length > 300
+      && between(iSrc, 'app.get("/api/stats/summary"', 'app.get("/api/stats/match-history"').indexOf('db.listJobs') < 0
+      && between(iSrc, 'app.get("/api/stats/summary"', 'app.get("/api/stats/match-history"').indexOf('db.listApplications') < 0,
+      '在应用层捞全表再 .length，等于把「只回计数」做成了「回全量」，端点就白开了');
+    check('matched_at 在**五处**同步（CREATE / ALTER / 白名单 / JobRow / updateJob 的 Pick）',
+      cnt(dbSrc, '    matched_at TEXT,') === 1
+      && cnt(dbSrc, "addJobCol('matched_at');") === 1
+      && cnt(dbSrc, "'grad_year', 'tags', 'matched_at',") === 1
+      && cnt(dbSrc, 'matched_at: string | null;') === 1
+      && cnt(dbSrc, "'grad_year' | 'tags' | 'matched_at'") === 1,
+      // 这条是本批实测踩出来的：前四处都改了、只漏 updateJob 那份**硬编码的 Pick 类型**，
+      // 报错是 TS2353「matched_at does not exist in type Partial<Pick<JobRow, ...>>」——
+      // 它绝不告诉你「你漏了列同步清单里的第五处」。
+      '漏 updateJob 的 Pick ⇒ 编译期才炸，且报错只说类型不匹配、不说是列同步问题');
+    check('两个匹配入口都写 matched_at（只改一处 ⇒ 那一路的历史没有时刻、排序错乱且不报错）',
+      cnt(iSrc, 'matched_at: new Date().toISOString()') === 2, '');
+    check('匹配历史**服务端为准**：读库而非 localStorage；老数据标 atUnknown、不伪装成精确时刻',
+      // ⚠️ 第一版这里锚的是 ORDER BY 那一行，结果和「limit 参数绑定」那条断言共用同一个 needle
+      //    ⇒ 改 LIMIT 会把**两条**一起弄红（对照跑出来才发现）。改成锚「读的是 jobs 表」这一行，
+      //    两条断言才各自独立。
+      cnt(iSrc, '+ "FROM jobs WHERE match_score IS NOT NULL "') === 1
+      && cnt(iSrc, 'atUnknown: !r.matched_at,') === 1
+      && cnt(pCode, "api('/api/stats/match-history?limit=8')") === 1,
+      '分数本来就在库里；用它当真相源后 localStorage 退化为「没有岗位行」那类的补位');
+    check('match-history 的 limit 走参数绑定且被夹取（拼进 SQL 的必须是整数，不能是原始 query 串）',
+      cnt(iSrc, 'Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 1), 200) : 30') === 1
+      && cnt(iSrc, '"ORDER BY COALESCE(matched_at, updated_at) DESC LIMIT ?",') === 1
+      && cnt(iSrc, '[limit]\n    );') === 1, '');
+    check('简历优化历史只回 basename 拼的静态 URL（回绝对路径等于把服务端目录结构泄漏出去）',
+      cnt(iSrc, "url: `/data/resume_tailored/${base}.pdf`,") === 1
+      && cnt(iSrc, "hasPdf: fs.existsSync(path.join(TAILORED_DIR, base + '.pdf')),") === 1
+      && cnt(iSrc, '/data/resume_tailored/${path.basename(') >= 1,
+      '产物可能已被清理策略删掉 ⇒ 先 existsSync 再给链接，不给死链');
+    check('历史区把「已入库」与「仅本机」分开显示（混着显示 ⇒ 用户以为历史只存在本机）',
+      cnt(pCode, 'matchHistoryList().filter(function(r){ return !(r && r.job && r.job.id); })') === 1
+      && cnt(pCode, '只存在这台浏览器') === 1, '');
+  }
+
+  // ---- E 批：「近 7 天截止」快捷 chip ----
+  // ⚠️ 三条不变量：判据复用 deadlineMatch 的 soon 档 / 状态写在 #jobsDeadline / 不进 tagDefs。
+  {
+    const pCode = stripComments(pHtml);
+    const metaSrc = fs.readFileSync(new URL('../server/services/parseCardMeta.ts', import.meta.url), 'utf8');
+    const fnBody = (src: string, name: string) => {
+      const m = src.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}'));
+      return m ? m[1] : '';
+    };
+
+    check('E 批断言自检：截止 chip 的两个函数都在（防「扫描量 0 ⇒ 整段恒绿」）',
+      cnt(pCode, 'function jobsSoonChipHtml(){') === 1
+      && fnBody(pCode, 'jobsSoonChipHtml').length > 500
+      && fnBody(pCode, 'renderJobsChips').length > 900,
+      `soon=${fnBody(pCode, 'jobsSoonChipHtml').length} chips=${fnBody(pCode, 'renderJobsChips').length}`);
+    check('截止 chip 的**判据就是 deadlineMatch 的 soon 档**（不许另写一份日期比较）',
+      cnt(pCode, "const n = jobsFiltered({ dl:'soon' }).length;") === 1
+      && cnt(pCode, "const dl = (o.dl !== undefined) ? o.dl : jobsCtlVal('#jobsDeadline');") === 1
+      && cnt(pCode, "if(key === 'soon')    return days !== null && days >= 0 && days <= 7;") === 1,
+      '另写一份就是第二个「几天内」口径，漂移的表现是「chip 显示 3 条、点下去 0 条」且无报错');
+    check('截止 chip 的**状态写在 #jobsDeadline 上**（不另设变量 ⇒ 重置筛选天然清掉它）',
+      cnt(pCode, "const on = jobsCtlVal('#jobsDeadline') === 'soon';") === 1
+      // 🔴 反向：出现 `let JOBS_SOON` 之类的第二份状态，重置就会「清了下拉、chip 还亮着」
+      && cnt(pCode, 'JOBS_SOON') === 0
+      && cnt(fnBody(pCode, 'jobsSoonChipHtml'), 'JOBS_SOON') === 0, '');
+    check('截止 chip **不进 tagDefs**（那是卡片标签维度，服务端才是真相源）',
+      cnt(pCode, 'data-jdl="soon"') === 1
+      && cnt(pCode, '$$(\'#jobsChips [data-jdl]\')') === 1
+      // 服务端下发的标签定义里不许出现「截止」这类非卡片标签的 key
+      && cnt(metaSrc, "key: 'soon'") === 0,
+      '混进去会让服务端背上它不该管的口径，且前端改文案时两边必然漂移');
+    check('截止 chip **无条件渲染**（旧写法在「没有标签」时早退，会把它一起吞掉）',
+      cnt(pCode, "let html = '<span class=\"note small\" style=\"align-self:center\">快捷关注</span>' + jobsSoonChipHtml();") === 1
+      && fnBody(pCode, 'renderJobsChips').indexOf('if(!avail.length){\n    //') < 0
+      && fnBody(pCode, 'renderJobsChips').indexOf('jobsSoonChipHtml()') >= 0, '');
+    check('截止 chip 已选中时**永不禁用**（禁用 = 把用户锁死在 0 条上）',
+      cnt(pCode, "const dis = ((off || !hasData) && !on) ? ' disabled' : '';") === 1, '');
+  }
+
+  // ---- 我的投递：看板视图 ----
+  check('我的投递：看板 / 表格双视图 + 搜索 + 快速筛选 + 导出 + 添加 齐备',
+    ['appsBoardCols', 'appsViewTabs', 'appsQuick', 'appsTableWrap', 'appsQ', 'appsExport', 'appsAddJob', 'appsRefresh']
+      .every((id) => cnt(pHtml, `id="${id}"`) === 1), '');
+  check('我的投递：看板列由 APP_STAGES 驱动（本项目的真实状态口径），不列永远为空的列',
+    cnt(pH, 'const APP_STAGES = [') === 1 && cnt(pH, 'APP_STAGES.map(') === 1
+    && cnt(pH, "key:'candidate', label:'待投递', from:'job'") === 1, '');
+  check('我的投递：删掉了已不存在的筛选元素引用（appsPlatform / appsStatus 引用数为 0）',
+    cnt(pH, 'appsPlatform') === 0 && cnt(pH, 'appsStatus') === 0, '');
+  check('我的投递：导出真的产出 CSV 文件（Blob + 下载）',
+    /function exportAppsCsv\(/.test(pH) && cnt(pH, "'text/csv;charset=utf-8'") === 1, '');
+  check('我的投递：状态流转仍然真的打 PATCH（看板卡片与表格两条路径共用同一绑定）',
+    /function bindAppActions\(/.test(pH)
+    && cnt(pH, "bindAppActions('#appsBoardCols');") === 1
+    && cnt(pH, "bindAppActions('#appsTbl');") === 1, '');
+
+  // ---- 四个新页面：元素齐备 且 真打端点 ----
+  check('AI 匹配页：元素齐备',
+    ['mtResume', 'mtResumeNote', 'mtSrcTabs', 'mtJob', 'mtPasteJd', 'mtRun', 'mtResult', 'mtHistory', 'mtHistoryBody']
+      .every((id) => cnt(pHtml, `id="${id}"`) === 1), '');
+  check('AI 匹配页：真的打 POST /api/jobs/match-one（单岗位，避免全量打分的慢与贵）',
+    cnt(pH, "api('/api/jobs/match-one', { method:'POST', body: JSON.stringify(body) })") === 1, '');
+  check('简历优化页：全量优化与出一岗一简历分别打两个真端点',
+    cnt(pH, "api('/api/jobs/tailor', { method:'POST', body: JSON.stringify({ jobId: id }) })") === 1
+    && cnt(pH, "api('/api/jobs/tailor-resume', { method:'POST', body: JSON.stringify({ jobId: id }) })") === 1, '');
+  check('投递复盘页：统计卡 + 本周节奏 + 阶段分布 + 明细 齐备',
+    ['rvStats', 'rvChart', 'rvChartNote', 'rvStages', 'rvList', 'rvCount']
+      .every((id) => cnt(pHtml, `id="${id}"`) === 1), '');
+
+  // ---- 投递流程时间节点 + 复盘行动区块（对标 offerbiu 卡片节点行与 /review/）----
+  // 这一节钉的全是**跨文件一致性**：同一条信息在前后端各写一份，改一处漏一处**不报任何错**。
+  {
+    const dbSrc = fs.readFileSync(new URL('../server/db.ts', import.meta.url), 'utf8');
+    const idxSrc = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+    const revSrc = fs.readFileSync(new URL('../server/services/reviewPlan.ts', import.meta.url), 'utf8');
+    // ⚠️ 计数前一律先剥注释。console.html 里就有一条注释顺带写了「长时间没进展」，
+    //    不剥的话「区块在不在」那条断言会被**注释满足**（恒绿），页面上少一块也没人知道。
+    const pCode = stripComments(pHtml);
+    const revCode = stripComments(revSrc);
+
+    // ① 阶段名单：下拉（APP_STATUS）与看板列（APP_STAGES）必须同集合。
+    //    「待投递」是从 jobs 表来的虚拟列，**只许它**多出来 —— 多出别的就是半注册：
+    //    看板里冒出一列却改不进去，或下拉能选、看板上没有那一列。
+    const appStatusKeys = (() => {
+      const m = /const APP_STATUS = \{([^}]*)\}/.exec(pCode);
+      return m ? [...m[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*:/g)].map((x) => x[1]).sort() : [];
+    })();
+    const stageKeys = (() => {
+      const m = /const APP_STAGES = \[([\s\S]*?)\n\];/.exec(pCode);
+      return m ? [...m[1].matchAll(/key:'([a-z]+)'/g)].map((x) => x[1]).sort() : [];
+    })();
+    const stageOnly = stageKeys.filter((k) => appStatusKeys.indexOf(k) < 0);
+    const statusOnly = appStatusKeys.filter((k) => stageKeys.indexOf(k) < 0);
+    check('阶段名单：APP_STATUS（下拉/分布）与 APP_STAGES（看板列）同集合，只许「待投递」多出来',
+      appStatusKeys.length >= 7 && stageOnly.length === 1 && stageOnly[0] === 'candidate' && statusOnly.length === 0,
+      `下拉=${appStatusKeys.join(',')} | 看板多出=${stageOnly.join(',')} | 下拉多出=${statusOnly.join(',')}`);
+
+    check('「笔试」阶段四处都登记了（中文名 / 看板列 / 快速筛选 / 后端可写列）',
+      appStatusKeys.indexOf('written') >= 0
+      && stageKeys.indexOf('written') >= 0
+      && cnt(pCode, "{ k:'written'") === 1
+      && cnt(dbSrc, "'written_at', 'interview_at', 'interview_round', 'offer_at', 'closed_at',") === 1,
+      `状态表=${appStatusKeys.indexOf('written') >= 0} 看板=${stageKeys.indexOf('written') >= 0}`);
+
+    // ② 五个时间节点列：迁移 / PATCH 透传 / 类型声明 三处逐一登记。
+    //    漏一处的后果都**不报错**：漏迁移 ⇒ 列不存在、写入静默丢；漏 PATCH ⇒ 界面填了存不进去。
+    const APP_FLOW_COLS = ['written_at', 'interview_at', 'interview_round', 'offer_at', 'closed_at'];
+    const missingCols = APP_FLOW_COLS.filter((c) =>
+      cnt(dbSrc, `addAppCol('${c}')`) !== 1
+      || cnt(idxSrc, `pickTime('${c}'`) !== 1
+      || cnt(dbSrc, `${c}?: string | null;`) !== 1);
+    check('流程时间节点五列：迁移 / PATCH 透传 / 类型声明 三处同名单',
+      APP_FLOW_COLS.length === 5 && missingCols.length === 0, `漏：${missingCols.join('、')}`);
+
+    // ③ 「面试轮次」不是时间：必须与那四列**分开规整**。
+    //    若把轮次并进时间列一起 normalizeFlowTime，「一面」「二面」会被判非法清成 NULL
+    //    —— 界面显示「已保存」，轮次却没了。
+    check('流程时间节点：四个时间列走 normalizeFlowTime，「面试轮次」走 normalizeRound（轮次不是时间）',
+      cnt(dbSrc, "'written_at', 'interview_at', 'offer_at', 'closed_at',") === 1
+      && cnt(dbSrc, "if (key === 'interview_round') return normalizeRound(value);") === 1);
+
+    // ④ 规整必须挂在 **db 层**：写入口不止 PATCH 一个（还有批量投递与脚本），
+    //    放在路由里做，别的路径就会漏 —— 然后库里混进 `2026-13-45` 而谁都不报错。
+    check('流程时间节点的规整在 db 层统一执行（放路由里 ⇒ 批量投递/脚本路径漏掉）',
+      cnt(dbSrc, 'APPLICATION_UPDATABLE_COLUMNS, normalizeApplicationField,') === 1);
+
+    // ⑤ 复盘口径只留后端一份
+    check('投递复盘：页面不再自算回复率/推进率，一律取 /api/stats/review（两套口径必然对不上）',
+      cnt(pCode, "await api('/api/stats/review')") === 1
+      && cnt(pCode, 'function pct(n, d)') === 0
+      && cnt(pCode, 'const replied = (cnt.replied||0)') === 0,
+      `取端点=${cnt(pCode, "await api('/api/stats/review')")} 旧自算残留=${cnt(pCode, 'function pct(n, d)')}`);
+
+    check('投递复盘：4 个指标 + 4 段行动区块都在（区块整块由后端给，页面只拼中文）',
+      cnt(pCode, 'id="rvActions"') === 1
+      && cnt(pCode, '近期需要优先处理') === 1
+      && cnt(pCode, '近期笔面安排') === 2      // 指标卡标题 + 区块标题各一次
+      && cnt(pCode, '长时间没进展') === 1
+      && cnt(pCode, '下周行动建议') === 1
+      && cnt(pCode, '复盘重点') === 1,
+      `优先=${cnt(pCode, '近期需要优先处理')} 笔面=${cnt(pCode, '近期笔面安排')} 没进展=${cnt(pCode, '长时间没进展')} 建议=${cnt(pCode, '下周行动建议')}`);
+
+    // ⑥ 后端复盘端点 + 「口径层不读时钟」这个设计不变量
+    check('后端：/api/stats/review 恰一处，且 now 在路由里只取一次（口径可注入才钉得住）',
+      cnt(idxSrc, 'app.get("/api/stats/review"') === 1
+      && cnt(idxSrc, 'buildReviewPlan(apps, jobs, { now: new Date() })') === 1,
+      `端点=${cnt(idxSrc, 'app.get("/api/stats/review"')} 调用=${cnt(idxSrc, 'buildReviewPlan(apps, jobs, { now: new Date() })')}`);
+
+    check('reviewPlan 是不读时钟的纯模块：源码里 0 处 Date.now() / new Date()',
+      cnt(revCode, 'Date.now()') === 0 && cnt(revCode, 'new Date()') === 0,
+      `Date.now=${cnt(revCode, 'Date.now()')} new Date=${cnt(revCode, 'new Date()')}`);
+
+    check('「已推进」口径必须含 written（笔试也是推进；漏了 ⇒ 加了阶段但数字不变）',
+      cnt(revSrc, "export const ADVANCED_STATUSES: readonly string[] = ['written', 'interview', 'offer'];") === 1
+      && cnt(revSrc, 'export const SENT_STATUSES: readonly string[] = [') === 1);
+
+    // ⑦ 前端「改时间」：真的 PATCH 到真端点，且格式不对时**拒绝提交**
+    check('前端：改时间走 PATCH /api/applications/:id；格式不对拒绝提交（否则被后端静默清空）',
+      cnt(pCode, "api('/api/applications/'+encodeURIComponent(card.dataset.appid), { method:'PATCH'") === 1
+      && cnt(pCode, 'const FLOW_TIME_SHAPE = /^\\d{4}-\\d{2}-\\d{2}(\\s\\d{2}:\\d{2})?$/;') === 1,
+      `PATCH=${cnt(pCode, "api('/api/applications/'+encodeURIComponent(card.dataset.appid), { method:'PATCH'")} 形状校验=${cnt(pCode, 'const FLOW_TIME_SHAPE =')}`);
+  }
+
+  check('个人中心：表单元素齐备，且保存走 PUT /api/profile（后端**只**注册了 PUT）',
+    ['pfNameInput', 'pfPhoneInput', 'pfEmailInput', 'pfExpectInput', 'pfCityInput', 'pfResumeInput', 'pfSave', 'pfStats']
+      .every((id) => cnt(pHtml, `id="${id}"`) === 1)
+    && cnt(pH, "api('/api/profile', { method: 'PUT', body: JSON.stringify({ profile: profile }) })") === 1, '');
+    // D 批把这一页做成了真页面，原断言「仍是诚实占位」的**名字已与实际相反**
+  //   （过时断言比没有断言更坏：后人照着名字以为这页没实现）。改成钉真控件。
+  check('简历制作已是真页面：不再是占位页（占位页不该有这些控件）',
+    cnt(pHtml, 'id="view-resumemake"') === 1 && cnt(pHtml, 'id="rmPreview"') === 1 && cnt(pHtml, 'id="rmDocSel"') === 1
+    && !/id="rmTemplate"/.test(pHtml), '');
+
+  // ---- 自动填充：不再是占位页，「网申」面板整块搬进来了 ----
+  const afSec = sectionOf('view-autofill');
+  check('自动填充页不再是占位页：网申面板整块在里面（搬一半 ⇒ 页面看着有、点了没反应）',
+    afSec.length > 0
+    && ['wangshenUrls', 'wangshenPreview', 'wangshenApply', 'wangshenRemember', 'wangshenBar', 'wangshenOut']
+      .every((id) => cnt(afSec, `id="${id}"`) === 1), '');
+  check('自动填充页：整页只此一份网申面板（两处各留一套 ⇒ $$ 命中两个、$ 只取第一个）',
+    cnt(pHtml, 'id="wangshenUrls"') === 1 && cnt(pHtml, 'id="wangshenPreview"') === 1
+    && cnt(pHtml, 'id="wangshenApply"') === 1 && cnt(pHtml, 'id="wangshenRemember"') === 1
+    && cnt(pHtml, 'id="tab-wangshen"') === 0, '');
+  check('网申不再挂在「投递中心」的 tab 上（同一功能不留两个入口）',
+    cnt(pHtml, 'data-tab="wangshen"') === 0
+    && cnt(pH, "['batch','reply','email']") === 1
+    && cnt(pH, "'batch','reply','email','wangshen'") === 0, '');
+  // 表单记忆卡：端点刻意是 POST 而不是 GET（非回环部署时只有写方法走令牌鉴权，
+  //   做成 GET 等于给同网段开了个读候选人表单内容的口子）。
+  check('自动填充页：表单记忆卡在，且两条端点都走 POST',
+    cnt(afSec, 'id="fmList"') === 1 && cnt(afSec, 'id="fmRefresh"') === 1
+    && cnt(pH, "api('/api/offerbiu/form-memory/list', {method:'POST', body:'{}'})") === 1
+    && cnt(pH, "api('/api/offerbiu/form-memory/delete', {method:'POST', body:JSON.stringify({site})})") === 1, '');
+  const dbSrc = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'db.ts'), 'utf8'));
+  const idxSrc2 = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'index.ts'), 'utf8'));
+  check('后端：表单记忆列表只回标签与条数、不回值（界面上不摊 PII）',
+    cnt(dbSrc, 'export function listFormMemory(): FormMemoryBrief[] {') === 1
+    && cnt(dbSrc, 'return { site: r.site, labels, count: labels.length, updatedAt: r.updated_at };') === 1
+    && cnt(dbSrc, 'export function deleteFormMemory(site: string): number {') === 1, '');
+  check('后端：两条表单记忆路由都在（前端有按钮、后端没路由 ⇒ 点了没反应且不报错）',
+    cnt(idxSrc2, 'app.post("/api/offerbiu/form-memory/list"') === 1
+    && cnt(idxSrc2, 'app.post("/api/offerbiu/form-memory/delete"') === 1
+    && cnt(idxSrc2, 'db.deleteFormMemory(site)') === 1, '');
+  // ---- 自动填充信息（对标 offerbiu 的「结构化简历信息」）----
+  // 这一组防的是**静默无效**：界面上填了值、投递表单里永远填不上，而且不报错。
+  // 字段表在前端（AF_SECTIONS）、规则表在后端（offerbiu.ts 的 PROFILE_LABEL_RULES），
+  // 两张表分居两个文件 ⇒ 只靠人盯必然漂移。这里把它们机械对上。
+  const afBlockM = pH.match(/const AF_SECTIONS = \[([\s\S]*?)\n\];/);
+  const afBlock = afBlockM ? afBlockM[1] : '';
+  const afFields = [...afBlock.matchAll(/\{k:'([A-Za-z0-9_]+)', label:'([^']+)'/g)].map((m) => ({ k: m[1], label: m[2] }));
+  const afKeySet = new Set(afFields.map((f) => f.k));
+  check('自动填充信息：AF_SECTIONS 数据表解析正常（字段数 ≥ 50。正则失配时下面几条会一起恒绿）',
+    afBlock.length > 0 && afFields.length >= 50, `解析到 ${afFields.length} 个字段`);
+  check('自动填充信息：字段键与字段标签都不重复（键重复 ⇒ id 撞车改一半；标签重复 ⇒ 用户不知道该填哪个）',
+    afFields.length >= 50 && afKeySet.size === afFields.length
+    && new Set(afFields.map((f) => f.label)).size === afFields.length, '');
+
+  const obSrc = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'services', 'apply', 'offerbiu.ts'), 'utf8'));
+  // 规则表里 pick 到的档案键（`a || b` 兜底写法会把两个键都算进来，正是我们想要的）
+  const ruleKeys = new Set([...obSrc.matchAll(/asText\(p\.([A-Za-z0-9_]+)\)/g)].map((m) => m[1]));
+  // 「个人中心 → 候选人档案」负责的键（#view-profile 的表单）。这 5 个刻意不在自动填充页重复。
+  // resume_path 不在这里：它不是投递表单的字段标签，规则表也不认它。
+  const CENTER_KEYS = ['name', 'phone', 'email', 'expectedPositions', 'expectedCity'];
+  const deadRules = [...ruleKeys].filter((k) => !afKeySet.has(k) && CENTER_KEYS.indexOf(k) < 0).sort();
+  const orphanFields = afFields.map((f) => f.k).filter((k) => !ruleKeys.has(k)).sort();
+  check('自动填充信息：规则表里的每个档案键都能在某处被设置（否则是「死规则」：界面没入口、永远取到空）',
+    ruleKeys.size >= 40 && deadRules.length === 0, `没人能设置的键：${deadRules.join('、')}`);
+  check('自动填充信息：字段表里的每个键在规则表里都有规则（否则界面上填了也到不了表单，不报错）',
+    orphanFields.length === 0, `没有规则的键：${orphanFields.join('、')}`);
+  check('自动填充信息：两侧扫描都有产出（防「正则写错 ⇒ 上面两条恒绿」）',
+    ruleKeys.size >= 40 && afFields.length >= 50, `rules=${ruleKeys.size} fields=${afFields.length}`);
+
+  // 顺序即优先级：具体规则必须排在宽泛规则之前。静态位置只是**代理指标** ——
+  // 真正的证明是「喂标签进去看解析结果」，在 tests/unit/autofillProfile.test.ts 里。
+  const posOf = (needle: string) => obSrc.indexOf(needle);
+  const posEmergencyPhone = posOf('asText(p.emergencyPhone)');
+  const posPhone = posOf('asText(p.phone)');
+  const posDomicile = posOf('asText(p.domicile)');
+  const posCity = posOf('asText(p.city)');
+  const posRelation = posOf('asText(p.emergencyRelation)');
+  const posEmergencyFallback = posOf('{ re: /紧急/,');
+  check('自动填充信息：具体规则排在宽泛规则之前（顺序反 ⇒ 填得出值但值是错的，不报错）',
+    posEmergencyPhone >= 0 && posPhone >= 0 && posEmergencyPhone < posPhone
+    && posDomicile >= 0 && posCity >= 0 && posDomicile < posCity
+    && posRelation >= 0 && posEmergencyFallback >= 0 && posRelation < posEmergencyFallback,
+    `紧急电话@${posEmergencyPhone} 电话@${posPhone} 户籍@${posDomicile} 城市@${posCity} 关系@${posRelation} 紧急兜底@${posEmergencyFallback}`);
+  const unitSrc = fs.readFileSync(path.join(ROOT, 'tests', 'unit', 'autofillProfile.test.ts'), 'utf8');
+  check('自动填充信息：顺序这件事有**行为级**证明（静态扫描只能证明「那行在上面」，证明不了解析结果）',
+    cnt(unitSrc, "pick('紧急联系电话'") >= 1 && cnt(unitSrc, "pick('户籍所在地'") >= 1
+    && cnt(unitSrc, "pick('面试城市'") >= 1, '');
+
+  check('自动填充页：自动填充信息卡在，53 格是**数据驱动**渲染（不手写 53 段 HTML ⇒ 标签不配对是常态）',
+    cnt(afSec, 'id="afForm"') === 1 && cnt(afSec, 'id="afSave"') === 1 && cnt(afSec, 'id="afReload"') === 1
+    && cnt(pH, 'host.innerHTML = AF_SECTIONS.map(sec=>{') === 1
+    && cnt(pH, 'document.getElementById(afFieldId(f.k))') === 1, '');
+  check('自动填充页：navigate 同时初始化两块（少一个 ⇒ 进页面只看到静态占位，像「加载慢」）',
+    cnt(pH, "if(view==='autofill'){ loadFormMemory(); loadAutofillInfo(); }") === 1, '');
+  check('自动填充信息：保存走 PUT /api/profile（后端只注册了 PUT，POST/PATCH 会 404）',
+    cnt(pH, "await api('/api/profile', {method:'PUT', body:JSON.stringify({profile:patch})});") === 1, '');
+  check('自动填充信息：没渲染成功就不许保存（否则 53 个键全提交空串，浅合并直接抹掉用户已存的值）',
+    cnt(pH, "host.dataset.afLoaded = '1';") === 1
+    && cnt(pH, "if(host.dataset) host.dataset.afLoaded = '';") === 1
+    && cnt(pH, "afLoaded !== '1'") === 1, '');
+  check('自动填充信息：不在自动填充页重复个人中心那 5 个键（两处各留一份 ⇒ 谁后保存谁赢）',
+    CENTER_KEYS.every((k) => !afKeySet.has(k))
+    && CENTER_KEYS.every((k) => {
+      const m = pH.match(/const profile = \{([\s\S]*?)\n  \};/);
+      return m ? cnt(m[1], k + ':') === 1 : false;
+    }), '');
+
+  // ⚠️ D 批把「简历制作」从占位页做成了真页面 ⇒ 原来那条 `data-goto= >= 6` 会变红。
+  //    那是**断言的前提变了**（占位页少了一个），不是实现坏了：改成钉住现在仅存的入口，
+  //    并用「副标题不许再写尚未实现」钉住那类会与实际相反、且没人会报错的过时文案。
+  check('跨页快捷入口（个人中心）统一走 data-goto 绑定',
+    cnt(pH, "$$('[data-goto]').forEach(b=>b.addEventListener('click', ()=>navigate(b.dataset.goto)));") === 1
+    && cnt(pHtml, 'data-goto=') >= 4, '');
+  check('简历制作已实现 ⇒ 顶栏副标题不许还写着「尚未实现」（过时文案没人会报错）',
+    cnt(pH, "resumemake:{t:'简历制作', s:'结构化草稿 · 实时预览 · 出 HTML/PDF'},") === 1
+    && cnt(pH, '本页尚未实现') === 0, '');
+  // ---- 简历制作（D 批）：真页面 + 8 条端点 + 两级出稿 ----
+  {
+    const rmSec = sectionOf('view-resumemake');
+    const rmIds = ['rmDocSel', 'rmNew', 'rmDel', 'rmTitle', 'rmSave', 'rmMsg', 'rmName', 'rmPhone', 'rmEmail',
+      'rmCity', 'rmHeadline', 'rmSummary', 'rmHighlights', 'rmSkills', 'rmSections', 'rmPreview', 'rmAccent',
+      'rmHtml', 'rmPdf', 'rmPdfWhy'];
+    check('D 批断言自检：简历制作的骨架与三个函数确实被扫到（防「section 为空 ⇒ 整段恒绿」）',
+      rmSec.length > 500 && cnt(pH, 'function rmDocFromForm()') === 1
+      && cnt(pH, 'function rmFillForm(d)') === 1 && cnt(pH, 'async function rmPreview()') === 1,
+      'rmSec=' + rmSec.length);
+    check('简历制作：三栏骨架的控件齐备（左编辑 / 中预览 / 右出稿），且整页只此一份',
+      rmSec.length > 0
+      && rmIds.every((id) => cnt(rmSec, 'id="' + id + '"') === 1 && cnt(pHtml, 'id="' + id + '"') === 1),
+      rmSec.length ? rmIds.filter((id) => cnt(pHtml, 'id="' + id + '"') !== 1).join(',') : 'section 未找到');
+
+    check('简历制作：后端 8 条路由都在（前端有按钮、后端没路由 ⇒ 点了没反应且不报错）',
+      ['app.get("/api/resume/capabilities"', 'app.get("/api/resume/docs"', 'app.get("/api/resume/docs/:id"',
+        'app.put("/api/resume/docs/:id"', 'app.post("/api/resume/docs"', 'app.delete("/api/resume/docs/:id"',
+        'app.post("/api/resume/docs/:id/html"', 'app.post("/api/resume/docs/:id/pdf"']
+        .every((r) => cnt(idxSrc2, r) === 1), '');
+    check('简历制作：前端动词与后端注册一致（保存 PUT / 删除 DELETE / 新建·出稿 POST）',
+      cnt(pH, "{ method:'PUT', body: JSON.stringify(rmDocFromForm()) }") === 1
+      // ⚠️ 只写 `{ method:'DELETE' }` 会命中「删除投递」那条（同一串在文件里有两份）
+      //    ⇒ 改了简历这边、投递那边也一起红，两条断言就不再独立。
+      && cnt(pH, "api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id), { method:'DELETE' });") === 1
+      && cnt(pH, "api('/api/resume/docs', { method:'POST', body: JSON.stringify({ title }) })") === 1, '');
+
+    // HTML 级**永远可用**的前提是不落盘、不依赖浏览器；PDF 级必须落盘（CDP 要一个文件路径）。
+    // 两者混在一起 ⇒ HTML 也会在浏览器不在线时失败，且 data/ 堆一地中间产物。
+    check('简历制作：HTML 级不落盘（后端直接回字符串 + 前端 Blob 下载）',
+      cnt(idxSrc2, 'res.json({ ok: true, id: doc.id, title: doc.title, html: renderResumeDoc(doc) });') === 1
+      && cnt(pH, "const blob = new Blob([r.html || ''], { type: 'text/html;charset=utf-8' });") === 1
+      && cnt(pH, "a.download = (rmVal('#rmTitle') || '简历') + '.html';") === 1, '');
+    check('简历制作：PDF 依赖的浏览器不在线时返回 503（不是 500），前端据此置灰并写明原因',
+      cnt(idxSrc2, 'res.status(503).json({ ok: false, error: r.error, needPlatforms: PDF_VIA_PLATFORMS });') === 1
+      && cnt(pH, 'const up = RM_PDF_VIA.filter((p)=> connected[p] && connected[p].connected);') === 1
+      && cnt(pH, 'const ok = RM_PDF_VIA.length === 0 || up.length > 0;') === 1
+      && cnt(pH, 'btn.disabled = !ok;') === 1, '');
+
+    const tpSrc = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'services', 'apply', 'tailoredResumePdf.ts'), 'utf8')).replace(/\r\n/g, '\n');
+    check('简历制作：PDF 与「一岗一简历」共用同一条通路 printHtmlToPdf（不另写一套排版）',
+      cnt(idxSrc2, 'const r = await printHtmlToPdf(htmlPath, pdfPath);') === 1
+      && cnt(tpSrc, 'export async function printHtmlToPdf(') === 1
+      && cnt(tpSrc, 'export const PDF_VIA_PLATFORMS = PDF_TARGETS.map(([k]) => k);') === 1, '');
+
+    const atSrc = fs.readFileSync(path.join(ROOT, 'server', 'services', 'authToken.ts'), 'utf8').replace(/\r\n/g, '\n');
+    // ⚠️ dataCleanup 里那条是**注释**（说明「任何档位都不碰」的清单）⇒ 剥了注释就数不到，
+    //    这里刻意读原文：它虽然不是代码，但正是这条注释在替后人挡住「新目录忘了加保护」。
+    const dcRaw = fs.readFileSync(path.join(ROOT, 'server', 'services', 'dataCleanup.ts'), 'utf8').replace(/\r\n/g, '\n');
+    check('简历制作：data/resume_doc 三处注册齐了（静态挂载 / 局域网签名前缀 / 清理保护清单）',
+      cnt(idxSrc2, "app.use('/data/resume_doc', express.static(RESUME_DOC_DIR));") === 1
+      && cnt(atSrc, "'/data/resume_doc/',") === 1
+      && cnt(dcRaw, 'data/resume_doc') === 1, '');
+
+    check('简历制作：草稿存 app_kv 的 resumedoc: 前缀，且不碰简历版本位',
+      cnt(idxSrc2, "const DOC_PREFIX = 'resumedoc:';") === 1
+      && cnt(idxSrc2, 'const docKey = (id: string) => DOC_PREFIX + safeDocId(id);') === 1
+      && (() => {
+        const a = idxSrc2.indexOf('const DOC_PREFIX');
+        const b = idxSrc2.indexOf('app.post("/api/resume/parse"');
+        // 🔴 版本位是「投递时带哪份简历」的开关；草稿混进去 ⇒ 一份草稿会被当成可投递件
+        return a > 0 && b > a && cnt(idxSrc2.slice(a, b), 'resume:version') === 0;
+      })(), '');
+
+    const rdSrc = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'services', 'apply', 'resumeDoc.ts'), 'utf8')).replace(/\r\n/g, '\n');
+    check('简历制作：配色/版式白名单单一真相源（前后端都从 resumeTheme.js 取，前端不另抄 hex）',
+      cnt(rdSrc, "import { RESUME_ACCENTS, DEFAULT_ACCENT_KEY, RESUME_VARIANTS, DEFAULT_VARIANT_KEY } from './resumeTheme.js';") === 1
+      && cnt(pH, 'RM_ACCENTS = (c && c.accents) || [];') === 1
+      && cnt(pH, '#1d4ed8') === 0
+      && cnt(pH, 'RM_VARIANTS = (c && c.variants) || [];') === 1, '');
+    // 版式模板（variant）也是白名单：后端从 capabilities 下发，前端据 RM_VARIANTS 渲染色段按钮。
+    check('简历制作：版式模板走白名单（后端 capabilities 下发 variants，前端据 RM_VARIANTS 渲染分段按钮）',
+      cnt(idxSrc2, 'variants: RESUME_VARIANTS') === 1
+      && cnt(pH, 'RM_VARIANTS.map') === 1
+      && cnt(pH, 'function rmSetVariant') === 1, '');
+    // 新布局：左编辑流（rm-edit）+ 右 sticky 外观与预览（rm-side）；不再是三栏裸表单。
+    check('简历制作：新版式是两栏（左 rm-edit 编辑流 / 右 rm-side sticky 外观+预览）',
+      cnt(pH, 'class="rm-edit"') === 1 && cnt(pH, 'class="rm-side"') === 1, '');
+    // 经历/栏目是卡片流，可增删条目/板块，不再只有高级文本框。
+    check('简历制作：经历/栏目是卡片流（#rmSectionCards + rmRenderSectionCards + 结构性增删）',
+      cnt(pH, 'id="rmSectionCards"') === 1
+      && cnt(pH, 'function rmRenderSectionCards') === 1
+      && cnt(pH, 'function rmSectionCardAct') === 1, '');
+    // 🔴 真事故（探针跑出来的）：`safeDocId(req.body?.id) || <默认 id>` —— safeDocId
+    //    对空输入返回 'doc'、**永不为假** ⇒ 兜底分支永远走不到，每份新草稿 id 都恒为
+    //    'doc' ⇒ 建第二份必然 409。这类 bug 静态看代码很像对的，只能靠先判空再规整。
+    check("简历制作：新建草稿的 id 不能恒为同一个（safeDocId 空输入返回 doc，兜底分支写错就永远走不到）",
+      cnt(idxSrc2, "const rawId = String(req.body?.id ?? '').trim();") === 1
+      && cnt(idxSrc2, "const id = rawId ? safeDocId(rawId) : ('d' + Date.now().toString(36));") === 1
+      && cnt(idxSrc2, "safeDocId(req.body?.id) ||") === 0, '');
+  }
+
+  check('初始化走 navigate(\'dashboard\')：顶栏标题的唯一真相源是 VIEW_META，别让静态标题留在页面上',
+    /navigate\('dashboard'\);\s*$/.test(pH.slice(0, pH.lastIndexOf('</script>')).slice(-80)), '');
+}
+
+// ── 静态护栏：JS 引用的 DOM id 必须真实存在 ──────────────────────────────
+// 背景（真实事故）：改「我的投递」HTML 时删了刷新按钮，JS 里
+//   `$('#appsRefresh').addEventListener(...)` 却留着 —— 该行在**脚本顶层**，
+//   对 null 调 addEventListener 直接抛 TypeError ⇒ 它**之后的全部脚本**
+//   （含 #logTabs 绑定与整个 init 块）都不执行 ⇒ 控制台整页空白。
+//   而 typecheck / console:check / 原有 606 条合约**全绿**。
+// 判据：把「脚本里 $('#'+id) 的引用集」与「文件里出现过的 id 定义集」机械比对。
+// ⚠️ 必须排除 `$('#pane-'+t)` 这类前缀拼接，否则会把 `pane-` 当成缺失 id（纯误报）。
+{
+  const dH = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  // ⚠️ HTML 的 <!-- --> 注释同样会「定义」一个 id（stripComments 不认这种写法）⇒ 定义集也先剥
+  const dHc = dH.replace(/<!--[\s\S]*?-->/g, '');
+  const dScriptsRaw = [...dH.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
+  // 🔴 必须先剥注释再扫引用。注释里举例写一句 `$('#x')`（讲「删了元素记得删引用」），
+  //    会被当成「引用了不存在的 #x」⇒ 断言**假红**。
+  //    「文本把断言弄绿」与「文本把断言弄红」是同一件事的两面：匹配前一律先剥注释。
+  const dScripts = stripComments(dScriptsRaw);
+  const dDefined = new Set<string>();
+  // 静态 HTML 里的 id="..." 与脚本 innerHTML 模板里的 id="..." 都算定义
+  for (const m of dHc.matchAll(/\bid="([A-Za-z0-9_-]+)"/g)) dDefined.add(m[1]);
+  // 动态创建：xxx.id = 'yyy'
+  for (const m of dScripts.matchAll(/\.id\s*=\s*['"]([A-Za-z0-9_-]+)['"]/g)) dDefined.add(m[1]);
+  const dRefs = new Set<string>();
+  for (const m of dScripts.matchAll(/\$\$?\(\s*['"]#([A-Za-z0-9_-]+)/g)) {
+    if (dScripts[(m.index ?? 0) + m[0].length] === '+' || m[1].endsWith('-')) continue;
+    dRefs.add(m[1]);
+  }
+  for (const m of dScripts.matchAll(/getElementById\(\s*['"]([A-Za-z0-9_-]+)['"]/g)) dRefs.add(m[1]);
+  const dMissing = [...dRefs].filter((id) => !dDefined.has(id)).sort();
+  check('console.html：JS 引用的每个 #id 都有对应元素（缺失 ⇒ 顶层 TypeError，整页空白）',
+    dMissing.length === 0, `缺失：${dMissing.join('、')}`);
+  // 仪器自检：证明「剥注释」真的生效 —— 否则上面那条会被注释里的举例弄成假红
+  check('console.html：剥注释这一步真的生效（注释里举例写的引用不算引用）',
+    !/\$\('#zzz'\)/.test(stripComments("// 举例：$('#zzz') 是早先删掉的元素\nconst a = 1;")),
+    '剥注释没生效 ⇒ 上面那条会被注释里的举例弄成假红');
+  // 反向护栏：正则一旦写错，dRefs 会是空集，上面那条就**恒绿**了 —— 所以要求扫到足够多的量
+  check('console.html：上面的 id 扫描确有产出（防「正则写错 ⇒ 恒绿」）',
+    dRefs.size >= 200 && dDefined.size >= 200, `refs=${dRefs.size} defined=${dDefined.size}`);
+
+  // ---- 同一个页面里 id 不能重复：重复时 $() 只取第一个、$$() 取到两个，
+  //      于是「改一个、另一个纹丝不动」，而且**不报任何错**。
+  //      本轮把「网申」面板从投递中心整块搬到自动填充，正是最容易留下重复 id 的改动。----
+  const dStatic = dHc.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
+  const dIdCount: Record<string, number> = {};
+  for (const m of dStatic.matchAll(/\bid="([A-Za-z0-9_-]+)"/g)) dIdCount[m[1]] = (dIdCount[m[1]] || 0) + 1;
+  const dDup = Object.keys(dIdCount).filter((k) => dIdCount[k] > 1).sort();
+  check('console.html：静态标签里没有重复 id（重复 ⇒ $() 只取第一个，改一半还不报错）',
+    dDup.length === 0, `重复：${dDup.map((k) => k + 'x' + dIdCount[k]).join('、')}`);
+  check('console.html：重复 id 扫描确有产出（防「正则写错 ⇒ 恒绿」）',
+    Object.keys(dIdCount).length >= 150, `静态 id 数=${Object.keys(dIdCount).length}`);
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`

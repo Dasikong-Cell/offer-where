@@ -38,6 +38,27 @@ function endpointOf(key: string, fallbackPort: number): string {
 }
 const PDF_TARGETS: Array<[string, number]> = [['official', 9227], ['boss', 9223]];
 
+/**
+ * 借平台浏览器把一份 HTML 排版成 PDF（依次尝试可用端点，全部失败才报错）。
+ * 🔴 抽成导出函数的原因：D 批「简历制作」也要出 PDF。若在那里重写一遍
+ *    「读 cdp.json → 依次试 official/boss → 判文件大小」这套逻辑，就是第二份真相源 ——
+ *    以后改端口映射或加平台，只改一处会让另一处的 PDF 静默失败。
+ */
+export async function printHtmlToPdf(htmlPath: string, outPath: string): Promise<{ ok: boolean; error?: string }> {
+  const fileUrl = pathToFileURL(htmlPath).href;
+  let lastErr = '';
+  for (const [key, port] of PDF_TARGETS) {
+    const ep = endpointOf(key, port);
+    const r: any = await execCdpAction(key, 'htmlToPdf', { fileUrl, outPath }, ep).catch((e: any) => ({ ok: false, error: e?.message }));
+    if (r?.ok && fs.existsSync(outPath) && fs.statSync(outPath).size > 1024) return { ok: true };
+    lastErr = r?.error || '未知错误';
+  }
+  return { ok: false, error: `PDF 渲染失败（已尝试 ${PDF_TARGETS.map(([k]) => k).join('/')}）：${lastErr}` };
+}
+
+/** PDF 排版会用到哪些平台（供上层告诉用户「需要哪个浏览器在线」）。 */
+export const PDF_VIA_PLATFORMS = PDF_TARGETS.map(([k]) => k);
+
 export interface TailorPdfJob {
   id?: string;
   company?: string | null;
@@ -149,22 +170,16 @@ export async function ensureTailoredResumePdf(
   };
   try { fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8'); } catch { /* 忽略 */ }
 
-  // 2) 借 Chrome 排版成 PDF（依次尝试可用端点）
-  const fileUrl = pathToFileURL(htmlPath).href;
-  let lastErr = '';
-  for (const [key, port] of PDF_TARGETS) {
-    const ep = endpointOf(key, port);
-    const r: any = await execCdpAction(key, 'htmlToPdf', { fileUrl, outPath: pdfPath }, ep).catch((e: any) => ({ ok: false, error: e?.message }));
-    if (r?.ok && fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 1024) {
-      return {
-        ok: true, pdfPath, htmlPath, cached: false,
-        summary: tailored.summary, highlights: tailored.highlights,
-        orderedSkills: tailored.orderedSkills, matchScore: tailored.matchScore, source: tailored.source,
-      };
-    }
-    lastErr = r?.error || '未知错误';
+  // 2) 借 Chrome 排版成 PDF（走与「简历制作」共用的同一条通路）
+  const printed = await printHtmlToPdf(htmlPath, pdfPath);
+  if (printed.ok) {
+    return {
+      ok: true, pdfPath, htmlPath, cached: false,
+      summary: tailored.summary, highlights: tailored.highlights,
+      orderedSkills: tailored.orderedSkills, matchScore: tailored.matchScore, source: tailored.source,
+    };
   }
-  return { ok: false, htmlPath, error: `PDF 渲染失败（已尝试 ${PDF_TARGETS.map(([k]) => k).join('/')}）：${lastErr}` };
+  return { ok: false, htmlPath, error: printed.error! };
 }
 
 /** 批量生成（串行，避免同时开多个临时标签） */

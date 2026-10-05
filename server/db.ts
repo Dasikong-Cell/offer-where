@@ -5,6 +5,14 @@ import { randomUUID } from 'crypto';
 // 发布时间入库前的收敛（把「今天」「更新9月2日」等文案统一成 YYYY-MM-DD）。
 // 该模块零依赖、零 IO，不会给 db.ts 的加载引入副作用。
 import { normalizePostedDate, parsePostedAt, postedAtFromLabeled } from './services/parsePostedAt.js';
+// 流程时间节点（笔试/面试/Offer/结束）的入库前规整。同样零依赖、零 IO。
+// ⚠️ 规整必须发生在**入库这一层**：写入口不止一个（PATCH 路由 / 批量投递 / 脚本），
+//    放在路由里做，脚本路径就会漏 —— 于是库里混进 `2026-13-45` 这种串，谁都没报错。
+import { normalizeFlowTime, normalizeRound } from './services/reviewPlan.js';
+// 校招卡片元数据（届别 / 快捷标签 / 投递截止日）的解析与收敛。
+// 与「采集器各自解析」相比，放在这里的好处是：**入库这一层只有一个口径** ——
+// 采集器、回填脚本、PATCH 路由、批量投递全都过同一份规则，不会各自漂移。
+import { parseCardMeta, parseGradYear, normalizeGradYear, serializeTags } from './services/parseCardMeta.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -116,8 +124,16 @@ db.exec(`
     salary TEXT,
     apply_url TEXT,
     deadline TEXT,
+    -- 岗位类型（产品岗/技术岗/运营岗…）。可空：手动录入是选填、采集端能识别才写。
+    -- 与 source（平台来源）是两个维度：source 回答「从哪来」，job_type 回答「是什么岗」。
+    job_type TEXT,
     match_score REAL,
     match_detail TEXT,
+    -- 「最近一次 AI 匹配的时间」(ISO 串)。
+    -- ⚠️ 为什么不能用 updated_at 兜底：updated_at 会随**任何**字段改动而前进，
+    --    用它当匹配时间，用户改一次 deadline 后「匹配于 X 日」就变成假日期。
+    --    老数据此列为 NULL ⇒ 历史列表按 updated_at 排、并标注「时间未知」。
+    matched_at TEXT,
     quarantine TEXT,
     skip_reason TEXT,
     -- 列表页卡片摘要（如 offerbiu 的「更新9月2日 / 2027届 / 投递入口」）。
@@ -215,6 +231,19 @@ try {
   if (!jrc.some((c) => c.name === 'remote')) {
     db.exec("ALTER TABLE jobs ADD COLUMN remote INTEGER");
     console.log("[DB] Added remote column to jobs");
+  }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 job_type 列（岗位类型）
+//   与 source（平台来源）是两个维度：source 回答「从哪来」，job_type 回答「是什么岗」。
+//   CREATE TABLE IF NOT EXISTS 对**已存在**的表完全不起作用 ⇒ 必须显式 ALTER 一次。
+try {
+  const jtc = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!jtc.some((c) => c.name === 'job_type')) {
+    db.exec("ALTER TABLE jobs ADD COLUMN job_type TEXT");
+    console.log("[DB] Added job_type column to jobs");
   }
 } catch (e) {
   // 忽略错误（列可能已存在）
@@ -318,6 +347,62 @@ try {
     db.exec("ALTER TABLE jobs ADD COLUMN posted_at TEXT");
     console.log("[DB] Added posted_at column to jobs");
   }
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：jobs 增加 grad_year / tags 列（校招卡片的结构化元数据）
+//   · grad_year —— 届别，规范化成 4 位年份字符串（'2027'）。NULL = 卡片没写 / 认不出来。
+//   · tags      —— 标签（JSON 数组串，如 '["免笔试","秋招"]'）。NULL = 无标签。
+//   🔴 为什么必须落成列，而不是前端每次现解析 card_text：
+//      ① 与 posted_at / remote 同一套路（入库时解析 + 存量回填），口径只有一个；
+//      ② /api/jobs 返回的是**原始行**，扁平列直接可筛；标签集合还能被批量投递条件复用；
+//      ③ 卡片文本来自 9 个采集器，格式漂移时**落库值是可审计的**；而「前端现解析」
+//         一旦解析器与新格式错位，只会静默产出 0 个标签 —— 页面看着正常、筛不出东西。
+//   ⚠️ CREATE TABLE IF NOT EXISTS 对**已存在**的表完全不起作用 ⇒ 必须显式 ALTER。
+//   老数据这两列为 NULL ⇒ 前端按「无届别 / 无标签」显示，跑一次
+//   scripts/backfill_card_meta.ts 即可补齐（该脚本与 upsertJob 共用 parseCardMeta）。
+try {
+  const jc6 = db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  const addJobCol = (name: string) => {
+    if (jc6.some((c) => c.name === name)) return;
+    db.exec(`ALTER TABLE jobs ADD COLUMN ${name} TEXT`);
+    console.log(`[DB] Added ${name} column to jobs`);
+  };
+  addJobCol('grad_year');
+  addJobCol('tags');
+  addJobCol('matched_at');
+} catch (e) {
+  // 忽略错误（列可能已存在）
+}
+
+// 数据库迁移：applications 增加「流程时间节点」五列
+//   对标 offerbiu「我的投递」卡片上的节点行（截止 / 投递 / 笔试时间 / 面试时间 / Offer / 结束）。
+//   🔴 这五列是「投递复盘」的地基：没有它们，复盘页只能数「有多少条记录」，
+//      算不出「几天没进展」「本周有几场笔面」「进度卡在哪一步」。
+//   · written_at       —— 笔试时间（YYYY-MM-DD 或带时刻的 ISO 串，原样存，不在这里做换算）
+//   · interview_at     —— 面试时间（同上）
+//   · interview_round  —— 面试轮次（一面/二面/HR面/终面…）
+//                        刻意用「字段」而不是「加四个阶段列」：轮次是新出现就会被改写的
+//                        自由文本，拆成列会让看板多出四列永远为空的假控件（历史教训）。
+//   · offer_at         —— Offer 时间
+//   · closed_at        —— 结束时间（未通过 / 已跳过 等流程终止的时刻）
+//   ⚠️ 与 created_at 的区别：created_at 是「我们记下这条记录」的时间，
+//      written_at 等是「招聘流程上那件事发生」的时间，两者可以差几十天，不可互相兜底。
+//   ⚠️ CREATE TABLE IF NOT EXISTS 对**已存在**的表完全不起作用 ⇒ 必须显式 ALTER。
+//   老数据此五列为 NULL ⇒ 前端按阶段显示「时间未定」而不是显示一个假日期。
+try {
+  const ac2 = db.prepare("PRAGMA table_info(applications)").all() as Array<{ name: string }>;
+  const addAppCol = (name: string) => {
+    if (ac2.some((c) => c.name === name)) return;
+    db.exec(`ALTER TABLE applications ADD COLUMN ${name} TEXT`);
+    console.log(`[DB] Added ${name} column to applications`);
+  };
+  addAppCol('written_at');
+  addAppCol('interview_at');
+  addAppCol('interview_round');
+  addAppCol('offer_at');
+  addAppCol('closed_at');
 } catch (e) {
   // 忽略错误（列可能已存在）
 }
@@ -651,6 +736,21 @@ export interface ApplicationRow {
   evidence_path?: string | null;
   /** 操作录屏回看入口（真·CDP screencast）：mp4 / play.html / 帧目录，如 `/data/evidence/vid-boss-...` */
   video_path?: string | null;
+  /**
+   * ── 招聘流程的时间节点（对标 offerbiu「我的投递」卡片上的节点行）──
+   * 🔴 与 created_at 是两件事：created_at 是「我们记下这条记录」的时刻，
+   *    下面这些是「流程上那件事发生」的时间（用户手填），两者可以差几十天，不可互相兜底。
+   * 🔴 格式：`YYYY-MM-DD`（只到日）或 `YYYY-MM-DD HH:mm`（带时刻）。
+   *    秒/毫秒/时区一律在入库前裁掉 —— 见 reviewPlan.normalizeFlowTime。
+   * 🔴 非法值在入库时已经被规整成 NULL ⇒ 读出来要么是合法串、要么是 null，不会有中间态。
+   */
+  written_at?: string | null;
+  interview_at?: string | null;
+  /** 面试轮次（一面/二面/HR 面/终面…）。刻意用**字段**而不是加四个阶段列。 */
+  interview_round?: string | null;
+  offer_at?: string | null;
+  /** 流程终止时刻（未通过 / 已跳过）。 */
+  closed_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -663,11 +763,26 @@ export function createApplication(app: Omit<ApplicationRow, 'created_at' | 'upda
   const now = new Date().toISOString();
   const strategy = app.strategy ?? null;
   const evidence_path = app.evidence_path ?? null;
+  // 五个流程时间节点同样要显式列出并兜 `?? null`：
+  // 具名参数缺失时 better-sqlite3 会直接抛 `Missing named parameter`，
+  // 而 `undefined` 传进去也是同样的错 —— 不能靠「不传就当没有」。
+  const written_at = normalizeFlowTime(app.written_at);
+  const interview_at = normalizeFlowTime(app.interview_at);
+  const interview_round = normalizeRound(app.interview_round);
+  const offer_at = normalizeFlowTime(app.offer_at);
+  const closed_at = normalizeFlowTime(app.closed_at);
+  const row = {
+    ...app, strategy, evidence_path,
+    written_at, interview_at, interview_round, offer_at, closed_at,
+    created_at: now, updated_at: now,
+  };
   db.prepare(`
-    INSERT INTO applications (id, platform, company, position, salary, city, job_url, status, login_method, message, strategy, evidence_path, created_at, updated_at)
-    VALUES (@id, @platform, @company, @position, @salary, @city, @job_url, @status, @login_method, @message, @strategy, @evidence_path, @created_at, @updated_at)
-  `).run({ ...app, strategy, evidence_path, created_at: now, updated_at: now });
-  return { ...app, strategy, evidence_path, created_at: now, updated_at: now };
+    INSERT INTO applications (id, platform, company, position, salary, city, job_url, status, login_method, message, strategy, evidence_path,
+      written_at, interview_at, interview_round, offer_at, closed_at, created_at, updated_at)
+    VALUES (@id, @platform, @company, @position, @salary, @city, @job_url, @status, @login_method, @message, @strategy, @evidence_path,
+      @written_at, @interview_at, @interview_round, @offer_at, @closed_at, @created_at, @updated_at)
+  `).run(row);
+  return row;
 }
 
 /**
@@ -694,15 +809,33 @@ export function createApplication(app: Omit<ApplicationRow, 'created_at' | 'upda
  *   ② 顺带消掉「SQL 文本随 body 键序变化」带来的 prepared-statement 缓存抖动。
  */
 const JOB_UPDATABLE_COLUMNS = [
-  'company', 'position', 'city', 'jd', 'requirements', 'salary', 'apply_url', 'deadline',
+  'company', 'position', 'city', 'jd', 'requirements', 'salary', 'apply_url', 'deadline', 'job_type',
   'match_score', 'match_detail', 'quarantine', 'skip_reason', 'card_text', 'jd_images',
-  'jd_source', 'ocr_status', 'posted_at', 'remote', 'status',
+  'jd_source', 'ocr_status', 'posted_at', 'remote', 'status', 'grad_year', 'tags', 'matched_at',
 ] as const;
 
 const APPLICATION_UPDATABLE_COLUMNS = [
   'platform', 'company', 'position', 'salary', 'city', 'job_url', 'status',
   'login_method', 'message', 'strategy', 'evidence_path', 'video_path',
+  'written_at', 'interview_at', 'interview_round', 'offer_at', 'closed_at',
 ] as const;
+
+/** 需要按 `YYYY-MM-DD[ HH:mm]` 规整的流程时间列（白名单里除 interview_round 之外的四个）。 */
+const APPLICATION_FLOW_TIME_COLUMNS: readonly string[] = [
+  'written_at', 'interview_at', 'offer_at', 'closed_at',
+];
+
+/**
+ * applications 动态更新的取值规整。
+ * 🔴 必须有这一层：前端「清空输入框」提交的是 `''`，直接写库就变成一个空串，
+ *    复盘那边 `'' ` 与 `null` 要各判一次（漏判一处就多出一批「有值但没时间」的记录）。
+ *    统一成 `null` 后，全项目只需认一种「没填」。
+ */
+function normalizeApplicationField(key: string, value: any): any {
+  if (APPLICATION_FLOW_TIME_COLUMNS.indexOf(key) >= 0) return normalizeFlowTime(value);
+  if (key === 'interview_round') return normalizeRound(value);
+  return value;
+}
 
 /** 供路由层复用同一份清单（校验/回显），避免两处各抄一遍后走样 */
 export const JOB_UPDATABLE = JOB_UPDATABLE_COLUMNS;
@@ -729,9 +862,10 @@ function collectUpdateFields(
 
 export function updateApplication(id: string, updates: Partial<Pick<ApplicationRow,
   'platform' | 'company' | 'position' | 'salary' | 'city' | 'job_url' | 'status' | 'login_method' | 'message' | 'strategy' | 'evidence_path' | 'video_path'
+  | 'written_at' | 'interview_at' | 'interview_round' | 'offer_at' | 'closed_at'
 >>): boolean {
   const { fields, values } = collectUpdateFields(
-    updates as Record<string, any>, APPLICATION_UPDATABLE_COLUMNS,
+    updates as Record<string, any>, APPLICATION_UPDATABLE_COLUMNS, normalizeApplicationField,
   );
   if (fields.length === 0) return false;
   fields.push('updated_at = ?');
@@ -758,8 +892,23 @@ export interface JobRow {
   salary: string | null;
   apply_url: string | null;
   deadline: string | null;
+  /** 岗位类型（产品岗 / 技术岗 / 运营岗…）。NULL = 未填/未识别，筛选端按「未分类」显示 */
+  job_type: string | null;
+  /**
+   * 届别（4 位年份字符串 `'2027'`，**不是自由文本**）。NULL = 卡片没写或认不出来。
+   * ⚠️ 必须是规范化后的单一形态：前端拿它当筛选下拉的候选值，库里一旦混进 `'2027届'`，
+   *    下拉就会出现两个看着一样的选项、各筛出一部分，而用户完全无从察觉。
+   */
+  grad_year: string | null;
+  /**
+   * 校招卡片标签（JSON 数组串，如 `'["免笔试","秋招"]'`）。NULL = 无标签。
+   * 值取自 `parseCardMeta.ts` 的 `CARD_TAG_DEFS` 白名单 —— 库里不可能出现表外的标签。
+   */
+  tags: string | null;
   match_score: number | null;
   match_detail: string | null;
+  /** 最近一次 AI 匹配的时间(ISO串)；NULL=老数据（打分早于此列存在） */
+  matched_at: string | null;
   /** 跨公司串号隔离原因（非空表示默认跳过投递，需 force 放行） */
   quarantine: string | null;
   /** 跳过投递的原因（AI/规则给出，用于漏斗分析规则误杀；非空表示此岗位被主动跳过） */
@@ -943,6 +1092,12 @@ export function upsertJob(job: {
   salary?: string | null;
   apply_url?: string | null;
   deadline?: string | null;
+  /** 岗位类型（产品岗 / 技术岗…）。不传 = 保持原值（部分更新语义） */
+  job_type?: string | null;
+  /** 届别。接受 4 位年份或 `'2027届'` 原文，入库前经 normalizeGradYear 收敛。不传 = 保持原值 */
+  grad_year?: string | null;
+  /** 标签。数组 / JSON 串 / 逗号串都接受，入库前过 CARD_TAG_KEYS 白名单。不传 = 保持原值 */
+  tags?: string | null;
   /** 列表页卡片摘要（非岗位描述）。调用方若只有卡片文本，应传这里而**不要**传 jd */
   card_text?: string | null;
   /** JD 长图路径数组(JSON)。jd_source='image' 时配套写入 */
@@ -1000,6 +1155,31 @@ export function upsertJob(job: {
     const guess = postedAtFromLabeled(job.jd);
     if (guess) cleaned.posted_at = guess;
   }
+  // ── 卡片元数据：届别 / 标签 / 截止日 ─────────────────────────────────────
+  //   与 posted_at 同一套路：**调用方显式传的优先，否则从卡片文本派生**；
+  //   两者都没结果时**保持 undefined**（部分更新语义 —— 写 null 会把已存好的抹掉）。
+  //   派生源按可信度排序：card_text（完整卡片）> jd（正文，只认「20xx 届」）> position。
+  //   🔴 tags 刻意**只认 card_text**：正文里的「无需笔试」这类话与卡片上结构化的
+  //      「免笔试」字段不是一回事，拿正文推断标签会造出一批似是而非的快捷关注项。
+  //   🔴 deadline 同样只认 card_text，且判据是**结构性**的（届别 token 之后紧邻的日期），
+  //      绝不把整篇 JD 丢进去找日期 —— 那正是 posted_at 已经踩过的坑（命中 2% 且多是噪声）。
+  if (job.grad_year === undefined) {
+    const gy = (job.card_text ? parseCardMeta(job.card_text).gradYear : null)
+      ?? parseGradYear(job.jd) ?? parseGradYear(job.position);
+    if (gy) cleaned.grad_year = gy;
+  } else {
+    cleaned.grad_year = normalizeGradYear(job.grad_year);
+  }
+  if (job.tags === undefined) {
+    const tg = job.card_text ? serializeTags(parseCardMeta(job.card_text).tags) : null;
+    if (tg) cleaned.tags = tg;
+  } else {
+    cleaned.tags = serializeTags(job.tags);
+  }
+  if (job.deadline === undefined && job.card_text) {
+    const dl = parseCardMeta(job.card_text).deadline;
+    if (dl) cleaned.deadline = dl;
+  }
   // 远程标记：显式传入（含 0/1）则尊重；未传则按文本自动推断
   const remoteVal = job.remote !== undefined
     ? (job.remote ? 1 : 0)
@@ -1026,14 +1206,15 @@ export function upsertJob(job: {
   //    company/position/apply_url = NULL（实测 boss 12/277、job51 53/101 条被抹掉）。
   //    现在语义为「部分更新」：undefined = 保持原值；显式 null = 清空。
   const UPDATABLE = ['source', 'company', 'position', 'city', 'jd', 'requirements',
-    'salary', 'apply_url', 'deadline', 'card_text', 'jd_images', 'jd_source', 'posted_at', 'remote'] as const;
+    'salary', 'apply_url', 'deadline', 'job_type', 'card_text', 'jd_images', 'jd_source', 'posted_at', 'remote',
+    'grad_year', 'tags'] as const;
   const providedCols = UPDATABLE.filter((c) => (job as Record<string, unknown>)[c] !== undefined);
   // updated_at 始终更新，保证 SET 子句非空（否则只剩逗号会成为非法 SQL）
   const setSql = [...providedCols.map((c) => `${c} = excluded.${c}`), 'updated_at = excluded.updated_at'].join(',\n      ');
 
   db.prepare(`
-    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, card_text, jd_images, jd_source, posted_at, match_score, remote, status, created_at, updated_at)
-    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @card_text, @jd_images, @jd_source, @posted_at, @match_score, @remote, 'candidate', @created_at, @updated_at)
+    INSERT INTO jobs (id, source, company, position, city, jd, requirements, salary, apply_url, deadline, job_type, card_text, jd_images, jd_source, posted_at, grad_year, tags, match_score, remote, status, created_at, updated_at)
+    VALUES (@id, @source, @company, @position, @city, @jd, @requirements, @salary, @apply_url, @deadline, @job_type, @card_text, @jd_images, @jd_source, @posted_at, @grad_year, @tags, @match_score, @remote, 'candidate', @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       ${setSql}
   `).run({
@@ -1049,11 +1230,14 @@ export function upsertJob(job: {
     jd_images: job.jd_images ?? null,
     jd_source: job.jd_source ?? null,
     posted_at: job.posted_at ?? null,
+    grad_year: job.grad_year ?? null,
+    tags: job.tags ?? null,
     remote: remoteVal,
     requirements: job.requirements ?? null,
     salary: job.salary ?? null,
     apply_url: job.apply_url ?? null,
     deadline: job.deadline ?? null,
+    job_type: job.job_type ?? null,
     created_at: existing?.created_at || now,
     updated_at: now,
   });
@@ -1061,7 +1245,11 @@ export function upsertJob(job: {
 }
 
 export function updateJob(id: string, updates: Partial<Pick<JobRow,
-  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'match_score' | 'match_detail' |   'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'posted_at' | 'remote' | 'status'
+  // 🔴 这份硬编码的键名清单**必须**与上面的 JOB_UPDATABLE_COLUMNS 同集合：
+  //    它是 `updateJob(...)` 的编译期类型，那份是运行期 SQL 白名单；两处任一处漏改，
+  //    表现是「编译期报错」或「写进去了但被白名单丢掉」——两者都不说自己是列同步问题。
+  //    （`grad_year`/`tags`/`matched_at` 都是这样加进来的）
+  'company' | 'position' | 'city' | 'jd' | 'requirements' | 'salary' | 'apply_url' | 'deadline' | 'job_type' | 'match_score' | 'match_detail' |   'quarantine' | 'skip_reason' | 'card_text' | 'jd_images' | 'jd_source' | 'ocr_status' | 'posted_at' | 'remote' | 'status' | 'grad_year' | 'tags' | 'matched_at'
 >>): boolean {
   /** 文本字段同样过清洗，避免绕过 upsertJob 直接脏写（见 sanitize* 系列） */
   const sanitizeField = (k: string, v: any): any => {
@@ -1069,7 +1257,12 @@ export function updateJob(id: string, updates: Partial<Pick<JobRow,
     if (k === 'position') return sanitizePosition(v);
     if (k === 'salary') return sanitizeSalary(v);
     if (k === 'city') return sanitizeJobText(v, 30);
+    if (k === 'job_type') return sanitizeJobText(v, 20);
     if (k === 'posted_at') return normalizePostedDate(v);
+    // 🔴 走 PATCH 直接脏写也必须收敛：`grad_year` 是前端下拉的候选值来源，
+    //    存进 `'2027届'` 会让下拉多出一个看着相同却只筛一部分的选项。
+    if (k === 'grad_year') return normalizeGradYear(v);
+    if (k === 'tags') return serializeTags(v);
     return v;
   };
   const { fields, values } = collectUpdateFields(
@@ -1125,6 +1318,38 @@ export function saveFormMemory(site: string, fields: Record<string, string>): vo
     VALUES (@id, @site, @fields, @now)
     ON CONFLICT(site) DO UPDATE SET fields = excluded.fields, updated_at = excluded.updated_at
   `).run({ id: randomUUID(), site, fields: JSON.stringify(fields), now });
+}
+
+export interface FormMemoryBrief {
+  site: string;
+  /** 只给字段**标签**，不给值 —— 值是姓名/手机号/邮箱，界面不该回显 */
+  labels: string[];
+  count: number;
+  updatedAt: string;
+}
+
+/** 列出全部表单记忆（按最近更新排序）。刻意只回标签：值属个人信息，界面不需要 */
+export function listFormMemory(): FormMemoryBrief[] {
+  const rows = db
+    .prepare('SELECT site, fields, updated_at FROM form_memory ORDER BY updated_at DESC')
+    .all() as FormMemoryRow[];
+  return rows.map((r) => {
+    let labels: string[] = [];
+    try {
+      const o = JSON.parse(r.fields);
+      if (o && typeof o === 'object') labels = Object.keys(o);
+    } catch {
+      labels = [];
+    }
+    return { site: r.site, labels, count: labels.length, updatedAt: r.updated_at };
+  });
+}
+
+/** 删除某域名的表单记忆，返回删除行数（0 = 本来就没有） */
+export function deleteFormMemory(site: string): number {
+  if (!site) return 0;
+  const r = db.prepare('DELETE FROM form_memory WHERE site = ?').run(site);
+  return Number(r.changes || 0);
 }
 
 // 清空所有数据

@@ -333,7 +333,7 @@ function addBucket(target: Bucket, add: Bucket): void {
  * 并在总体积超阈值时按 `autoLimit` 档位**自动限额**（见 AutoLimitMode）。
  *
  * 默认**不触碰**：`data/browser`（登录态 profile）、`data/evidence`（投递证据截图）、
- * `data/resume_tailored`（一岗一简历产物）、`data/chat.db`（主库）。它们要么不可再生，
+ * `data/resume_tailored`（一岗一简历产物）、`data/resume_doc`（简历制作产物）、`data/chat.db`（主库）。它们要么不可再生，
  * 要么正是用户要留的证据 —— 磁盘空间不值得拿它们换。
  */
 export async function cleanupData(opts: CleanupOptions = {}): Promise<CleanupReport> {

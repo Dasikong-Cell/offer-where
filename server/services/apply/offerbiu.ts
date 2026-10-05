@@ -314,16 +314,124 @@ function siteOf(url?: string): string | null {
 }
 
 /** 中文表单标签 → 档案字段建议值（profile 已填则预填，减少人工） */
-function profileValueForLabel(label: string, profile: ApplyInput['profile']): string | undefined {
-  if (/(姓名|名字)/.test(label)) return profile.name || undefined;
-  if (/(手机|电话|联系)/.test(label)) return profile.phone || undefined;
-  if (/(邮箱|email|mail)/i.test(label)) return profile.email || undefined;
-  if (/(学校|院校|毕业)/.test(label)) return profile.school || undefined;
-  if (/(专业)/.test(label)) return profile.major || undefined;
-  if (/(学历|学位)/.test(label)) return profile.education || undefined;
-  if (/(城市|地点|所(在|在)|意向)/.test(label)) return profile.city || undefined;
-  if (/(技能|特长|掌握|精通)/.test(label)) return profile.skills || undefined;
-  if (/(岗位|职位|应聘|意向)/.test(label)) return profile.expectedPositions || undefined;
+/** 取值统一成「去掉首尾空白的字符串」，空 / null / undefined 一律当「没有」 */
+function asText(v: unknown): string {
+  if (typeof v === 'string') return v.trim();
+  return v == null ? '' : String(v).trim();
+}
+
+/**
+ * 「投递表单的字段标签 → 档案键」的有序映射表。
+ *
+ * 🔴 **顺序即优先级**：下面按顺序找**第一条命中**的规则，命中即停（哪怕值为空也不再往下找）。
+ *    所以「具体」必须排在「宽泛」之前。实测过的两个静默填错，都是顺序问题：
+ *      · `户籍所在地` 排在 `城市|地点|所在` 之后 ⇒ 填成**居住城市**；
+ *      · `紧急联系电话` 排在 `手机|电话|联系` 之后 ⇒ 填成**本人手机**。
+ *    这类 bug 的特征是**不报错、填得出值、值是错的** —— 比「填不上」危险得多。
+ *    顺序断言见 `scripts/contract_tests.ts`「自动填充信息（对标 offerbiu）」一节。
+ *
+ * 为什么命中即停、不回退到更宽的规则：`期望城市` 命中后若因值为空而回退到 `城市`，
+ * 结果是把**居住城市**填进「期望城市」栏 —— 又是一次静默填错。宁可留空。
+ * 唯一允许的「兜底」写在 pick 里（如 `期望城市` 兜底到居住城市），是显式且可审的。
+ *
+ * 维护约定：每新增一个 `ApplyProfile` 字段，就在这里加一条规则；
+ * 否则界面上填了值、表单里永远填不上，而且**不报错**。
+ */
+const PROFILE_LABEL_RULES: ReadonlyArray<{
+  re: RegExp;
+  pick: (p: ApplyInput['profile']) => string;
+}> = [
+  // ── 第一梯队：标签里含有宽泛词（紧急 / 电话 / 城市 / 所在 / 调剂），判晚了必错 ──
+  { re: /紧急.*(电话|手机)|(电话|手机).*紧急/, pick: (p) => asText(p.emergencyPhone) },
+  { re: /紧急.*(关系|称谓)/, pick: (p) => asText(p.emergencyRelation) },
+  // 「与本人关系」这种写法不含「紧急」二字（表单标题已经写了「紧急联系人」，
+  // 底下这一格就只写「与本人关系」）⇒ 单靠上面那条会漏判、这一格永远填不上。
+  { re: /关系|称谓/, pick: (p) => asText(p.emergencyRelation) },
+  { re: /紧急/, pick: (p) => asText(p.emergencyContact) },
+  { re: /户籍/, pick: (p) => asText(p.domicile) },
+  { re: /籍贯|祖籍/, pick: (p) => asText(p.hometown) },
+  { re: /城市说明/, pick: (p) => asText(p.otherCityNote) },
+  { re: /(通讯|通信|邮寄|联系|居住)地址/, pick: (p) => asText(p.address) },
+  { re: /邮编|邮政编码/, pick: (p) => asText(p.zipCode) },
+  { re: /地点调剂/, pick: (p) => asText(p.acceptCityAdjust) },
+  { re: /部门调剂/, pick: (p) => asText(p.acceptDeptAdjust) },
+  { re: /工作城市/, pick: (p) => asText(p.expectWorkCity) || asText(p.city) },
+  { re: /面试.{0,4}城市|城市.{0,4}面试/, pick: (p) => asText(p.interviewCity) },
+  { re: /期望.{0,6}城市|意向城市/, pick: (p) => asText(p.expectedCity) || asText(p.city) },
+
+  // ── 身份 / 证件 / 个人属性 ──
+  { re: /出生|生日/, pick: (p) => asText(p.birthday) },
+  { re: /证件(类型|种类|类别)/, pick: (p) => asText(p.idType) },
+  { re: /证件(号|号码)|身份证号/, pick: (p) => asText(p.idNo) },
+  { re: /政治面貌|党派/, pick: (p) => asText(p.politicalStatus) },
+  { re: /婚姻|婚否/, pick: (p) => asText(p.maritalStatus) },
+  { re: /健康/, pick: (p) => asText(p.health) },
+  { re: /身高/, pick: (p) => asText(p.height) },
+  { re: /体重/, pick: (p) => asText(p.weight) },
+  { re: /民族/, pick: (p) => asText(p.nation) },
+  { re: /性别/, pick: (p) => asText(p.gender) },
+  // ⚠️ 只认「国家 / 国籍」，刻意不认单独的「地区」——否则「意向地区」会被填成国家
+  { re: /国家|国籍/, pick: (p) => asText(p.country) },
+
+  // ── 联系方式与主页 ──
+  { re: /微信|wechat|weixin/i, pick: (p) => asText(p.wechat) },
+  { re: /qq/i, pick: (p) => asText(p.qq) },
+  { re: /github/i, pick: (p) => asText(p.github) },
+  { re: /gitee|码云/i, pick: (p) => asText(p.gitee) },
+  { re: /linkedin|领英/i, pick: (p) => asText(p.linkedin) },
+  { re: /博客|blog|个人主页|主页/i, pick: (p) => asText(p.blog) },
+  { re: /个人网站|网站|homepage|website/i, pick: (p) => asText(p.website) },
+  { re: /社交|其他账号/, pick: (p) => asText(p.socialAccount) },
+  { re: /姓名|名字/, pick: (p) => asText(p.name) },
+  { re: /手机|联系电话|联系方式|电话/, pick: (p) => asText(p.phone) },
+  { re: /邮箱|email|mail/i, pick: (p) => asText(p.email) },
+
+  // ── 教育 ──
+  { re: /学校|院校|学院|毕业/, pick: (p) => asText(p.school) },
+  { re: /专业/, pick: (p) => asText(p.major) },
+  { re: /学历|学位/, pick: (p) => asText(p.education) },
+
+  // ── 意向 / 期望 ──
+  { re: /期望职位|期望岗位|意向岗位|应聘岗位|应聘职位|求职意向|期望.{0,6}(职位|岗位)/, pick: (p) => asText(p.expectedPositions) },
+  { re: /现居|居住|所在城市|所在地|城市|工作地点|地点/, pick: (p) => asText(p.city) },
+  { re: /工作年限|经验年限|年限/, pick: (p) => asText(p.workYears) },
+  { re: /薪资|薪水|月薪|年薪|薪酬/, pick: (p) => asText(p.expectSalary) },
+  { re: /到岗|入职时间|可入职/, pick: (p) => asText(p.onboardTime) },
+  { re: /实习周期|实习时长/, pick: (p) => asText(p.internPeriod) },
+  { re: /每周.{0,4}(实习|天)/, pick: (p) => asText(p.internDays) },
+  { re: /求职类型|招聘类型/, pick: (p) => asText(p.jobType) },
+  { re: /工作性质/, pick: (p) => asText(p.workNature) },
+  { re: /工作方式|办公方式/, pick: (p) => asText(p.workMode) },
+  { re: /接受异地|异地/, pick: (p) => asText(p.acceptRemote) },
+  { re: /调剂/, pick: (p) => asText(p.acceptAdjust) },
+  { re: /事业群/, pick: (p) => asText(p.businessGroup) },
+  { re: /意向行业|行业/, pick: (p) => asText(p.industry) },
+  { re: /意向方向|方向/, pick: (p) => asText(p.direction) },
+  { re: /部门/, pick: (p) => asText(p.department) },
+  { re: /内推/, pick: (p) => asText(p.referralCode) },
+  { re: /招聘信息来源|信息来源|投递渠道|获知渠道|信息渠道/, pick: (p) => asText(p.applySource) },
+  { re: /亲属|回避/, pick: (p) => asText(p.hasRelative) },
+  { re: /技能|特长|掌握|精通/, pick: (p) => asText(p.skills) },
+];
+
+/**
+ * 按投递表单上的字段标签，从档案里取对应的值。
+ *
+ * 空值一律返回 `undefined`（不是空串）：调用方都是 `v ?? 下一优先级`，
+ * 返回空串会**截断回退链**，让本来能填上的字段变空。
+ *
+ * 导出仅供单测使用（tests/unit/autofillProfile.test.ts）—— 这张表的语义
+ * （顺序即优先级、命中即停）靠静态扫描证不出来，必须真的喂标签进去看解析结果。
+ */
+export function profileValueForLabel(label: string, profile: ApplyInput['profile']): string | undefined {
+  if (!label) return undefined;
+  // 探测出来的标签可能带空格 / 全角空格，先规整，否则 `工作 城市` 这类会漏判
+  const normalized = label.replace(/[\s\u3000]/g, '');
+  for (const rule of PROFILE_LABEL_RULES) {
+    if (!rule.re.test(normalized)) continue;
+    const v = rule.pick(profile);
+    return v || undefined;   // 命中即停：不回退到更宽的规则（回退 = 静默填错）
+  }
   return undefined;
 }
 
