@@ -1090,6 +1090,38 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
     '本地 realSend 与服务端实际模式脱节 ⇒ 明明真实发送却标「预览」（或反之），用户被误导');
 }
 
+// D5a 投递证据回溯：截图/录像点击放大改页内 lightbox（2026-10-05 用户实测「点击无法放大」：
+// 桌面壳里 <a target="_blank"> 开不了新窗口 ⇒ 点缩略图毫无反应）
+{
+  const lbH = stripComments(readText('public/console.html'));
+  const fnBody = (src: string, name: string) => {
+    const m = src.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}'));
+    return m ? m[1] : '';
+  };
+
+  // ⑯ lightbox 三件套齐（DOM / CSS / 打开+关闭+Esc），防「只加了层没接线」
+  check('证据回溯：页内放大层 lightbox 三件套齐全（DOM/样式/开关+Esc）',
+    /id="lightbox"/.test(lbH)
+    && /\.lightbox\.open\{display:flex\}/.test(lbH)
+    && /function openLightbox\(/.test(lbH)
+    && /function closeLightbox\(\)\{/.test(lbH)
+    && /\$\('#lightboxClose'\)\.addEventListener\('click'/.test(lbH)
+    && /if\(e\.key==='Escape'\) closeLightbox\(\)/.test(lbH),
+    'target=_blank 在桌面壳里开不了新窗口 ⇒ 点缩略图毫无反应；放大必须页内做');
+
+  // ⑰ 证据渲染不再依赖新窗口：缩略图 img 带 data-ev（cursor:zoom-in）、录像链接走 data-vid 委托
+  const evFn = fnBody(lbH, 'loadEvidence');
+  check('证据回溯：缩略图与录像链接不再依赖 target=_blank（data 属性 + 委托到 lightbox）',
+    evFn.length > 400
+    && evFn.indexOf('target="_blank"') < 0
+    && /data-ev="'\+esc\(a\.evidence_path\)\+'"/.test(evFn)
+    && evFn.indexOf('cursor:zoom-in') >= 0
+    && evFn.indexOf("e.target.closest('img[data-ev]')") >= 0
+    && evFn.indexOf("e.target.closest('a[data-vid]')") >= 0
+    && evFn.indexOf('openEvidenceVideo(') >= 0,
+    `evFn.length=${evFn.length}`);
+}
+
 // D4 平台风控封锁持久化（命中后短路后续批次，避免连续重试升级风控）
 {
   const p = `${RUN_TAG}-plat`;

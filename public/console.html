@@ -277,6 +277,15 @@
   .modal .box .hd h3{margin:0;font-size:16px}
   .modal .box .bd{padding:18px 20px}
   .modal .box img{max-width:100%;border:1px solid var(--line);border-radius:10px}
+  /* lightbox：证据截图页内放大（桌面壳 target=_blank 开不了新窗口 ⇒ 点击无反应，改页内层） */
+  .lightbox{position:fixed;inset:0;background:rgba(10,14,24,.85);display:none;align-items:center;justify-content:center;z-index:90;cursor:zoom-out;padding:20px}
+  .lightbox.open{display:flex}
+  .lightbox img{max-width:94vw;max-height:86vh;border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.5);cursor:default;background:#fff}
+  .lightbox video{max-width:94vw;max-height:86vh;border-radius:8px;background:#000}
+  .lightbox iframe{width:86vw;height:82vh;border:0;border-radius:8px;background:#fff}
+  .lightbox .lb-close{position:absolute;top:14px;right:18px;background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer}
+  .lightbox .lb-close:hover{background:rgba(255,255,255,.25)}
+  .lightbox .lb-cap{position:absolute;left:0;right:0;bottom:12px;text-align:center;color:#dfe6f0;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none;padding:0 60px;word-break:break-all}
 
   .empty{text-align:center;color:var(--muted2);padding:40px 0;font-size:13px}
   .spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
@@ -1466,6 +1475,13 @@
   <div class="bd" id="modalBody"></div>
 </div></div>
 
+<!-- lightbox：投递证据截图/录像页内放大（桌面壳开不了新窗口） -->
+<div class="lightbox" id="lightbox">
+  <button class="lb-close" id="lightboxClose" title="关闭">✕</button>
+  <div id="lightboxBody"></div>
+  <div class="lb-cap" id="lightboxCap"></div>
+</div>
+
 <script>
 "use strict";
 const $ = (s, r=document) => r.querySelector(s);
@@ -1932,16 +1948,26 @@ async function loadEvidence(){
       const letterTag = strat[0]==='letter' ? '带求职信' : (strat[0]==='no_letter' ? '无求职信' : (strat[0]||'未打标'));
       const rvTag = strat[1]||'—';
       html+='<div style="width:200px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff">'
-        +'<a href="'+esc(a.evidence_path)+'" target="_blank"><img src="'+esc(a.evidence_path)+'" style="width:100%;height:120px;object-fit:cover;display:block" onerror="this.style.display=\'none\'"></a>'
+        +'<img src="'+esc(a.evidence_path)+'" data-ev="'+esc(a.evidence_path)+'" data-cap="'+esc((a.company||'')+' · '+(a.position||''))+'" style="width:100%;height:120px;object-fit:cover;display:block;cursor:zoom-in" onerror="this.style.display=\'none\'">'
         +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(a.position||''))+'<br>'
         +'<span class="muted">'+esc(a.platform)+' · '+(a.created_at||'').slice(0,10)+'</span><br>'
         +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#eef4ff;color:#2a5bd7;font-size:11px">'+esc(letterTag)+'</span> '
         +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#f3f3f3;color:#555;font-size:11px">'+esc('简历:'+rvTag)+'</span>'
-        +(a.video_path ? '<div style="margin-top:4px"><a href="'+esc(a.video_path)+'" target="_blank">▶ 操作录像</a></div>' : '')
+        +(a.video_path ? '<div style="margin-top:4px"><a href="#" data-vid="'+esc(a.video_path)+'">▶ 操作录像</a></div>' : '')
         +'</div></div>';
     }
     html+='</div>';
     out.innerHTML=html;
+    /* 点击放大：事件委托（桌面壳 target=_blank 开不了新窗口 ⇒ 页内 lightbox） */
+    if(!out.dataset.lbBound){
+      out.dataset.lbBound='1';
+      out.addEventListener('click', e=>{
+        const img=e.target.closest('img[data-ev]');
+        if(img && img.dataset.ev){ openLightbox('<img src="'+esc(img.dataset.ev)+'" alt="投递证据截图">', img.dataset.cap); return; }
+        const vid=e.target.closest('a[data-vid]');
+        if(vid){ e.preventDefault(); openEvidenceVideo(vid.dataset.vid); }
+      });
+    }
   }catch(e){ out.innerHTML='<div class="note warn">加载失败：'+esc(e.message)+'</div>'; }
 }
 
@@ -5444,6 +5470,26 @@ async function loadLogs(){
 function openModal(title, bodyHtml){ $('#modalTitle').textContent=title; $('#modalBody').innerHTML=bodyHtml; $('#modal').classList.add('open'); }
 $('#modalClose').addEventListener('click', ()=>$('#modal').classList.remove('open'));
 $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') $('#modal').classList.remove('open'); });
+
+/* ---------- lightbox：证据截图/录像页内放大 ----------
+   桌面壳（Electron 类）里 <a target="_blank"> 开不了新窗口 ⇒ 点缩略图毫无反应；
+   改为页内全屏层：点图/录像链接 → 放大展示，点空白/✕/Esc 关闭。 */
+function openLightbox(innerHtml, cap){
+  $('#lightboxBody').innerHTML=innerHtml;
+  $('#lightboxCap').textContent=cap||'';
+  $('#lightbox').classList.add('open');
+}
+function closeLightbox(){ $('#lightbox').classList.remove('open'); $('#lightboxBody').innerHTML=''; }
+$('#lightboxClose').addEventListener('click', closeLightbox);
+$('#lightbox').addEventListener('click', e=>{ if(e.target.id==='lightbox') closeLightbox(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeLightbox(); });
+/* video_path 三种形态（batch.ts: rec.video || rec.player || rec.dir）：mp4 → <video>；play.html → <iframe>；帧目录 → 提示 */
+function openEvidenceVideo(u){
+  const s=esc(u);
+  if(/\.mp4(\?|#|$)/.test(u)) openLightbox('<video controls autoplay src="'+s+'"></video>','操作录像');
+  else if(/\.html?(\?|#|$)/.test(u)) openLightbox('<iframe src="'+s+'"></iframe>','操作录像');
+  else openLightbox('<div class="note" style="background:#fff">该录像是帧序列目录，页内暂不支持直接回放 —— 请用证据卡上的「打开目录」逐帧查看。</div>','操作录像');
+}
 
 /* ---------- init ---------- */
 fillPlatformSelects();
