@@ -5125,6 +5125,16 @@ function appStatusOptions(a){
   return extra + known.map(k=>'<option value="'+k+'"'+(a.status===k?' selected':'')+'>'+APP_STATUS[k]+'</option>').join('');
 }
 
+/** 真实投递验证徽章：有 evidence_path（投递瞬间平台页截图）⇒ 已验证，可点开看物证；
+ *  否则「未留证」（多为证据功能上线前的历史投递），无法独立核实。 */
+function appVerifiedBadge(a){
+  if(a.evidence_path){
+    const cap = esc((a.company||'')+' · '+(a.position||'')+' @ '+(jobSrcName(a.platform)||''));
+    return '<span class="badge b-ok" title="已留存投递瞬间平台页截图（点击查看物证）" data-ev="'+esc(a.evidence_path)+'" data-cap="'+cap+'" style="cursor:zoom-in">✅ 已验证真实投递</span>';
+  }
+  return '<span class="badge b-mut" title="无投递瞬间截图（多为证据功能上线前的历史投递），无法独立核实">未留证</span>';
+}
+
 function appCardHtml(a){
   const n = appNodeText(a);
   return '<div class="kcard">'
@@ -5132,7 +5142,9 @@ function appCardHtml(a){
     + '<div class="m"><span>'+esc(a.position||'–')+'</span></div>'
     + '<div class="m"><span class="badge b-info">'+esc(jobSrcName(a.platform))+'</span>'
     +   (a.city ? '<span>'+esc(a.city)+'</span>' : '')
-    +   '<span class="small">'+esc(fmtTs(a.created_at))+'</span></div>'
+    +   '<span class="small">'+esc(fmtTs(a.created_at))+'</span>'
+    +   appVerifiedBadge(a)
+    + '</div>'
     + '<div class="tn'+(n.cls?' '+n.cls:'')+'">'+esc(n.text)+'</div>'
     + '<div class="m"><select data-appst="'+esc(a.id)+'">'+appStatusOptions(a)+'</select>'
     +   '<button class="btn sm" data-apptime="'+esc(a.id)+'">改时间</button>'
@@ -5275,6 +5287,10 @@ function bindAppActions(rootSel){
       await loadMyApps();
     }catch(e){ alert('删除失败：'+e.message); }
   }));
+  // 「已验证真实投递」徽章 → 页内放大看投递瞬间平台页截图（与证据回溯页同一 lightbox）
+  $$(rootSel+' [data-ev]').forEach(el=>el.addEventListener('click', ()=>{
+    openLightbox('<img src="'+esc(el.dataset.ev)+'" alt="投递证据截图">', el.dataset.cap || '');
+  }));
 }
 
 function renderAppsBoard(list){
@@ -5305,7 +5321,7 @@ function renderAppsTable(list){
   tb.innerHTML = list.slice(0,300).map(a=>{
     const n = appNodeText(a);
     return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(a.position||'–')+'</td>'
-      + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span></td>'
+      + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span> '+appVerifiedBadge(a)+'</td>'
       + '<td>'+esc(jobSrcName(a.platform))+'</td>'
       + '<td>'+esc(a.city||'–')+'</td>'
       + '<td class="small muted">'+esc(fmtTs(a.created_at))+'</td>'

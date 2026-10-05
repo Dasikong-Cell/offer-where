@@ -1122,6 +1122,33 @@ console.log('\n══════ D. 投递安全闸门（风控信号 / 每日�
     `evFn.length=${evFn.length}`);
 }
 
+// D5b 投递列表「真实投递验证」徽章（2026-10-05 用户要求：在投递列表加验证徽章）
+{
+  const lbH = stripComments(readText('public/console.html'));
+  const fnBody = (src: string, name: string) => {
+    const m = src.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}'));
+    return m ? m[1] : '';
+  };
+  const cardFn = fnBody(lbH, 'appCardHtml');
+  const tblFn = fnBody(lbH, 'renderAppsTable');
+  const bindFn = fnBody(lbH, 'bindAppActions');
+
+  // ⑱ 验证徽章函数：evidence_path → 绿色「✅ 已验证真实投递」+ data-ev（可点开物证）；否则「未留证」
+  check('投递列表：验证徽章函数存在（有证据=已验证可点开，无证据=未留证）',
+    /function appVerifiedBadge\(/.test(lbH)
+    && /b-ok[^>]*>✅ 已验证真实投递/.test(lbH)
+    && /data-ev="'\+esc\(a\.evidence_path\)/.test(lbH)
+    && /未留证/.test(lbH),
+    'evidence_path 是真实投递最强物证；徽章是唯一肉眼可辨的入口');
+
+  // ⑲ 看板卡片 + 表格行都渲染徽章；bindAppActions 委托 data-ev 打开物证 lightbox
+  check('投递列表：看板卡片与表格行都渲染验证徽章，且点击委托打开物证',
+    cardFn.indexOf('appVerifiedBadge(a)') >= 0
+    && tblFn.indexOf('appVerifiedBadge(a)') >= 0
+    && /\[data-ev\]/.test(bindFn) && bindFn.indexOf('openLightbox(') >= 0,
+    '两处渲染器漏一处 ⇒ 看板/表格对不上；不委托 ⇒ 点徽章没反应');
+}
+
 // D4 平台风控封锁持久化（命中后短路后续批次，避免连续重试升级风控）
 {
   const p = `${RUN_TAG}-plat`;
