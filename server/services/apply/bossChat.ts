@@ -50,48 +50,212 @@ export async function openChat(): Promise<void> {
     script: `(()=>{const a=[].slice.call(document.querySelectorAll('a')).find(x=>/消息/.test(x.innerText||'')&&/chat/.test(x.getAttribute('href')||''));if(a)a.click();return 'ok';})()`,
   });
   await sleep(5000);
+  _curTab = 0;   // 新进聊天页时列表默认停在「全部」
+}
+
+/** 会话列表的三个页签。
+ *
+ * 🔴 为什么必须把「未读」也算上（2026-10-06 实测，用户报「自动回复没有真实进行」的根因）：
+ * BOSS 的「全部」页签**只渲染最新 40 条**（实测 li 恒 40、scrollHeight 恒定 7842，
+ * 连续滚动/跳到底都不会再加载），而自动投递每天会新建几十个「招呼」会话 —— 于是「全部」
+ * 的第一页被今天的新会话占满，**更早的、真有 HR 回话的未读会话全部落在视野之外**。
+ * 实测：全部 40 条全是今天的，未读页签里另有 21 个会话（昨天 ~ 09-20）从来没被引擎看到过。
+ * ⇒ 只读「全部」的旧实现，在投递量大时必然「漏掉所有未读」，且表现为「跑了但什么都没回」。
+ * 「新招呼」是 HR 主动发起的会话，同样需要纳入。 */
+const CONV_TABS = ['全部', '未读', '新招呼'] as const;
+
+/** 浏览器内：点某个会话页签。返回 'clicked:<label>' / 'not-found'。
+ *  用纯字符串比较而不是拼正则，避免模板字符串里的转义地狱。 */
+function clickTabSrc(label: string): string {
+  return `(()=>{ const want=${JSON.stringify(label)};
+    const els=document.querySelectorAll('div,span,li,a,button');
+    for(const el of els){
+      const t=(el.innerText||'').replace(/\\s+/g,'').trim();
+      if(!(t===want || t.startsWith(want+'('))) continue;
+      const r=el.getBoundingClientRect();
+      if(r.width<=0||r.height<=0||r.height>60) continue;
+      if(el.children.length>1) continue;
+      el.click(); return 'clicked:'+t;
+    }
+    return 'not-found'; })()`;
+}
+
+/** 浏览器内：把**当前显示**的会话列表读成 [{name,company,lastMsg,unread,raw}]。
+ *  ⚠️ lastMsg 必须优先取 `.last-msg-text`：旧实现从整行 innerText 里剥时间/姓名，
+ *  会把「昨天 / 公司名 / 职位」混进 lastMsg，导致引擎拿它跟 DB 的 last_hr_message
+ *  比对时**永远不相等**（自动回复的前置过滤 `!lastHr.startsWith(c.lastMsg)` 因此恒真）。
+ *  ⚠️ 未读角标的 class 是 `.notice-badge`（带数字），旧实现里 `[class*=dot]` 之类并不匹配它。 */
+function readListSrc(): string {
+  return `(()=>{
+    const uls=document.querySelectorAll('.user-list-content ul');
+    let t=null; for(const u of uls){ if(u.children.length>0){ t=u; break; } }
+    if(!t) return JSON.stringify([]);
+    const ROLE=/(HR|人事经理|人力资源|人事专员|人事|招聘顾问|招聘经理|招聘|项目经理|技术总监|技术经理|研发经理|研发总监|总经理|总监|主管|负责人|商务经理|商务|行政|运营|CEO|创始人|合伙人|CTO|团队负责人|部门经理|区域经理)$/;
+    const out=[];
+    for(const li of t.children){
+      const nameEl=li.querySelector('.name-text');
+      const name=(nameEl?nameEl.innerText:'').trim();
+      if(!name) continue;
+      const titleBoxEl=li.querySelector('.title-box');
+      const titleBox=(titleBoxEl?titleBoxEl.innerText:'').replace(/\\s+/g,' ').trim();
+      // title-box = name + company + role；去掉 name 前缀，再去掉尾部角色词，余下即公司
+      let rest=titleBox.replace(name,'').trim();
+      let company=rest;
+      for(let k=0;k<3;k++){
+        const m=company.match(ROLE);
+        if(m && m.index!==undefined && m.index>0){ company=company.slice(0,m.index).trim(); }
+        else break;
+      }
+      const txt=(li.innerText||'').replace(/\\s+/g,' ').trim();
+      const badgeEl=li.querySelector('.notice-badge,.unread-num,[class*=unread-count],.badge,[class*=unread],[class*=red-dot]');
+      const badgeTxt=badgeEl?(badgeEl.textContent||'').trim():'';
+      const unread=!!badgeEl && (/^\\d+$/.test(badgeTxt) || /notice-badge|unread|red-dot/.test(String(badgeEl.className||'')));
+      const msgEl=li.querySelector('.last-msg-text');
+      let lastMsg;
+      if(msgEl && (msgEl.innerText||'').trim()){
+        lastMsg=(msgEl.innerText||'').replace(/\\s+/g,' ').trim();
+      }else{
+        lastMsg=txt.replace(name,'')
+          .replace(/^(\\d{1,2}:\\d{2}|昨天|星期[一二三四五六日]|\\d{1,2}月\\d{1,2}日)/,'')
+          .replace(/\\[送达\\]|\\[已读\\]/g,'').replace(name,'').trim();
+      }
+      // 末条是否我方发的：BOSS 给我方消息挂 [送达]/[已读]，HR 的消息不带（实测覆盖全部/未读/新招呼三页签）。
+      // 只用于引擎的廉价前置排除，权威判据仍是 readConversation().lastHr。
+      const mine=/\\[送达\\]|\\[已读\\]/.test(txt);
+      out.push({name, company, lastMsg:lastMsg.slice(0,120), unread, mine, raw:txt.slice(0,160)});
+    }
+    return JSON.stringify(out);
+  })()`;
+}
+
+/** 当前会话列表**实际停留在哪个页签**（CONV_TABS 下标）。
+ *  作用：openConversation / readTab 换页签前先看它，
+ *  避免「每个会话都白点一次『全部』」（40 个会话 = 白等 28 秒）。 */
+let _curTab = 0;
+
+/** 等会话列表容器就绪。
+ *
+ * 🔴 为什么不能只 sleep（2026-10-06 真机实测，用户报「列表出来了但一条都没回复」的第二个根因）：
+ * 点任一页签后，BOSS 会把 `.user-list-content` **整个从 DOM 卸掉**再异步重建；
+ * 这段空窗期里所有「找 li」的脚本只能拿到 NO_LIST。
+ * 实测：listConversations 收尾点回「全部」后只 sleep 700ms，容器**仍不存在**
+ * （`{"hasBox":false,"ulCount":0}`）⇒ 紧接着的 openConversation 一律 NO_LIST 秒失败，
+ * 表现就是「会话都列出来了、点开全部失败（open-failed）」，用户看到的是「跑了但一条都没回」。
+ * ⇒ 这不是「找不到会话」，是**列表还没回来**，必须等。
+ * 返回是否在超时内等到容器。 */
+async function waitListBox(timeoutMs = 6000): Promise<boolean> {
+  const t0 = Date.now();
+  for (;;) {
+    const r = await ex('eval', {
+      script: `(()=>{ const c=document.querySelector('.user-list-content'); if(!c) return 'no'; return c.querySelectorAll('ul').length ? 'yes' : 'no'; })()`,
+    });
+    if (String(r.data) === 'yes') return true;
+    if (Date.now() - t0 > timeoutMs) return false;
+    await sleep(350);
+  }
+}
+
+/** 切到第 idx 个页签；返回是否真的切成功。
+ *  页签不存在时（如「未读」为 0 —— BOSS 根本不渲染该页签）clickTabSrc 返回 'not-found'，
+ *  此时不更新 `_curTab`（列表其实没动），调用方据此跳过。 */
+async function gotoConvTab(idx: number): Promise<boolean> {
+  const c = await ex('eval', { script: clickTabSrc(CONV_TABS[idx]) });
+  if (!String(c.data || '').startsWith('clicked')) return false;
+  _curTab = idx;
+  await sleep(idx === 0 ? 700 : 1400);   // 过滤页签会重新拉列表，多等一会儿
+  await waitListBox();                   // 再等容器重建完 —— 上面那点 sleep 不够（见 waitListBox 注释）
+  return true;
+}
+
+/** 读第 idx 个页签的会话列表。页签点不到（不存在）返回 null。 */
+async function readTab(idx: number): Promise<any[] | null> {
+  if (_curTab !== idx && !(await gotoConvTab(idx))) return null;
+  const r = await ex('eval', { script: readListSrc() });
+  return JSON.parse((r.data as string) || '[]');
+}
+
+/** 读**当前显示**的列表（不切页签）。 */
+async function readListNow(): Promise<any[]> {
+  const r = await ex('eval', { script: readListSrc() });
+  return JSON.parse((r.data as string) || '[]');
+}
+
+/** 「全部」页签滚动收集的步长（× clientHeight）与步数上限。
+ *  实测基线（2026-10-06）：clientHeight=274 / scrollHeight=7842；每步 548px 时
+ *  40 行的窗口与新位置**始终重叠**（不会跳过行），全量约 93~100 个会话、12 步走完 ⇒ 上限 18 步留余量。 */
+const CONV_SCROLL_STEP = 2;
+const CONV_SCROLL_MAX = 18;
+
+/**
+ * 读「全部」页签的**全量**会话（滚动收集）。
+ *
+ * 🔴 为什么必须滚动（2026-10-06 真机实测，用户报「一轮之后又没反应了」的根因）：
+ * 「全部」是**虚拟化列表** —— 一次只渲染 40 行，但**滚到底就是完整历史**。
+ * 实测：滚到 50% / 100% 时那 40 行**整批换掉**（与滚动前重名 0/40），能翻到「昨天」「10月04日」的会话；
+ * 滚动收集去重后共 93 个不同会话。
+ * ⚠️ 此前只看「行数恒 40」就判定「全部无分页」，是**错的** —— 行数恒定正是虚拟化的特征。
+ *
+ * 非做不可的原因：`openConversation` 打开会话会把它标记为已读 ⇒ **从「未读」页签消失**。
+ * 若列表只以「未读」为来源，则「跑过一轮（哪怕只是预览）之后，被打开却没回成的会话就永远回不了」。
+ * 现在「全部」能滚出全量 ⇒ 列表来源是可持续的。
+ */
+async function readAllTab(): Promise<any[]> {
+  // 先归零：上一轮可能把列表停在半路
+  await ex('eval', { script: `(()=>{ const c=document.querySelector('.user-list-content'); if(c) c.scrollTop=0; return 'ok'; })()` });
+  await sleep(900);
+  const seen = new Map<string, any>();
+  const add = (list: any[]): number => {
+    let fresh = 0;
+    for (const c of list) {
+      const k = `boss|${c.name || '未知'}|${c.company || ''}`;
+      const prev = seen.get(k);
+      if (!prev) fresh++;
+      if (!prev || (c.unread && !prev.unread)) seen.set(k, c);
+    }
+    return fresh;
+  };
+  add(await readListNow());
+  let idle = 0;
+  for (let i = 0; i < CONV_SCROLL_MAX && idle < 2; i++) {
+    await ex('eval', {
+      script: `(()=>{ const c=document.querySelector('.user-list-content'); if(!c) return 'no'; c.scrollTop += c.clientHeight * ${CONV_SCROLL_STEP}; return 'ok'; })()`,
+    });
+    await sleep(1100);
+    idle = add(await readListNow()) > 0 ? 0 : idle + 1;
+  }
+  await ex('eval', { script: `(()=>{ const c=document.querySelector('.user-list-content'); if(c) c.scrollTop=0; return 'ok'; })()` });
+  return Array.from(seen.values());
 }
 
 export async function listConversations(): Promise<ConvSummary[]> {
-  const r = await ex('eval', {
-    script: `(()=>{
-      const uls=document.querySelectorAll('.user-list-content ul');
-      let t=null; for(const u of uls){ if(u.children.length>0){ t=u; break; } }
-      if(!t) return JSON.stringify([]);
-      const ROLE=/(HR|人事经理|人力资源|人事专员|人事|招聘顾问|招聘经理|招聘|项目经理|技术总监|技术经理|研发经理|研发总监|总经理|总监|主管|负责人|商务经理|商务|行政|运营|CEO|创始人|合伙人|CTO|团队负责人|部门经理|区域经理)$/;
-      const out=[];
-      for(const li of t.children){
-        const nameEl=li.querySelector('.name-text');
-        const name=(nameEl?nameEl.innerText:'').trim();
-        const titleBoxEl=li.querySelector('.title-box');
-        const titleBox=(titleBoxEl?titleBoxEl.innerText:'').replace(/\\s+/g,' ').trim();
-        // title-box = name + company + role；去掉 name 前缀，再去掉尾部角色词，余下即公司
-        let rest=titleBox.replace(name,'').trim();
-        // 反复去掉尾部角色词（如「人事经理」「HR」）
-        let company=rest;
-        for(let k=0;k<3;k++){
-          const m=company.match(ROLE);
-          if(m && m.index!==undefined && m.index>0){ company=company.slice(0,m.index).trim(); }
-          else break;
-        }
-        const txt=(li.innerText||'').replace(/\\s+/g,' ').trim();
-        // 未读红点 class 名不稳定（unread-num / red-dot / badge 等），多兜几类，且认数字角标
-        const unreadBadge=li.querySelector('[class*=unread],[class*=red-dot],.badge,.unread-num,[class*=dot]');
-        const unreadNum=li.querySelector('.unread-num,[class*=unread-count],[class*=badge]');
-        const unread=!!unreadBadge||!!(unreadNum&&/\d/.test((unreadNum.textContent||'').trim()));
-        const lastMsg=txt.replace(name,'').replace(/^\\d{1,2}:\\d{2}/,'').replace(/\\[送达\\]|\\[已读\\]/g,'').replace(name,'').trim().slice(0,120);
-        out.push({name, company, lastMsg, unread, raw:txt.slice(0,160)});
-      }
-      return JSON.stringify(out);
-    })()`,
-  });
-  const list: any[] = JSON.parse((r.data as string) || '[]');
-  return list.map((c) => ({
+  const merged = new Map<string, any>();
+  const add = (list: any[]) => {
+    for (const c of list) {
+      const key = `boss|${c.name || '未知'}|${c.company || ''}`;
+      const prev = merged.get(key);
+      if (!prev || (c.unread && !prev.unread)) merged.set(key, c);
+    }
+  };
+
+  // ① 「全部」= 可持续的**全量**来源（虚拟化列表，滚动收集；见 readAllTab 注释）
+  if (_curTab !== 0) await gotoConvTab(0);
+  add(await readAllTab());
+
+  // ② 「未读」「新招呼」= 未读态与最热两份的补充（未读那份的未读标记更可信）
+  for (let i = 1; i < CONV_TABS.length; i++) {
+    const list = await readTab(i);
+    if (list) add(list);
+  }
+
+  // 收尾把列表切回「全部」：openConversation 靠 `_curTab` 决定是否要切页签，这里必须归位
+  await gotoConvTab(0);
+  return Array.from(merged.values()).map((c) => ({
     key: `boss|${c.name}|${c.company}`,
     name: c.name || '未知',
     company: c.company || '',
     lastMsg: c.lastMsg || '',
     unread: !!c.unread,
+    lastMine: !!c.mine,
     raw: c.raw || '',
   }));
 }
@@ -101,11 +265,20 @@ export async function openConversation(key: string): Promise<boolean> {
   const pName = parts[1] || '';
   const pCompany = parts[2] || '';
   // BOSS 会话列表是虚拟化列表：连续打开多个后只保留视口附近条目，更深的 li 会被回收出 DOM。
-  // 故在 node 侧循环「查找目标 → 滚入视口并点击 → 校验切换」，找不到就滚动列表容器加载更多后重试。
+  // 故在 node 侧循环「查找目标 → 滚入视口并点击 → 校验切换」，找不到就滚动列表容器后重试。
   // 校验改用「窗格 HR 姓名」匹配（.chat-conversation .name-text），而非要求 li.message-item>0：
   //   这样系统/Bot 会话、消息加载慢的会话也能被正确判为「已打开」，再由引擎按 lastHr 决定跳过，
   //   彻底消除旧逻辑把「已打开但无真人消息」误判 EMPTY 导致的 open-failed（旧版实测 14→7 残留即此因）。
-  for (let attempt = 0; attempt < 30; attempt++) {
+  //
+  // 🔴 页签轮转（2026-10-06，用户报「自动回复没有真实进行」的根因修复之一）：
+  //   listConversations 现在读的是「全部 + 未读 + 新招呼」三页签的**并集**，但「点开」只能在
+  //   **当前显示**的那一份列表里点。目标若来自「未读」页签而当前停在「全部」，
+  //   则**无论怎么滚动都找不到**（实测「全部」恒 40 条，滚动/跳到底都不加载更多）。
+  //   故 NOT_FOUND 时除滚一滚当前页签外，还要**轮转页签**重找；三个页签都找过才判「真不在」。
+  const triedTabs = new Set<number>([_curTab]);
+  let scrollTries = 0;
+  let noListTries = 0;
+  for (let attempt = 0; attempt < 60; attempt++) {
     const r = await ex('eval', {
       script: `(()=>{
         const uls=document.querySelectorAll('.user-list-content ul');
@@ -140,13 +313,31 @@ export async function openConversation(key: string): Promise<boolean> {
       if (ok) return true;
       // 窗格姓名不匹配（可能切到别的会话 / 切换慢 / 系统会话名不同），继续下一轮重试
     } else if ((r.data as string) === 'NOT_FOUND') {
-      // 目标未渲染：滚动列表容器（.user-list-content 才是真正滚动容器）触发虚拟化加载更多
-      await ex('eval', {
-        script: `(()=>{ const el=document.querySelector('.user-list-content'); if(el){ try{ el.scrollTop += 500; }catch(e){} } window.scrollBy(0,300); return 'scrolled'; })()`,
-      });
-      await sleep(700);
+      // ① 先在当前页签内滚一滚（.user-list-content 才是真正的滚动容器，虚拟化列表会回收视口外的 li）
+      if (scrollTries < 1) {
+        scrollTries++;
+        await ex('eval', {
+          script: `(()=>{ const el=document.querySelector('.user-list-content'); if(el){ try{ el.scrollTop += 500; }catch(e){} } window.scrollBy(0,300); return 'scrolled'; })()`,
+        });
+        await sleep(700);
+        continue;
+      }
+      // ② 当前页签确实没有 ⇒ 切到「还没试过的」下一个页签重找；三个页签全试完才收手
+      scrollTries = 0;
+      let next = -1;
+      for (let k = 1; k <= CONV_TABS.length; k++) {
+        const cand = (_curTab + k) % CONV_TABS.length;
+        if (!triedTabs.has(cand)) { next = cand; break; }
+      }
+      if (next < 0) return false;   // 三个页签都找过了 ⇒ 目标确实不在会话列表里
+      triedTabs.add(next);
+      await gotoConvTab(next);      // 页签不存在（如无未读）时列表不动，下一轮继续轮转
     } else {
-      return false; // NO_LIST
+      // NO_LIST：列表容器正处在「卸掉 → 重建」的空窗期（见 waitListBox 注释），
+      // **不是**「这个会话不存在」。旧实现直接 `return false` ⇒ 每个目标都秒失败、
+      // 引擎全报 open-failed。这里给它一段**有界**的等待：列表回来就继续找，超时才认失败。
+      if (++noListTries > 12) return false;   // ≈ 12 × 400ms ≈ 5s 仍没列表 ⇒ 真异常
+      await sleep(400);
     }
   }
   return false;

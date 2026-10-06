@@ -18,6 +18,17 @@ export interface ConvSummary {
   lastMsg: string;
   unread: boolean;
   raw: string;
+  /**
+   * 列表级提示：**末条是我方发的**（HR 还没回）。
+   *
+   * 用途：给引擎一个**廉价的前置判断**。打开一个会话要 3~6s（切页签 + 等渲染 + 读消息），
+   * 而「末条是我发的招呼」这类会话打开后必然是 no-hr —— 自动投递每天新建几十个招呼会话，
+   * 全量列表里它们占大头。没有这个标志，引擎每轮都要为此白开上百个会话。
+   *
+   * ⚠️ 非权威：真正判据始终是 `readConversation().lastHr`。本字段只在 unreadOnly 下做**排除**，
+   *    且**没有该字段/为 false 时一律保留**（失败方向是「多开一次」，不是「漏回一条」）。
+   */
+  lastMine?: boolean;
 }
 
 export interface ParsedMessage {

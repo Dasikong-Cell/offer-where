@@ -260,7 +260,7 @@ export async function runAutoReply(
   const convs = await driver.listConversations();
   // 2026-09-14：检测加固。
   // 旧逻辑只认「未读标记」——未读红点 class 名对不上、或会话已读但 HR 新消息没回，都会被漏掉。
-  // 现改为：unreadOnly 时，凡满足以下任一即纳入处理：
+  // 现改为：unreadOnly 时**先排除**「末条是我方发的」（肯定不用回，见下），再凡满足以下任一即纳入：
   //   1) 列表项本身标记为未读；
   //   2) DB 里从未处理过该会话（新会话，宁可多查）；
   //   3) 列表末条 lastMsg 与 DB 已记录的「最后 HR 消息 / 我的回复」都不一致 —— 说明有新的 HR 活动。
@@ -268,6 +268,12 @@ export async function runAutoReply(
   // 放宽此处前置过滤不会造成重复回复，只会让「漏检的未读 / 已读未回」被及时补上。
   let convTargets = unreadOnly
     ? convs.filter((c) => {
+        // 🔴 廉价前置排除（2026-10-06）：列表行自带「末条是我方发的」标记（BOSS 的 [送达]/[已读]）
+        // ⇒ HR 还没回，打开也只会得到 no-hr。列表改成滚全量（~100 个会话）之后，
+        // 自动投递每天新建的几十个招呼会话全在里面；不排除就得每轮白开上百次窗口（每次 3~6s）。
+        // ⚠️ 失败方向是**安全的**：该标记缺失时一律保留（cf. chatTypes.lastMine），
+        //    最坏情况是「多开一次」；被排除的会话不会被标记已读，仍留在「未读」页签里可见。
+        if (c.lastMine) return false;
         if (c.unread) return true;
         const rec = getConversation(c.key);
         if (!rec) return true;
@@ -435,7 +441,13 @@ export async function runAutoReply(
       continue;
     }
 
-    let done = false;
+    // 🔴 逐项记账，绝不混用（2026-10-06 修）：
+    //   旧代码 `let done = false; … done = done || r; … done = done || s;` 把「发简历成功」
+    //   也算成「回了一条文本」—— 于是 last_reply 被写成回复文本、last_replied_at 被写成本轮时间，
+    //   **哪怕那条文本一个字都没发出去**（sendText 返回 false 时也照写）。后果是「名存实亡」：
+    //   DB 看着已回复、HR 那边什么都没有，而且之后 hr-cooldown 连本该有的重试都挡掉。
+    let sentText = false;
+    let sentResume = false;
     // ⚠️ 路由铁律（2026-09-23，用户明确确认）：BOSS「我想要一份您的附件简历，您是否同意」
     // 是平台**结构化卡片**，必须点卡片上的「同意」才算处理完；走工具栏「发简历」是另一条路径，
     // 卡片会一直挂着待处理（实机已验证）。
@@ -448,17 +460,22 @@ export async function runAutoReply(
     if (decision.intent === 'ask_resume' && !read.resumeRequest) {
       const r = await driver.sendResume();
       emit({ type: 'send-resume', name: c.name, ok: r });
-      done = done || r;
+      sentResume = r;
     }
     // 🔴 发送前是硬闸门：点过停止后绝不向 HR 发出任何真实内容
     if (hitStop()) break;
     if (reply) {
       const s = await driver.sendText(reply);
       emit({ type: 'send-text', name: c.name, ok: s, ai: aiSource, aiName });
-      done = done || s;
+      sentText = s;
     }
 
-    if (done) {
+    // 「已处理」= 三者任一（同意卡片 / 发简历 / 发文本）。把 acceptedResume 也算进来是有意的：
+    // 卡片被同意后即消失，若这里不记账，下一轮会读到 `resumeRequest=false` + intent=ask_resume，
+    // 转而走工具栏 sendResume() ⇒ **向同一个 HR 重复发一份简历**（正是 3 连发事故那条路径）。
+    const handled = acceptedResume || sentResume || sentText;
+
+    if (handled) {
       upsertConversation({
         conv_key: c.key,
         platform,
@@ -467,7 +484,9 @@ export async function runAutoReply(
         position: hrPosition,
         stage: decision.stopReason ? 'done' : 'active',
         last_hr_message: lastHr,
-        last_reply: reply,
+        // last_reply 只记「真的发出去的文本」；只发了简历 / 只同意了卡片时保留上一次的文本，
+        // 绝不用「没送出的文本」或空串覆盖（否则去重与 unreadOnly 前置过滤都会被喂脏数据）
+        last_reply: sentText ? reply : (conv?.last_reply || ''),
         last_hr_message_at: new Date().toISOString(),
         last_replied_at: new Date().toISOString(),
         round,

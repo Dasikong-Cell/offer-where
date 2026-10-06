@@ -15,7 +15,7 @@
  */
 import '../server/env.js';
 import { runAutoReply, registerChatDriver } from '../server/services/apply/autoReplyRunner.js';
-import { acceptResumeRequest, __setExForTest } from '../server/services/apply/bossChat.js';
+import { acceptResumeRequest, openConversation, __setExForTest } from '../server/services/apply/bossChat.js';
 import { acceptResumeRequestGeneric, detectResumeRequestClause } from '../server/services/apply/resumeCard.js';
 import { liepinChatDriver, __setExForTest as __setExForTestLiepin } from '../server/services/apply/liepinChat.js';
 import {
@@ -890,6 +890,287 @@ const fresh = () => { release('boss', 'reply'); release('boss', 'apply'); };
   const r = await runAutoReply('boss', { probe: okProbe }, emit);
   check('平台被投递占用 → 自动回复让路', r.sent === 0 && calls.openChat === 0 && evs.some((e) => e.type === 'error' && String(e.message).includes('占用')));
   release('boss', 'apply');
+}
+
+// B10 BOSS 会话列表「页签并集」+「发送记账」（2026-10-06 用户报「自动回复没有真实进行」的根因）
+//   起因：BOSS 有 28 条未读 HR 消息，引擎跑了却「什么都没回」。取证后是两条独立成因，各配断言 ——
+//   ① 列表侧：旧实现只读「全部」页签，而 BOSS「全部」**固定只渲染最新 40 条、无分页**
+//      （实测 li 恒 40、scrollHeight 恒定 7842，滚动/跳到底都不加载）。自动投递每天新建几十个
+//      招呼会话 ⇒「全部」被今天的新会话占满，更早的、真有 HR 回话的未读会话（实测 21 个）
+//      **从未进入过引擎视野** ⇒ 表现为「跑了但什么都没回」。
+//   ② 记账侧：`done = done || r || s` 把「发简历成功」也算成「回了一条文本」⇒ last_reply 被写成
+//      根本没送出去的文本、last_replied_at 被写成本轮时间 —— 名存实亡，且之后的 hr-cooldown
+//      会把本该有的重试一并挡掉。
+{
+  const bcSrc = readText('server/services/apply/bossChat.ts').replace(/\r\n/g, '\n');
+  const slice = (from: string, to: string) => {
+    const a = bcSrc.indexOf(from);
+    if (a < 0) return '';
+    const b = bcSrc.indexOf(to, a + from.length);
+    return b < 0 ? '' : bcSrc.slice(a, b);
+  };
+  const listFn = slice('export async function listConversations', 'export async function openConversation');
+  const openFn = slice('export async function openConversation', 'export async function readConversation');
+  const readListFn = slice('function readListSrc', 'async function readTab');
+
+  // ①-a 三个页签（少读一个就漏一类会话）
+  const tabsDecl = stripComments(bcSrc).match(/const CONV_TABS = \[([^\]]*)\] as const;/);
+  const tabs = tabsDecl ? (tabsDecl[1].match(/'[^']+'/g) || []).join(',') : '';
+  check('BOSS 会话列表读 全部+未读+新招呼 三个页签（少一个就漏一类会话）',
+    tabs === "'全部','未读','新招呼'", tabs || 'NOT-FOUND');
+
+  // ①-b 反向护栏：必须真的「遍历页签」，而不是只读一个（否则回退成旧 bug）
+  {
+    const c = stripComments(listFn);
+    check('listConversations 遍历 CONV_TABS 逐个 readTab（不是只读「全部」）',
+      listFn.length > 200 && /CONV_TABS\.length/.test(c) && /readTab\(i\)/.test(c),
+      `len=${listFn.length}`);
+  }
+
+  // ①-c 反向护栏：openConversation 找不到目标时必须**轮转页签**。
+  // 只靠滚动是不够的 ——「全部」滚到底也不加载更多，非当前页签的会话永远打不开。
+  {
+    const c = stripComments(openFn);
+    check('openConversation 找不到目标时轮转页签（triedTabs + gotoConvTab），只滚不换页签必然漏会话',
+      openFn.length > 300 && /triedTabs/.test(c) && /gotoConvTab\(next\)/.test(c) && /CONV_TABS\.length/.test(c),
+      `len=${openFn.length}`);
+  }
+
+  // ①-d lastMsg 必须取结构化节点 `.last-msg-text`：旧实现从整行 innerText 剥时间/姓名，
+  //     会把「昨天」「公司名」混进去 ⇒ 与 DB 的 last_hr_message 恒不相等 ⇒ unreadOnly 前置过滤形同虚设。
+  {
+    const c = stripComments(readListFn);
+    check('会话列表末条消息取 .last-msg-text（不是从整行 innerText 剥）',
+      readListFn.length > 300 && /querySelector\('\.last-msg-text'\)/.test(c), `len=${readListFn.length}`);
+    // ①-e 未读角标认 `.notice-badge`（实测带数字的就是它；旧代码写的 [class*=dot] 之类并不匹配）
+    check('未读判定认 .notice-badge 角标（实测带数字的角标类名）',
+      /\.notice-badge/.test(c), `len=${readListFn.length}`);
+  }
+
+  // ①-f 「全部」页签要切两次：开头归一化（`_curTab !== 0` 时先回「全部」再滚动收集）
+  //     + 收尾归位（openConversation 靠 `_curTab` 判断要不要切页签，留在过滤页签会错判）。
+  //     ⚠️ 判据必须钉**次数**：只写 `/gotoConvTab\(0\)/` 的话，开头那一处就能满足它 ——
+  //     破坏性对照实测**漏红**（M8 删掉收尾那处，断言照样绿）。
+  {
+    const n = (stripComments(listFn).match(/await gotoConvTab\(0\)/g) || []).length;
+    check('listConversations 切回「全部」共两处（开头归一化 + 收尾归位）',
+      n >= 2, `gotoConvTab(0) 出现 ${n} 次`);
+  }
+
+  // ①-g 🔴 NO_LIST ≠「找不到这个会话」（2026-10-06 真机实测的**第二个**根因）
+  //   点任一页签后，BOSS 会把 `.user-list-content` 整个从 DOM 卸掉再异步重建；空窗期里
+  //   「找 li」的脚本只能得到 NO_LIST。实测 listConversations 收尾点回「全部」后仅 sleep 700ms，
+  //   容器仍不存在（{"hasBox":false,"ulCount":0}）⇒ 旧实现 `else return false` 让**每个目标**
+  //   都秒失败 ⇒ 引擎全报 open-failed，用户看到「会话都列出来了、一条都没回复」。
+  //   判据：① gotoConvTab 点完页签要**等容器重建**，不能只 sleep；② openConversation 的
+  //   NO_LIST 分支要有**有界重试**；③ 行为级证明（下面用 ex 桩，比静态断言强得多）。
+  {
+    const tabFn = slice('async function gotoConvTab', 'export async function listConversations');
+    check('gotoConvTab 点完页签等列表容器重建（waitListBox），不能只 sleep',
+      tabFn.length > 200 && /waitListBox\(/.test(stripComments(tabFn)), `len=${tabFn.length}`);
+    // 注意：这里必须钉**自增**而不是 `/noListTries/` —— 只写变量名的话，
+    // `let noListTries = 0;` 这一行声明就能满足断言 ⇒ 破坏性对照实测**漏红**（M9 抓到过）。
+    check('openConversation 对 NO_LIST 做有界重试（不是首次即 return false）',
+      /\+\+noListTries/.test(stripComments(openFn)) && /waitListBox/.test(stripComments(bcSrc)),
+      `len=${openFn.length}`);
+  }
+
+  // ①-h 行为级证明：把底层 CDP 换成桩 —— 前 3 次「找 li」返回 NO_LIST，第 4 次返回 opened。
+  //     旧实现在**第一次** NO_LIST 就 return false ⇒ 这条必然红。静态断言证明不了这个，
+  //     只有真跑一遍才能证明「空窗期确实会重试」。
+  {
+    let findCalls = 0;
+    __setExForTest(async (_action: string, extra?: { script?: string }) => {
+      const script = String(extra?.script || '');
+      if (script.includes('NO_LIST')) {
+        findCalls++;
+        return { data: findCalls <= 3 ? 'NO_LIST' : 'opened' };
+      }
+      if (script.includes('.chat-conversation')) return { data: 'HR-N' };   // 窗格姓名校验
+      return { data: '' };
+    });
+    let ok = false;
+    try {
+      ok = await openConversation('boss|HR-N|N公司');
+    } finally {
+      __setExForTest(null);
+    }
+    check('openConversation 行为级：列表重建空窗期（连续 NO_LIST）必须继续等，最终点开成功',
+      ok === true && findCalls >= 4, `ok=${ok} findCalls=${findCalls}`);
+  }
+
+  // ②-a 记账：只发简历成功、文本发送失败 ⇒ last_reply 绝不能被写成那条没送出去的文本
+  {
+    fresh();
+    const key = `${RUN_TAG}-b10-resume-only`;
+    upsertConversation({
+      conv_key: key, platform: 'boss', hr_name: 'HR-A', company: 'A公司',
+      last_hr_message: '旧消息', last_reply: 'PREV-REPLY',
+    });
+    const calls = { sendText: 0, sendResume: 0 };
+    const driver: ChatDriver = {
+      platform: 'boss',
+      async openChat() { /* noop */ },
+      async listConversations() { return [{ key, name: 'HR-A', company: 'A公司', lastMsg: '请发一份简历', unread: true, raw: '' }]; },
+      async openConversation() { return true; },
+      async readConversation() {
+        return { messages: [{ side: 'hr' as const, text: '请发一份简历' }], lastHr: '请发一份简历', position: null, resumeRequest: false };
+      },
+      async sendText() { calls.sendText++; return false; },   // ← 文本发送失败
+      async sendResume() { calls.sendResume++; return true; },
+    };
+    registerChatDriver('boss', driver);
+    const { evs, emit } = collect();
+    await runAutoReply('boss', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0 }, emit);
+    const row = getConversation(key);
+    check('B10 发简历成功但文本发送失败 → last_reply 保持旧值（不写没送出去的文本）',
+      calls.sendResume === 1 && calls.sendText >= 1 && String(row?.last_reply || '') === 'PREV-REPLY',
+      `sendResume=${calls.sendResume} sendText=${calls.sendText} last_reply=${JSON.stringify(row?.last_reply)}`);
+    check('B10 发简历成功 → 计入 sent（确实对外发了东西）',
+      evs.some((e) => e.type === 'send-resume' && e.ok === true) && evs.some((e) => e.type === 'sent'),
+      evs.map((e) => e.type).join(','));
+  }
+
+  // ②-b 记账：同意「请求附件简历」卡片成功、文本发送失败 ⇒ 仍须记账。
+  //     否则下一轮读到 resumeRequest=false + intent=ask_resume ⇒ 走工具栏 sendResume
+  //     ⇒ **向同一个 HR 重复发一份简历**（3 连发事故那条路径）。
+  {
+    fresh();
+    const key = `${RUN_TAG}-b10-card-only`;
+    upsertConversation({
+      conv_key: key, platform: 'boss', hr_name: 'HR-B', company: 'B公司',
+      last_hr_message: '更早的消息', last_reply: 'PREV-REPLY',
+    });
+    const calls = { sendText: 0, sendResume: 0, accept: 0 };
+    const driver: ChatDriver = {
+      platform: 'boss',
+      async openChat() { /* noop */ },
+      async listConversations() { return [{ key, name: 'HR-B', company: 'B公司', lastMsg: '请发一份简历', unread: true, raw: '' }]; },
+      async openConversation() { return true; },
+      async readConversation() {
+        return { messages: [{ side: 'hr' as const, text: '请发一份简历' }], lastHr: '请发一份简历', position: null, resumeRequest: true };
+      },
+      async sendText() { calls.sendText++; return false; },
+      async sendResume() { calls.sendResume++; return true; },
+      async acceptResumeRequest() { calls.accept++; return true; },
+    };
+    registerChatDriver('boss', driver);
+    const { emit } = collect();
+    await runAutoReply('boss', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0 }, emit);
+    const row = getConversation(key);
+    check('B10 卡片同意成功但文本失败 → 仍记账（last_hr_message 落库，防下一轮重复发简历）',
+      calls.accept === 1 && calls.sendResume === 0 && String(row?.last_hr_message || '') === '请发一份简历',
+      `accept=${calls.accept} sendResume=${calls.sendResume} last_hr_message=${JSON.stringify(row?.last_hr_message)}`);
+    check('B10 卡片同意成功但文本失败 → last_reply 保持旧值',
+      String(row?.last_reply || '') === 'PREV-REPLY', JSON.stringify(row?.last_reply));
+  }
+
+  // ②-c 正向：文本真发送成功 ⇒ last_reply 必须写成**实际发出的那条**（防把 sentText 逻辑写反）
+  {
+    fresh();
+    const key = `${RUN_TAG}-b10-text-ok`;
+    upsertConversation({
+      conv_key: key, platform: 'boss', hr_name: 'HR-C', company: 'C公司',
+      last_hr_message: '旧消息', last_reply: 'PREV-REPLY',
+    });
+    const texts: string[] = [];
+    const driver: ChatDriver = {
+      platform: 'boss',
+      async openChat() { /* noop */ },
+      async listConversations() { return [{ key, name: 'HR-C', company: 'C公司', lastMsg: '你好', unread: true, raw: '' }]; },
+      async openConversation() { return true; },
+      async readConversation() {
+        return { messages: [{ side: 'hr' as const, text: '你好' }], lastHr: '你好', position: null, resumeRequest: false };
+      },
+      async sendText(t: string) { texts.push(t); return true; },
+      async sendResume() { return true; },
+    };
+    registerChatDriver('boss', driver);
+    const { emit } = collect();
+    await runAutoReply('boss', { probe: okProbe, useAi: false, realSend: true, throttleSec: 1, hrCooldownSec: 0 }, emit);
+    const row = getConversation(key);
+    check('B10 文本真发送成功 → last_reply 写成实际发出的那条',
+      texts.length === 1 && texts[0].length > 0 && String(row?.last_reply || '') === texts[0],
+      `sent=${texts.length} last_reply=${JSON.stringify(row?.last_reply || '').slice(0, 60)}`);
+  }
+
+  // ①-i 🔴「全部」是**虚拟化列表**：一次只渲染 40 行，但**滚到底就是完整历史**。
+  //     实测（2026-10-06）：滚到 50% / 100% 时那 40 行**整批换掉**（与滚动前重名 0/40），
+  //     滚动收集去重后共 93 个不同会话。
+  //     ⚠️ 此前只看「行数恒 40」就判定「全部无分页」是**错的** —— 行数恒定正是虚拟化的特征。
+  //     非做不可：openConversation 打开会话 = 标记已读 ⇒ 从「未读」页签消失；若列表只以「未读」
+  //     为来源，「跑过一轮（哪怕只是预览）之后，被打开却没回成的会话就永远回不了」。
+  {
+    const allFn = slice('async function readAllTab', 'export async function listConversations');
+    check('listConversations 走「全部」滚动全量收集（readAllTab），不是只读一次 40 行',
+      listFn.length > 200 && /readAllTab\(/.test(stripComments(listFn)), `len=${listFn.length}`);
+    check('readAllTab 真的滚动收集（scrollTop 递增 + 去重 + 步数上限）',
+      allFn.length > 400
+      && /scrollTop \+= c\.clientHeight/.test(stripComments(allFn))
+      && /CONV_SCROLL_MAX/.test(stripComments(allFn))
+      && /seen\.get\(k\)/.test(stripComments(allFn)),
+      `len=${allFn.length}`);
+    check('readListSrc 算出「末条是我方发的」标记（[送达]/[已读]）供引擎廉价前置排除',
+      readListFn.includes('[送达') && /\bmine=/.test(stripComments(readListFn)),
+      `len=${readListFn.length}`);
+  }
+
+  // ③ 行为级：末条是我方发的会话（lastMine）**不打开也不计入**，未标的照常打开。
+  //    这一对是**正反双测**：只有反向（防「一律排除」把功能整个弄死）才能真正证明它没误伤。
+  {
+    fresh();
+    const mineKey = `${RUN_TAG}-b10-mine`;
+    // ⚠️ 这里**必须计数**而不是 `throw`：破坏性对照会把 `if (c.lastMine) return false;` 删掉，
+    //    若用 throw 桩，变异体会让整个合约脚本崩在异常上（没有汇总行 ⇒ 仪器变 NOT-FOUND），
+    //    而不是干净地翻红。原则：**变异点不得影响可运行性**，断言才测得到自己。
+    let openedMine = 0;
+    const driverMine: ChatDriver = {
+      platform: 'boss',
+      async openChat() { /* noop */ },
+      async listConversations() {
+        return [
+          { key: mineKey, name: 'HR-M', company: 'M公司', lastMsg: 'BOSS您好，我叫…', unread: true, raw: '', lastMine: true },
+        ];
+      },
+      async openConversation() { openedMine++; return true; },
+      async readConversation() { return { messages: [], lastHr: '', position: null }; },
+      async sendText() { return true; },
+      async sendResume() { return true; },
+    };
+    registerChatDriver('boss', driverMine);
+    const { evs: evsM, emit: emitM } = collect();
+    const rM = await runAutoReply('boss', { probe: okProbe, useAi: false, realSend: false }, emitM);
+    check('unreadOnly：末条是我方发的（lastMine）不打开也不计入（省掉上百次白开窗）',
+      rM.sent === 0
+      && openedMine === 0
+      && evsM.filter((e) => e.type === 'conv').length === 0
+      && (evsM.find((e) => e.type === 'list') || {}).will === 0,
+      `will=${(evsM.find((e) => e.type === 'list') || {}).will} openConversation=${openedMine} conv=${evsM.filter((e) => e.type === 'conv').length}`);
+
+    fresh();
+    const notMineKey = `${RUN_TAG}-b10-notmine`;
+    let openedNotMine = 0;
+    const driverNotMine: ChatDriver = {
+      platform: 'boss',
+      async openChat() { /* noop */ },
+      async listConversations() {
+        // 仅 unread=true，**不带** lastMine ⇒ 必须照常处理（防「一律排除」的过度纠正）
+        return [{ key: notMineKey, name: 'HR-N2', company: 'N2公司', lastMsg: '你好，方便聊聊吗', unread: true, raw: '' }];
+      },
+      async openConversation() { openedNotMine++; return true; },
+      async readConversation() {
+        return { messages: [{ side: 'hr' as const, text: '你好，方便聊聊吗' }], lastHr: '你好，方便聊聊吗', position: null };
+      },
+      async sendText() { return true; },
+      async sendResume() { return true; },
+    };
+    registerChatDriver('boss', driverNotMine);
+    const { evs: evsN, emit: emitN } = collect();
+    await runAutoReply('boss', { probe: okProbe, useAi: false, realSend: false }, emitN);
+    check('对照：未标 lastMine 的未读会话照常打开（防「一律排除」把功能弄死）',
+      openedNotMine === 1 && evsN.filter((e) => e.type === 'conv').length === 1,
+      `openConversation=${openedNotMine} conv=${evsN.filter((e) => e.type === 'conv').length}`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
