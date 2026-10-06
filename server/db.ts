@@ -755,8 +755,80 @@ export interface ApplicationRow {
   updated_at: string;
 }
 
-export function listApplications(limit = 500): ApplicationRow[] {
-  return db.prepare('SELECT * FROM applications ORDER BY created_at DESC LIMIT ?').all(limit) as ApplicationRow[];
+/** 投递台账的筛选条件（与 GET /api/applications 的查询参数同名）。 */
+export interface ApplicationFilter {
+  platform?: string | null;
+  status?: string | null;
+}
+
+/**
+ * 把筛选条件编成 WHERE 片段与参数。
+ * 🔴 总数、分组统计、分页取数**必须共用这一份**。三处各写一遍筛选条件，迟早变成
+ *    「列表按 A 筛、总数按 B 数」——而界面上显示的两个数字看起来都像对的。
+ */
+function applicationWhere(f: ApplicationFilter = {}): { sql: string; params: string[] } {
+  const conds: string[] = [];
+  const params: string[] = [];
+  if (f.platform) { conds.push('platform = ?'); params.push(String(f.platform)); }
+  if (f.status) { conds.push('status = ?'); params.push(String(f.status)); }
+  return { sql: conds.length ? ' WHERE ' + conds.join(' AND ') : '', params };
+}
+
+/**
+ * 投递台账**总数**——与分页无关，任何时候都返回「库里符合条件的条数」。
+ * 存在的理由：`GET /api/applications` 原来把 `total` 写成 `list.length`，
+ * 那是「截断后再筛选」的长度，恒 ≤ 500。界面拿它当「共多少条」显示，于是
+ * 库里有 1087 条时页面说「500 条」，而且**没有任何东西会报错**。
+ */
+export function countApplications(f: ApplicationFilter = {}): number {
+  const w = applicationWhere(f);
+  return (query<{ c: number }>(`SELECT COUNT(*) c FROM applications${w.sql}`, w.params)[0] || { c: 0 }).c;
+}
+
+/**
+ * 按阶段聚合条数（SQL GROUP BY，不把行捞到应用层再 `.length`）。
+ * 控制台四张统计卡、仪表盘三张卡、复盘阶段分布共用这一个来源 —— 它们原先各自
+ * 在浏览器里对**被截断的**数组现数一遍，所以数字本身就是错的。
+ */
+export function applicationStatusCounts(f: ApplicationFilter = {}): Record<string, number> {
+  const w = applicationWhere(f);
+  const rows = query<{ status: string | null; c: number }>(
+    `SELECT status, COUNT(*) c FROM applications${w.sql} GROUP BY status`, w.params);
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.status || 'unknown'] = r.c;
+  return out;
+}
+
+/**
+ * 投递台账分页取数。
+ * @param limit  正数 = 本页最多几条；**<= 0 = 不分页（全量）**，给导出与需要全集的纯函数用。
+ * @param offset 跳过前几条（仅在 limit > 0 时生效）。
+ * 🔴 排序必须带 id 兜底：`created_at` 是毫秒时刻，同毫秒的两条在 LIMIT/OFFSET 下顺序
+ *    由引擎自由决定，翻页时会**漏掉或重复**记录 —— 而且每一页单独看都「没问题」。
+ */
+export function listApplications(limit = 500, offset = 0, f: ApplicationFilter = {}): ApplicationRow[] {
+  const w = applicationWhere(f);
+  const order = ' ORDER BY created_at DESC, id DESC';
+  if (limit > 0) {
+    return query<ApplicationRow>(
+      `SELECT * FROM applications${w.sql}${order} LIMIT ? OFFSET ?`,
+      [...w.params, limit, Math.max(0, Math.floor(offset) || 0)]);
+  }
+  return query<ApplicationRow>(`SELECT * FROM applications${w.sql}${order}`, w.params);
+}
+
+/**
+ * 带证据（投递瞬间截图 / 操作录屏）的投递，按时间倒序返回**全部**。
+ * 🔴 原来是 `listApplications(1000).filter(a => a.evidence_path || a.video_path)`：
+ *    先在**最新的** 1000 条里截断、再筛有没有证据。「录屏回溯」面板于是会开始丢掉更早
+ *    的证据记录 —— 而丢掉的恰好是「投完已有一段时间」的那批，也就是最可能真被回看的。
+ *    筛选必须在 SQL 里、在截断之前发生。
+ */
+export function listEvidenceApplications(): ApplicationRow[] {
+  return query<ApplicationRow>(
+    "SELECT * FROM applications WHERE (evidence_path IS NOT NULL AND TRIM(evidence_path) <> '') "
+    + "OR (video_path IS NOT NULL AND TRIM(video_path) <> '') "
+    + "ORDER BY created_at DESC, id DESC");
 }
 
 export function createApplication(app: Omit<ApplicationRow, 'created_at' | 'updated_at'>): ApplicationRow {

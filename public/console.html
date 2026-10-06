@@ -995,6 +995,25 @@
             </div>
           </div>
           <div id="appsQuick" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"></div>
+          <!-- 分页条：只在多于 1 页时显示（见 renderAppsPager）。
+               分页做在**筛选之后**（myAppsFiltered + myAppsPage），所以「搜索 + 翻页」
+               是复合的：搜到 30 条就只翻这 30 条，不会出现「搜出来 2 条却说共 1127 条」。
+               为什么不做成服务端分页：本页的筛选里有「未记时间 / 本周新增 / 池侧项」
+               这类判断，搬进 SQL 等于把口径复制给后端一份，两套必然漂移。
+               量级实测：1127 条 = 0.65 MiB（平均 600 B/条），本机回环，不值得。 -->
+          <div id="appsPager" class="note small" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <button class="btn sm" id="appsPrev">‹ 上一页</button>
+            <span id="appsPageInfo">—</span>
+            <button class="btn sm" id="appsNext">下一页 ›</button>
+            <label style="display:flex;align-items:center;gap:6px;margin-left:6px">每页
+              <select id="appsPageSize" style="width:auto">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+            <span id="appsTrunc" style="color:var(--warn)"></span>
+          </div>
         </div>
 
         <div class="grid cols-4" id="appsStats" style="margin-bottom:16px"></div>
@@ -2686,8 +2705,14 @@ async function optimizeTailor(){
 let RV_PLAN = null;
 
 async function loadReview(){
-  let apps = [];
-  try{ const r = await api('/api/applications'); apps = (r && r.applications) || []; }catch(e){}
+  // 🔴 复盘页两块内容各有各的取数需要，不该用同一份「截断的 500 条」同时喂它们：
+  //    · 阶段分布要的是**全量计数** ⇒ /api/applications/stats（SQL GROUP BY）
+  //    · 明细列表只显示最近 100 条 ⇒ 显式 ?limit=100，而不是拉一大把再 slice
+  //    原来两处都吃 /api/applications 的缺省上限：库里 1127 条时，阶段分布的分母与
+  //    每一根柱子都不对，明细却还在说「共 500 条」。
+  let stats = null, recent = [];
+  try{ stats = await api('/api/applications/stats'); }catch(e){}
+  try{ const r = await api('/api/applications?limit=100'); recent = (r && r.applications) || []; }catch(e){}
 
   let plan = null, revErr = '';
   try{ plan = await api('/api/stats/review'); }catch(e){ revErr = e.message; }
@@ -2696,8 +2721,8 @@ async function loadReview(){
   renderReviewStats(plan, revErr);
   renderReviewActions(plan, revErr);
   await renderReviewTrend();
-  renderReviewStages(apps);
-  renderReviewList(apps);
+  renderReviewStages(stats);
+  renderReviewList(recent, stats ? stats.total : null);
 }
 
 function renderReviewStats(plan, revErr){
@@ -2807,26 +2832,35 @@ async function renderReviewTrend(){
   }catch(e){ /* 附加信息，失败不影响 */ }
 }
 
-function renderReviewStages(apps){
+function renderReviewStages(stats){
   const stages = $('#rvStages'); if(!stages) return;
-  const cnt = {};
-  for(const a of apps){ const k = a.status || 'unknown'; cnt[k] = (cnt[k]||0)+1; }
-  const total = apps.length || 1;
+  // 🔴 入参是 /api/applications/stats 的 `{ total, byStatus }`，**不是**投递行数组。
+  //    原来这里 `for(const a of apps) cnt[k]++` 数的是被截断的那批：分母写成
+  //    「投递台账 500 条」而库里有 1127 条 —— 每一根百分比柱子都是错的。
+  if(!stats){
+    stages.innerHTML = '<div class="note small">阶段分布取数失败。刷新页面重试（明细列表不受影响）。</div>';
+    return;
+  }
+  const cnt = stats.byStatus || {};
+  const total = stats.total || 0;
+  const base = total || 1;
   stages.innerHTML = Object.keys(APP_STATUS).map(k=>{
     const n = cnt[k] || 0;
-    const w = Math.round(n / total * 100);
+    const w = Math.round(n / base * 100);
     return '<div class="row" style="display:flex;align-items:center;gap:9px;font-size:12.5px;padding:5px 0">'
       + '<span style="width:56px;flex:none;color:var(--muted)">'+esc(APP_STATUS[k])+'</span>'
       + '<span style="flex:1;background:#eef1f5;border-radius:6px;height:14px;overflow:hidden">'
       +   '<i style="display:block;height:100%;width:'+w+'%;background:linear-gradient(90deg,var(--brand),var(--brand2))"></i></span>'
       + '<span style="width:34px;text-align:right;font-weight:700">'+n+'</span></div>';
-  }).join('') + '<div class="note small" style="margin-top:10px">口径：投递台账 ' + apps.length
-    + ' 条。「笔试」单列；面试**不拆**成一面/二面四个列 —— 轮次记在每条记录的「面试轮次」上。</div>';
+  }).join('') + '<div class="note small" style="margin-top:10px">口径：投递台账 ' + total
+    + ' 条（SQL 聚合，不受列表分页影响）。「笔试」单列；面试**不拆**成一面/二面四个列 —— 轮次记在每条记录的「面试轮次」上。</div>';
 }
 
-function renderReviewList(apps){
+function renderReviewList(apps, total){
   const listHost = $('#rvList');
-  const c = $('#rvCount'); if(c) c.textContent = apps.length + ' 条';
+  // 口径条数用后端给的 total（库内全集），不是「这一页拿到几条」。
+  const n0 = (total == null ? apps.length : total);
+  const c = $('#rvCount'); if(c) c.textContent = n0 + ' 条';
   if(!listHost) return;
   if(!apps.length){
     listHost.innerHTML = '<div class="empty">还没有投递记录 —— 去「投递中心」跑一轮，或先在「校招信息库」挑岗位。</div>';
@@ -2844,7 +2878,7 @@ function renderReviewList(apps){
         + '<td class="small"'+(n.cls==='warn'?' style="color:var(--warn)"':' class="small muted"')+'>'+esc(n.text)+'</td></tr>';
     }).join('')
     + '</tbody></table></div>'
-    + (sorted.length > 100 ? '<div class="note small">只显示最近 100 条，共 '+sorted.length+' 条。</div>' : '');
+    + (n0 > sorted.length ? '<div class="note small">只显示最近 '+sorted.length+' 条，共 '+n0+' 条。</div>' : '');
 }
 
 /* ---------- 个人中心 ---------- */
@@ -3114,19 +3148,23 @@ async function loadDashboard(){
   // 投递台账（applications）——4 张统计卡里的「已投递 / 面试中 / Offer」取自这里。
   // ⚠️ 不能用 f.byStatus.applied：那是 **jobs 表里被标成「已投」的岗位数**（池子状态），
   //    和「投递台账有多少条」不是一回事；混用会让「已投递数量」在从没跑过投递时也不为 0。
-  let apps = [];
-  try{ const r = await api('/api/applications'); apps = (r && r.applications) || []; }catch(e){}
-  const ac = {};
-  for(const a of apps){ const k = a.status || 'unknown'; ac[k] = (ac[k]||0) + 1; }
+  // 三张卡（已投递 / 面试中 / Offer）先要有**正确的计数**，再谈显示。
+  // 🔴 原来是拉 500 条台账在浏览器里 `for(...) ac[k]++` 现数：库里 1127 条时三张卡同时偏小，
+  //    而且它们长得和真的一模一样。口径统一走 /api/applications/stats（SQL GROUP BY）；
+  //    取不到就显示「—」—— 显示 0 等于用一个看起来很像真的假数字骗自己。
+  let ac = null, acTotal = null;
+  try{ const r = await api('/api/applications/stats'); ac = (r && r.byStatus) || null; acTotal = (r && typeof r.total === 'number') ? r.total : null; }catch(e){}
+  const nAc = (k)=> (ac ? (ac[k] || 0) : null);
   // 「已投递」= 真投出去且还有后续可能的：已投递 / 已回复 / 面试中 / 已录用。
   // 刻意**不含**「已跳过 / 未通过」——那两个是「这次没成」，不属于「投出去多少」。
-  const acApplied = (ac.applied||0) + (ac.replied||0) + (ac.interview||0) + (ac.offer||0);
+  const acApplied = ac ? (nAc('applied') + nAc('replied') + nAc('interview') + nAc('offer')) : null;
+  const acText = (v)=> (v == null ? '—' : String(v));
   if(f){
     const ms = f.matchScore||{};
     $('#dTotal').textContent = f.total||0;
-    $('#dApplied').textContent = acApplied;
-    $('#dInterview').textContent = ac.interview||0;
-    $('#dOffer').textContent = ac.offer||0;
+    $('#dApplied').textContent = acText(acApplied);
+    $('#dInterview').textContent = acText(nAc('interview'));
+    $('#dOffer').textContent = acText(nAc('offer'));
     $('#dRealJd').textContent = ms.jdBased||0;
     $('#dImgJd').textContent = ms.imageJd||0;
     // 「尚未 AI 匹配」= 池子总数 − 已打分的（scored 是 match_score 非空的行数）
@@ -3134,7 +3172,14 @@ async function loadDashboard(){
     const nT = $('#dTotalNote');
     if(nT) nT.textContent = (f.byStatus? (f.byStatus.candidate||0):0) + ' 个待投递 · 覆盖 ' + (f.total||0) + ' 个岗位';
     const nA = $('#dAppliedNote');
-    if(nA) nA.textContent = apps.length ? ('台账共 ' + apps.length + ' 条记录') : '还没投过 —— 去「投递中心」跑一轮';
+    // 🔴 这里原先写 `apps.length`，而 `apps` 是本页改造中**已删掉**的局部数组。
+    //    残留一处引用 ⇒ loadDashboard 抛 ReferenceError ⇒ 它**后面**的
+    //    renderFunnel / renderSoon / loadAi / loadHealth / loadTrend / loadSelfCheck /
+    //    loadVersion / renderWizard / 平台卡**全部不执行**，而三张卡已经先写好了，
+    //    页面看起来「就是有点空」，四道门禁全绿。改走统计端点的 total。
+    if(nA) nA.textContent = (acTotal == null)
+      ? '台账条数读取失败 —— 刷新页面重试'
+      : (acTotal ? ('台账共 ' + acTotal + ' 条记录') : '还没投过 —— 去「投递中心」跑一轮');
     renderFunnel($('#funnelBar'), $('#funnelLegend'), ms, f.total);
     const real = ms.jdBased||0, img = ms.imageJd||0, card = ms.cardTextOnly||0, nojd = ms.titleOnly||0;
     $('#matchBasisNote').textContent = '⚠️ 覆盖口径：真 JD '+real+'（'+(ms.realJdRate||0)+'%）· 长图 '+img+'（可看不可匹配）· 卡片摘要 '+card+'（非岗位描述）· 无 JD '+nojd+'（不参与排序）。只有真 JD 那 '+real+' 个能用于匹配 / 求职信 / 定制简历。';
@@ -5258,7 +5303,12 @@ const APPS_QUICK = [
 //    段落替换的终点若选得比「要改的内容」更靠后，会**静默吃掉**中间的真实声明 ——
 //    本次就真踩过：JOBS_POOL_READY 被吃掉后 loadMyApps 抛 ReferenceError，
 //    被自己的 try 吞住 ⇒ 看板只剩一句「加载失败」，而 typecheck / console:check / 合约全绿。
-let APPS_CACHE = [];      // 投递台账全量
+let APPS_CACHE = [];      // 投递台账**全量**（limit=0 取回；筛选与分页都在客户端基于它）
+let APPS_STATS = null;    // { total, byStatus } —— SQL 聚合口径，与「本页拿到几条」无关
+let APPS_PAGE = 100;      // 每页条数
+let APPS_PAGE_NO = 1;     // 当前页码（1 起）；筛选条件一变就归 1
+let APPS_FETCHED = 0;     // 后端实际回了几条（与 APPS_STATS.total 不等 ⇒ 界面必须说出来）
+const APPS_PAGE_MAX = 200; // 每页上限：**唯一**一处行数上限（见 myAppsPage / renderAppsTable）
 let JOBS_POOL = [];       // 岗位池里 status='candidate' 的岗位（看板「待投递」列）
 let JOBS_POOL_READY = false;
 let APPS_QUICK_K = 'all';
@@ -5294,6 +5344,7 @@ function renderAppsQuick(){
     b.classList.toggle('primary', b.dataset.appq === APPS_QUICK_K);
     b.addEventListener('click', ()=>{
       APPS_QUICK_K = b.dataset.appq;
+      APPS_PAGE_NO = 1;          // 换了筛选口径就回第 1 页，否则会停在一个不存在的页码上
       renderMyApps();
     });
   });
@@ -5305,9 +5356,16 @@ async function loadMyApps(){
   try{
     // 岗位池只在首次（或 force）拉：它最多 1000 行，而改一次状态就要重渲染看板一次
     const jobs = JOBS_POOL_READY ? Promise.resolve(null) : api('/api/jobs');
-    const [ra, rj] = await Promise.all([ api('/api/applications'), jobs ]);
+    // 投递台账要**全量**（limit=0），不是后端缺省的那 500 条。
+    // 🔴 原来直接调 /api/applications（缺省 LIMIT 500）：库里 1127 条时页面只认 500 ——
+    //    列表、四张统计卡、筛选、导出**全部**只作用在这 500 条上，且不报错、不告警。
+    const [ra, rj] = await Promise.all([ api('/api/applications?limit=0'), jobs ]);
     APPS_CACHE = (ra && ra.applications) || [];
+    APPS_FETCHED = APPS_CACHE.length;
     if(rj){ JOBS_POOL = ((rj && rj.jobs) || []).filter(j=>j.status === 'candidate'); JOBS_POOL_READY = true; }
+    // 统计口径单独取、单独兜错：它是**增强**，挂了不该把整页拖成「加载失败」。
+    // 拿不到就显示「—」而不是 0 —— 0 是个看起来很像真的假数字。
+    try{ APPS_STATS = await api('/api/applications/stats'); }catch(e){ APPS_STATS = null; }
   }catch(e){
     if(board) board.innerHTML = '<div class="none">加载失败：'+esc(e.message)+'</div>';
     return;
@@ -5552,21 +5610,29 @@ function bindAppActions(rootSel){
   }));
 }
 
-function renderAppsBoard(list){
+function renderAppsBoard(list, all){
   const host = $('#appsBoardCols'); if(!host) return;
   const byStage = {};
   for(const a of list){ const k = a.status || 'applied'; (byStage[k] = byStage[k] || []).push(a); }
+  // 🔴 列头条数取**筛选后全集**（all），不是本页 list：分页之后列头若只数本页，
+  //    同一个阶段的数字会随翻页上下跳，读者会以为数据丢了 —— 而卡片和数字都不报错。
+  const fullN = {};
+  for(const a of (all || list)){ const k = a.status || 'applied'; fullN[k] = (fullN[k] || 0) + 1; }
   // 「待投递」永远来自岗位池（两张表天然不重叠：台账里的都是投过的）
   const pool = jobsPoolFiltered();
   host.innerHTML = APP_STAGES.map(s=>{
-    const items = (s.from === 'job') ? pool : (byStage[s.key] || []);
+    const isJob = (s.from === 'job');
+    const items = isJob ? pool : (byStage[s.key] || []);
+    const total = isJob ? pool.length : (fullN[s.key] || 0);
     const cap = items.length > 60 ? items.slice(0, 60) : items;
     const body = cap.length
-      ? cap.map(x=> s.from === 'job' ? jobCardHtml(x) : appCardHtml(x)).join('')
+      ? cap.map(x=> isJob ? jobCardHtml(x) : appCardHtml(x)).join('')
       : '<div class="none">—</div>';
-    const more = items.length > cap.length
-      ? '<div class="none">…另有 '+(items.length - cap.length)+' 条，用搜索缩小范围</div>' : '';
-    return '<div class="kb"><h3><span>'+esc(s.label)+'</span><em>'+items.length+'</em></h3>'+body+more+'</div>';
+    // 提示要同时说清「本页画了几张」与「总共有多少」——只说「另有 N 条」而不给基准，
+    // 分页之后读者无从判断 N 是相对本页还是相对全集。
+    const more = total > cap.length
+      ? '<div class="none">本页显示 ' + cap.length + ' 条，另有 ' + (total - cap.length) + ' 条（翻页或搜索查看）</div>' : '';
+    return '<div class="kb"><h3><span>'+esc(s.label)+'</span><em>'+total+'</em></h3>'+body+more+'</div>';
   }).join('');
   bindAppActions('#appsBoardCols');
 }
@@ -5577,7 +5643,10 @@ function renderAppsTable(list){
     tb.innerHTML = '<tr><td colspan="9" class="empty">当前筛选下没有记录 —— 到「投递中心」跑一轮，或先在「校招信息库」挑岗位</td></tr>';
     return;
   }
-  tb.innerHTML = list.slice(0,300).map(a=>{
+  // 不再 `list.slice(0, 300)`：那个 300 是「一次最多画 300 行」的隐式上限，而分页之后
+  // 传进来的 `list` 本来就 ≤ APPS_PAGE_MAX（200）⇒ 上限只剩一处（myAppsPage），
+  // 留两处的话，哪天把每页调大就会静默少画行，而页面看起来完全正常。
+  tb.innerHTML = list.map(a=>{
     const n = appNodeText(a);
     return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(a.position||'–')+'</td>'
       + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span> '+appVerifiedBadge(a)+'</td>'
@@ -5593,27 +5662,76 @@ function renderAppsTable(list){
   bindAppActions('#appsTbl');
 }
 
+/** 对**筛选后**的结果做客户端分页。
+ *  页码越界时自动夹住：搜索把 12 页压成 1 页后，页码若还停在 7，就会渲染出一片空白，
+ *  而用户完全看不出是「筛没了」还是「翻过头了」。 */
+function myAppsPage(list){
+  const per = Math.min(APPS_PAGE_MAX, Math.max(1, APPS_PAGE));
+  const pages = Math.max(1, Math.ceil(list.length / per));
+  APPS_PAGE_NO = Math.min(Math.max(1, APPS_PAGE_NO), pages);
+  const from = (APPS_PAGE_NO - 1) * per;
+  return { rows: list.slice(from, from + per), pages, from, per };
+}
+
+function renderAppsPager(pg){
+  const bar = $('#appsPager'); if(!bar) return;
+  bar.style.display = (pg.pages > 1) ? 'flex' : 'none';
+  const info = $('#appsPageInfo');
+  if(info) info.textContent = '第 ' + APPS_PAGE_NO + ' / ' + pg.pages + ' 页';
+  const prev = $('#appsPrev'), next = $('#appsNext');
+  if(prev) prev.disabled = APPS_PAGE_NO <= 1;
+  if(next) next.disabled = APPS_PAGE_NO >= pg.pages;
+  // 后端统计口径的 total 与「本次真取到几条」不等 ⇒ 必须说出来。
+  // 这是「列表与计数各说各话」唯一的自动发现点 —— 那种缺陷不会让任何门禁变红。
+  const tr = $('#appsTrunc');
+  if(tr){
+    const st = APPS_STATS;
+    tr.textContent = (st && typeof st.total === 'number' && st.total !== APPS_FETCHED)
+      ? '⚠️ 统计口径 ' + st.total + ' 条，本次只取到 ' + APPS_FETCHED + ' 条' : '';
+  }
+}
+
 function renderMyApps(){
   const list = myAppsFiltered();
-  const cnt = {};
-  for(const a of APPS_CACHE){ const k = a.status || 'unknown'; cnt[k] = (cnt[k]||0)+1; }
+  const pg = myAppsPage(list);
   const box = $('#appsStats');
   if(box){
     const cell = (v,l)=> '<div class="card"><div class="stat"><div class="v">'+v+'</div><div class="l">'+l+'</div></div></div>';
-    box.innerHTML = cell(APPS_CACHE.length, '投递总数')
-      + cell(cnt.applied||0, '已投递（待跟进）')
-      + cell((cnt.replied||0)+(cnt.written||0)+(cnt.interview||0)+(cnt.offer||0), '有回复')
-      + cell(cnt.written||0, '笔试中')
-      + cell(cnt.offer||0, '已录用');
+    // 🔴 走 /api/applications/stats（SQL GROUP BY），**不再**对 APPS_CACHE 现数。
+    //    原来数的是被截断的那 500 条：库里 1127 条时「投递总数」显示 500，
+    //    「有回复 / 笔试中 / 已录用」同理全部偏小 —— 不是少了几条，是数字本身错的，
+    //    而且四张卡长得和真的一模一样。拿不到统计时显示「—」，绝不显示 0。
+    const by = (APPS_STATS && APPS_STATS.byStatus) || null;
+    const n = (k)=> (by ? (by[k] || 0) : null);
+    const sum = (...ks)=> (by ? ks.reduce((s,k)=> s + (by[k]||0), 0) : null);
+    const dash = (v)=> (v == null ? '—' : String(v));
+    box.innerHTML = cell(dash(APPS_STATS ? APPS_STATS.total : null), '投递总数')
+      + cell(dash(n('applied')), '已投递（待跟进）')
+      + cell(dash(sum('replied','written','interview','offer')), '有回复')
+      + cell(dash(n('written')), '笔试中')
+      + cell(dash(n('offer')), '已录用');
   }
-  const c2 = $('#appsCount'); if(c2) c2.textContent = list.length+' 条';
+  // 计数行必须同时讲清「本页第几条到第几条」「筛选出多少」「库内多少」。
+  // 只报一个「500 条」正是这次要修的缺陷：读者无从分辨那是库内总数还是显示上限。
+  const c2 = $('#appsCount');
+  if(c2){
+    const shown = pg.rows.length ? (pg.from + 1) + '–' + (pg.from + pg.rows.length) : '0';
+    c2.textContent = (list.length !== APPS_CACHE.length)
+      ? '第 ' + shown + ' 条 / 筛选出 ' + list.length + ' 条（库内 ' + APPS_FETCHED + ' 条）'
+      : '第 ' + shown + ' 条 / 共 ' + list.length + ' 条';
+  }
   // 池侧筛选项带「待投递 ·」前缀，免得点了「3 天内截止」却发现台账那几列毫无变化而以为坏了
   renderAppsQuick();
-  renderAppsBoard(list);
-  renderAppsTable(list);
+  renderAppsBoard(pg.rows, list);
+  renderAppsTable(pg.rows);
+  renderAppsPager(pg);
 }
 
-/** 导出**当前筛选结果**为 CSV（带 BOM，Excel 打开中文不乱码）——所见即所得。 */
+/** 导出**当前筛选结果**为 CSV（带 BOM，Excel 打开中文不乱码）——所见即所得。
+ *  🔴 它导的是 myAppsFiltered()，而那个数组原先来自被截断的 500 条：
+ *     所谓「所见即所得」当时其实是「所见 500 即所得 500」——库内 1127 条时，
+ *     导出文件静默少一半，而且文件本身看起来完全正常。
+ *     现在 APPS_CACHE 是全量，筛选在全量上做；条数另写进文件名，让导出**范围**可见。 */
 function exportAppsCsv(){
   const list = myAppsFiltered();
   if(!list.length){ alert('当前筛选结果为空，没有可导出的记录。'); return; }
@@ -5624,13 +5742,22 @@ function exportAppsCsv(){
   const csv = '\ufeff' + head + '\n' + body.join('\n');
   const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
   const a = document.createElement('a');
-  a.href = url; a.download = 'offer-where-投递记录-' + new Date().toISOString().slice(0,10) + '.csv';
+  a.href = url;
+  a.download = 'offer-where-投递记录-' + new Date().toISOString().slice(0,10) + '-' + list.length + '条.csv';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
 // 搜索框：防抖后重渲染（本地数组过滤，不打接口）
-$('#appsQ').addEventListener('input', ()=>{ clearTimeout(APPS_Q_T); APPS_Q_T = setTimeout(()=>renderMyApps(), 180); });
+$('#appsQ').addEventListener('input', ()=>{ clearTimeout(APPS_Q_T); APPS_PAGE_NO = 1; APPS_Q_T = setTimeout(()=>renderMyApps(), 180); });
+// 分页：翻页只重渲染，不重新拉数据（全量已在 APPS_CACHE 里）
+$('#appsPrev').addEventListener('click', ()=>{ APPS_PAGE_NO--; renderMyApps(); });
+$('#appsNext').addEventListener('click', ()=>{ APPS_PAGE_NO++; renderMyApps(); });
+$('#appsPageSize').addEventListener('change', (e)=>{
+  APPS_PAGE = Math.max(1, Number(e.target.value) || 100);
+  APPS_PAGE_NO = 1;            // 每页条数变了，原页码没有意义
+  renderMyApps();
+});
 // 卡片 / 表格视图切换
 $$('#appsViewTabs [data-appview]').forEach(b=>b.addEventListener('click', ()=>{
   APPS_VIEW = b.dataset.appview;

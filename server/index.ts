@@ -782,7 +782,10 @@ app.get("/api/stats/match-history", (req, res) => {
 //    不会出现「前半段按 23:59:59 算、后半段按 00:00:00 算」这种跨日错位。
 app.get("/api/stats/review", (_req, res) => {
   try {
-    const apps = db.listApplications(2000);
+    // 复盘口径（回复率/推进率/行动清单）需要**全集**才能算对，所以这里显式要全量。
+    // 🔴 原来写的是 2000 —— 那是「够用就行」的隐式上限：库内条数一旦越过它，四个指标
+    //    会同时悄悄变小，而页面、日志、门禁都不会有任何变化。要全集就写全集（0）。
+    const apps = db.listApplications(0);
     // 只取「待投递且未被规则跳过」的岗位 —— 复盘要的是「现在还能投的」，不是岗位池全量。
     // 被跳过的（如「已投递过」）如果混进来，「优先投这批」就会把做过的活又列一遍。
     const jobs = db.query<any>(
@@ -1174,15 +1177,58 @@ app.get("/api/browser/health", async (req, res) => {
 
 // ============= 投递记录 API =============
 
+/**
+ * 投递台账分页上限。`limit` 是**客户端可控**参数，必须夹住 ——
+ * 否则一个 `?limit=999999999` 就把整库搬过网（本机表还不大，但这是接口级的坑）。
+ */
+const APPS_MAX_LIMIT = 2000;
+/**
+ * GET /api/applications
+ *   ?limit= 本页条数（**0 = 不分页，全量**；缺省 500，上限 APPS_MAX_LIMIT）
+ *   &offset= 跳过前几条
+ *   &platform= &status= 精确筛选（走 SQL，不再于应用层过滤）
+ * 回 `{ applications, total, limit, offset }`。
+ * 🔴 `total` 是**库内符合条件的总数**，不是本页条数。原来是 `list.length`，等于把
+ *    「截断后再筛选」的长度当总数报出去（恒 ≤ 500），界面照抄成「共 500 条」而库里
+ *    有 1087 条 —— 不报错、不告警，只是数字是错的。
+ */
 app.get("/api/applications", (req, res) => {
   try {
-    const { platform, status } = req.query;
-    let list = db.listApplications();
-    if (platform) list = list.filter(a => a.platform === platform);
-    if (status) list = list.filter(a => a.status === status);
-    res.json({ applications: list, total: list.length });
+    const filter = {
+      platform: req.query.platform ? String(req.query.platform) : null,
+      status: req.query.status ? String(req.query.status) : null,
+    };
+    // 缺省 500 保持既有调用方的负载形状；显式 0（或负数）才是「我要全量」。
+    const rawLimit = req.query.limit === undefined ? 500 : Number(req.query.limit);
+    const limit = !Number.isFinite(rawLimit) ? 500
+      : rawLimit <= 0 ? 0
+        : Math.min(APPS_MAX_LIMIT, Math.floor(rawLimit));
+    const rawOffset = Number(req.query.offset);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+    const total = db.countApplications(filter);
+    const applications = db.listApplications(limit, offset, filter);
+    res.json({ applications, total, limit, offset });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "获取投递记录失败" });
+  }
+});
+
+/**
+ * GET /api/applications/stats —— 投递台账的聚合口径（SQL GROUP BY）。
+ * 控制台的四张统计卡、仪表盘三张卡、复盘页的阶段分布都从这里取数。
+ * 🔴 它们原先各自在浏览器里对**被截断的**数组 `for(...) cnt[k]++` 现数一遍，
+ *    所以那三处显示的数字从来就不只是「少了几条」，而是**错的** —— 且不会被任何门禁发现。
+ *    口径只有一份（db.applicationStatusCounts），页面不再自己算。
+ */
+app.get("/api/applications/stats", (req, res) => {
+  try {
+    const filter = {
+      platform: req.query.platform ? String(req.query.platform) : null,
+      status: req.query.status ? String(req.query.status) : null,
+    };
+    res.json({ total: db.countApplications(filter), byStatus: db.applicationStatusCounts(filter) });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "获取投递统计失败" });
   }
 });
 
@@ -2040,7 +2086,7 @@ app.post("/api/apply/ab-backfill", (_req, res) => {
 /** 投递操作证据回溯清单：返回带 evidence_path 的投递（公司/职位/平台/证据路径/时间/策略），供前端「录屏回溯」面板展示 */
 app.get("/api/apply/evidence", (_req, res) => {
   try {
-    const rows = db.listApplications(1000).filter((a: any) => a.evidence_path || a.video_path);
+    const rows = db.listEvidenceApplications();
     const items = rows.map((a: any) => ({
       id: a.id,
       platform: a.platform,
@@ -2064,14 +2110,20 @@ app.get("/api/apply/evidence", (_req, res) => {
 app.get("/api/stats/trend", (req, res) => {
   try {
     const days = Math.max(1, Math.min(30, Number(req.query.days) || 7));
-    const rows = db.listApplications(5000) as any[];
     const keys: string[] = [];
     for (let i = days - 1; i >= 0; i--) keys.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+    // SQL 按日聚合，不把行捞到应用层再数。
+    // 🔴 原来是 `listApplications(5000)` + 循环计数：库里越过 5000 条之后，最近 N 天的
+    //    柱子会开始**莫名变矮** —— 丢的是最早创建的那批，往往正落在窗口内，
+    //    而 `total` 跟着一起变小。没有任何东西会变成红的。
+    // DAY 键与 created_at 同为 UTC 日：substr(...,1,10) 与 String(created_at).slice(0,10) 等价。
+    const bucketRows = db.query<{ d: string; c: number }>(
+      'SELECT substr(created_at, 1, 10) d, COUNT(*) c FROM applications '
+      + 'WHERE substr(created_at, 1, 10) >= ? GROUP BY d', [keys[0]]);
     const buckets = new Map<string, number>(keys.map((k) => [k, 0]));
     let counted = 0;
-    for (const a of rows) {
-      const k = String(a.created_at || '').slice(0, 10);
-      if (buckets.has(k)) { buckets.set(k, (buckets.get(k) || 0) + 1); counted++; }
+    for (const r of bucketRows) {
+      if (buckets.has(r.d)) { buckets.set(r.d, (buckets.get(r.d) || 0) + r.c); counted += r.c; }
     }
     const items = [...buckets.entries()].map(([date, count]) => ({ date, count }));
     res.json({ ok: true, days, total: counted, max: Math.max(1, ...items.map((i) => i.count)), items });

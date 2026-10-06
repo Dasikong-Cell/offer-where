@@ -2512,6 +2512,68 @@ console.log('\n══════ G. 简历请求卡片「同意」（有真实�
   }
 }
 
+// ── 控制台作用域检查（mini no-undef）：必须存在、必须接线、自检不许被删 ─────────
+// 起因（2026-10-07）：`loadDashboard` 里残留一处 `apps.length`（`apps` 是本次改造中
+// 已删掉的局部数组）。语法完全合法 ⇒ console:check 绿；contract 是字符串匹配 ⇒ 绿；
+// typecheck 不覆盖内联 HTML ⇒ 绿。真跑起来 loadDashboard 抛 ReferenceError，
+// 而它**后面**的 renderFunnel / renderSoon / loadAi / loadHealth / loadTrend /
+// loadSelfCheck / loadVersion / renderWizard / 平台卡**全部不执行** ——
+// 三张统计卡先写好了，所以页面看起来只是「有点空」。这个缺陷是靠行为探针抓到的，
+// 门禁当时一条都没红。这里把它变成机械断言。
+//
+// 🔴 特别记一笔：这道检查器的**第一版**抓不到它。第一版把整份脚本的声明名收进一个
+//    全局集合（`apps` 在别的函数里 `let` 过 ⇒ 判「已声明」⇒ 漏报），自检用的又是
+//    「哪儿都没声明」的名字 ⇒ 弱实现照样通过自检 ⇒ 检查器全绿却毫无作用。
+//    所以下面既钉「自检存在」，也钉「自检必须含跨函数越界那条用例」。
+{
+  const ROOT = fileURLToPath(new URL('..', import.meta.url));
+  const scopeScript = path.join(ROOT, 'scripts', 'check_console_scope.ts');
+  check('控制台作用域检查脚本存在（scripts/check_console_scope.ts）', fs.existsSync(scopeScript));
+
+  if (fs.existsSync(scopeScript)) {
+    const src = fs.readFileSync(scopeScript, 'utf8');
+    // 自检必须含「在兄弟函数里声明过、在本函数里越界使用」这条用例 ——
+    // 只有这条能区分「按作用域解析」与「全局名字集合」。
+    check('作用域检查自带区分力自检（否则弱实现也能全绿）',
+      src.includes('__probe_sibling_name__') && src.includes('selfTestOk'),
+      '自检用例若只有「哪儿都没声明」的名字，退回全局集合的实现照样通过');
+    check('作用域检查覆盖嵌套函数只取名字（不摊平内部声明）',
+      /!\s*isRoot\s*&&\s*\(isFn\(n\.type\)\s*\|\|\s*isClass\(n\.type\)\)/.test(src),
+      '摊平内部声明 ⇒ 跨函数越界使用会被漏报，等于把检查关掉');
+  }
+
+  // 接线三处：npm scripts / verify 串 / pre-push 钩子。缺任何一处，检查都只是个没人跑的文件。
+  const pj = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  check('package.json 声明了 console:scope 脚本',
+    !!pj.scripts && typeof pj.scripts['console:scope'] === 'string'
+    && pj.scripts['console:scope'].includes('check_console_scope.ts'),
+    `实际：${pj.scripts && pj.scripts['console:scope']}`);
+  check('npm run verify 串里含 console:scope（CI 与 release 都跑 verify）',
+    typeof pj.scripts?.verify === 'string' && pj.scripts.verify.includes('console:scope'),
+    `实际：${pj.scripts && pj.scripts.verify}`);
+  check('package.json 显式声明了 acorn（作用域检查的解析器；靠传递依赖会在 npm ci 后失效）',
+    !!pj.devDependencies && typeof pj.devDependencies.acorn === 'string',
+    `实际：${pj.devDependencies && pj.devDependencies.acorn}`);
+
+  const hookPath = path.join(ROOT, '.githooks', 'pre-push');
+  if (fs.existsSync(hookPath)) {
+    const hookSrc = fs.readFileSync(hookPath, 'utf8');
+    check('pre-push 钩子调用了控制台作用域检查',
+      hookSrc.includes('scripts/check_console_scope.ts'),
+      '钩子是推送前唯一的闸门；不接进去等于没有');
+  }
+
+  // 锁文件与 package.json 必须同步：CI 用的是 `npm ci`，不同步会直接失败。
+  const lockPath = path.join(ROOT, 'package-lock.json');
+  if (fs.existsSync(lockPath)) {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    check('package-lock.json 与 package.json 的 devDependencies 同步（npm ci 的前提）',
+      JSON.stringify(Object.keys(lock.packages?.['']?.devDependencies || {}).sort())
+      === JSON.stringify(Object.keys(pj.devDependencies || {}).sort()),
+      '不同步 ⇒ npm ci 直接报错');
+  }
+}
+
 // ── 原生外壳 provenance：sourceHash 必须与「检出环境」无关（2026-09-27）──────────
 // 起因：pack.ps1 的守卫对 src-tauri/ 的**磁盘字节**求哈希，而 git 在 Windows runner 上
 // 以 core.autocrlf=true 检出 —— 8 个文本文件被写成 CRLF、二进制(.ico) 保持原样。于是
@@ -3682,9 +3744,24 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     dash.length > 0
     && ['dTotal', 'dApplied', 'dInterview', 'dOffer', 'trendChart', 'soonList', 'ovMatch', 'ovAddJob']
       .every((id) => cnt(pHtml, `id="${id}"`) === 1), '');
-  check('总览页：「已投递」写的是纯数字（取自投递台账，不再混进 appliedRate 百分比）',
-    cnt(pH, "dApplied').textContent = acApplied") === 1
+  check('总览页：「已投递」写的是纯数字（取自投递台账统计口径，不再混进 appliedRate 百分比）',
+    cnt(pH, "$('#dApplied').textContent = acText(acApplied)") === 1
     && cnt(pH, 'appliedRate') === 0, '');
+  // 2026-10-07：这三张卡的计数口径必须走 SQL 聚合端点（/api/applications/stats）。
+  // 反例形状（本次修的缺陷）：`api('/api/applications')` 取后端缺省的 500 条，再在浏览器里
+  // `for(const a of apps){ ac[k]++ }` 现数 —— 库里 1127 条时三张卡同时偏小，而且长得
+  // 和真的一模一样，四道门禁 + npm test + verify 全绿。
+  // ⚠️ 先在函数体内剥掉行注释再匹配：上面这两行说明文字里就写着那个端点，
+  //    不剥的话断言会被自己的注释满足（本仓 12.x 反复踩的坑）。
+  {
+    const dashBody = stripComments(jsBody('loadDashboard'));
+    check('总览页：三张卡计数取自 SQL 聚合端点，不在浏览器里数被截断的数组',
+      cnt(dashBody, "api('/api/applications/stats')") === 1
+      && dashBody.indexOf('for(const a of apps)') < 0,
+      // 反例串用**行遍历**而不是 `ac[k]`：新代码里 `(ac[k] || 0)` 是合法的取值，
+      // 拿 `ac[k]` 当反例会把正确的实现判红（本次第一版就这么红了一次）。
+      `stats 调用=${cnt(dashBody, "api('/api/applications/stats')")} 行遍历=${cnt(dashBody, 'for(const a of apps)')}`);
+  }
   check('总览页：趋势图真的调 GET /api/stats/trend',
     cnt(pH, "api('/api/stats/trend?days=7')") >= 1, '');
   check('总览页：3 天内截止清单真读 /api/jobs，且用 deadlineInfo 的本地日历判据',
@@ -4516,6 +4593,113 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     `危险注释 ${hDanger.length} 处：${hDanger.map((c) => c.replace(/\s+/g, ' ').slice(0, 70)).join(' | ')}`);
   check('console.html：上面的 HTML 注释扫描确有产出（防「正则写错 ⇒ 恒绿」）',
     hComments.length >= 20, `HTML 注释数=${hComments.length}`);
+}
+
+// ── 投递台账：不许再有「静默截断」（2026-10-07）──────────────────────────────
+// 起因：用户发现「库内 1087 条，页面只显示 500」，且筛选/导出都只作用于那 500 条。
+// 核完发现比报告严重：那份被截断的数组还被用来**现算统计**（我的投递四张卡、总览三张卡、
+// 复盘阶段分布），所以显示出来的数字本身就是错的 —— 不是「少了几条」。
+// 这一类缺陷的形状是「绿得比实际更绿」：四道门禁 + npm test + verify 全绿、页面不报错、
+// 数字长得和真的一模一样。所以判据必须从「代码里有没有这个端点」升级到「口径取自哪」。
+{
+  const aHtml = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  const aSrc = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+  const aDb = fs.readFileSync(new URL('../server/db.ts', import.meta.url), 'utf8');
+  const aCnt = (h: string, n: string) => h.split(n).length - 1;
+  // ⚠️ JS 行注释/块注释续行都必须剥掉：本块的说明文字里**必然**要写出那些端点与反例串，
+  //    不剥就等于用自己的注释满足自己的断言（本仓 12.x 反复踩的同一个坑）。
+  const aNoCmt = (s: string) => s.split(/\r?\n/)
+    .filter((l) => !/^\s*\/\//.test(l) && !/^\s*\*/.test(l)).join('\n');
+  const aFn = (name: string) => {
+    const m = aHtml.match(new RegExp(`(?:async )?function ${name}\\(([\\s\\S]*?)\\n\\}`));
+    return aNoCmt(m ? m[1] : '');
+  };
+  const aAnchor = (id: string) => new RegExp('<[a-z]+[^>]*\\bid="' + id + '"', 'i').test(aHtml);
+
+  // ── ① 分页控件：锚到元素 + id 唯一 ──────────────────────────────────────
+  const PAGER_IDS = ['appsPager', 'appsPrev', 'appsPageInfo', 'appsNext', 'appsPageSize', 'appsTrunc'];
+  check('我的投递：分页控件 6 件套都锚到真实元素（缺 id ⇒ $() 得 null，翻页静默失效）',
+    PAGER_IDS.filter((id) => !aAnchor(id)).length === 0,
+    '缺失：' + PAGER_IDS.filter((id) => !aAnchor(id)).join(', '));
+  // 反向护栏：没有这条，一个整页扫描挂掉的实现也能让上面那条「通过」。
+  check('我的投递：分页控件锚点扫描确有区分力',
+    aAnchor('appsPager') && !aAnchor('appsPagerNotExistXyz'), '');
+  check('我的投递：分页控件 id 各出现恰好一次（两处同 id ⇒ $ 只取第一个、改一半不报错）',
+    PAGER_IDS.every((id) => aCnt(aHtml, `id="${id}"`) === 1),
+    PAGER_IDS.map((id) => id + '=' + aCnt(aHtml, `id="${id}"`)).join(' '));
+
+  // ── ② 取数与渲染：必须真取全量、真只渲染当页 ─────────────────────────────
+  check('我的投递：台账按 limit=0 取全量（依赖后端缺省上限 ⇒ 静默只认 500 条，就是本次的缺陷）',
+    aFn('loadMyApps').indexOf("api('/api/applications?limit=0')") >= 0, '');
+  // ⚠️ 这里钉的是「**第一个实参**是 pg.rows」，不是「调用长这样」。看板要多收一个参数
+  //    （筛选后全集，只用于列头条数），所以写成 `renderAppsBoard(pg.rows, list)`；
+  //    若针写成 `renderAppsBoard(pg.rows)`，一次合法重构就会把这条断言弄红 —— 那是误报，不是缺陷。
+  check('我的投递：看板/表格渲染的是**分页后**的行（渲染全量 ⇒ 分页只是个看不见的摆设）',
+    aFn('renderMyApps').indexOf('renderAppsBoard(pg.rows,') >= 0
+    && aFn('renderMyApps').indexOf('renderAppsTable(pg.rows)') >= 0
+    && aFn('renderMyApps').indexOf('renderAppsBoard(list') < 0,
+    `看板实参=${aFn('renderMyApps').indexOf('renderAppsBoard(pg.rows,') >= 0}`);
+  // 筛选与分页必须复合：分页要在 myAppsFiltered() 的结果上做，而不是在全量上做。
+  check('我的投递：分页作用在**筛选之后**的结果上（否则「搜出 2 条」还会说「共 1127 条」）',
+    aFn('renderMyApps').indexOf('myAppsPage(list)') >= 0, '');
+
+  // ── ③ 统计口径：SQL 聚合，不许再对数组现数 ───────────────────────────────
+  check('我的投递：四张统计卡取自 SQL 聚合端点，不再对数组现数',
+    aFn('renderMyApps').indexOf('APPS_STATS') >= 0
+    && aFn('renderMyApps').indexOf('cnt[k]') < 0,
+    `APPS_STATS=${aCnt(aFn('renderMyApps'), 'APPS_STATS')} 客户端计数=${aCnt(aFn('renderMyApps'), 'cnt[k]')}`);
+  check('我的投递：计数行同时讲清「当页范围 / 筛选后 / 库内」，不只是一个裸数字',
+    aFn('renderMyApps').indexOf("' 条 / 共 '") >= 0
+    && aFn('renderMyApps').indexOf("' 条（库内 '") >= 0, '');
+  check('投递复盘：阶段分布用 SQL 聚合的 total/byStatus，不再按行数组现数',
+    aFn('renderReviewStages').indexOf('stats.byStatus') >= 0
+    && aFn('renderReviewStages').indexOf('apps.length') < 0, '');
+  check('导出投递记录：条数写进文件名（导出的**范围**必须自己可见，否则少一半也查不出来）',
+    aFn('exportAppsCsv').indexOf("+ '-' + list.length + '条.csv'") >= 0, '');
+
+  // ── ④ 后端：total 要真、筛选要同源、排序要稳 ─────────────────────────────
+  // 🔴 必须**先剥注释**再扫 index.ts：本次第一版没剥，`listApplications(5000)` 这个
+  //    反例串就写在我自己新加的解释性注释里，于是那条「不再有字面量上限」当场误报。
+  //    同一个坑在「不许 total: list.length」上也踩了一次 —— `total: list.length` 在
+  //    jobs 路由（1459 行）本来就有，扫全文件必然假红，所以这条必须**限定在 handler 内**。
+  // ⚠️ 剥注释一律走共享实现，不许就地写 `.replace(...)`：本文件第 344 行那条守卫
+  //    就是专门拦这个的（朴素正则分不清「注释」与「字符串字面量」），本次第一版
+  //    刚写完就被它抓了个正着 —— 这是它按设计生效，不是误报。
+  const srv = stripComments(aSrc);
+  const appsHandler = (() => {
+    const i = srv.indexOf('app.get("/api/applications"');
+    const j = srv.indexOf('app.get("/api/applications/stats"', i + 1);
+    return (i >= 0 && j > i) ? srv.slice(i, j) : '';
+  })();
+  check('后端 /api/applications：handler 切片非空（切片失败 ⇒ 下面那条会被空串满足）',
+    appsHandler.length > 300
+    && appsHandler.indexOf('db.listApplications(limit, offset, filter)') >= 0,
+    `handler=${appsHandler.length}B`);
+  check('后端 /api/applications：total 取自 countApplications（写成 list.length ⇒ 恒 ≤ 上限，界面照抄成「共 500 条」）',
+    appsHandler.indexOf('const total = db.countApplications(filter)') >= 0
+    && appsHandler.indexOf('total: list.length') < 0
+    && appsHandler.indexOf('list = list.filter') < 0,
+    `countApplications=${aCnt(appsHandler, 'db.countApplications(filter)')} 应用层过滤=${aCnt(appsHandler, 'list = list.filter')}`);
+  check('后端：新增 /api/applications/stats 且走 SQL 聚合（不捞全表再数）',
+    srv.indexOf('app.get("/api/applications/stats"') >= 0
+    && srv.indexOf('db.applicationStatusCounts(filter)') >= 0, '');
+  check('后端：总数 / 分组 / 分页共用同一份筛选条件（各写一遍 ⇒ 列表按 A 筛、总数按 B 数）',
+    /export function countApplications\([\s\S]{0,200}?applicationWhere\(f\)/.test(aDb)
+    && /export function applicationStatusCounts\([\s\S]{0,200}?applicationWhere\(f\)/.test(aDb)
+    && /export function listApplications\([\s\S]{0,400}?applicationWhere\(f\)/.test(aDb), '');
+  check('后端：投递台账排序带 id 兜底（只按 created_at ⇒ 同毫秒顺序由引擎定，翻页会漏或重）',
+    aDb.indexOf('ORDER BY created_at DESC, id DESC') >= 0, '');
+
+  // ── ⑤ 防复发：不许再引入「够用就行」的字面量上限 ──────────────────────────
+  // 本次一共查出 4 处同类隐式上限：/api/applications 500、/api/stats/review 2000、
+  // /api/apply/evidence 1000、/api/stats/trend 5000。共同形状 = 传一个**字面量条数**进去，
+  // 数据量一超就静默少数据。要全量写 0（显式「我就是要全集」），要分页传变量。
+  const hedgeCaps = [...srv.matchAll(/listApplications\(\s*[1-9]\d*\s*[,)]/g)].map((m) => m[0]);
+  check('后端：listApplications 不再收到「够用就行」的字面量上限（要全量写 0，要分页传变量）',
+    hedgeCaps.length === 0, hedgeCaps.join(' | '));
+  check('后端：上面那条扫描确有区分力（变量形式不误报、字面量形式抓得住）',
+    !/listApplications\(\s*[1-9]\d*\s*[,)]/.test('db.listApplications(limit, offset, filter)')
+    && /listApplications\(\s*[1-9]\d*\s*[,)]/.test('db.listApplications(2000)'), '');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);
