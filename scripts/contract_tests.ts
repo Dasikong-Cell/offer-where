@@ -2656,8 +2656,34 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   const dirsStart = pack.indexOf('$dirs  = @(');
   const dirsBlock = pack.slice(dirsStart, pack.indexOf(')', dirsStart));
   const dirsList = [...dirsBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  // 锚点自检：`$dirs  = @(` 有两个空格。谁把格式改了，dirsStart 就变 -1，上面那两行
+  // slice 出来的是一段垃圾 —— 后面两条断言会以「名单不对」的形式红，指向错误的方向。
+  // 这条把「仪器坏了」和「名单真的变了」分开（本仓库贯穿始终的一条纪律）。
+  check('pack.ps1 的 $dirs 锚点仍能解析（否则下面两条会静默空转）',
+    dirsStart > 0 && dirsList.length > 0, `实际：${dirsList.join(', ')}`);
   check('pack.ps1 的 $dirs 整目录包含 public（说明页才有机会进包）',
     dirsList.includes('public'), `实际：${dirsList.join(', ')}`);
+  // ── $dirs 是**唯一的整目录入口**（2026-10-07）─────────────────────────
+  // 另外四项都是按文件枚举：$splitDirs 剔掉 *.js/*.d.ts、$files 是 12 个具名文件、
+  // $scripts 减 $dropScripts、$scriptFiles 减 $scriptDrop。所以「往包里多塞一个顶层
+  // 目录」全程只有一条路：把名字加进 $dirs。而上面那条只说「包含 public」——
+  // 名单从 3 个涨到 4 个时它照样通过。实测风险：.gitignore 里的 _tools/ 若被顺手加进来，
+  // 会带上 .github_token / .auth_token 和一份真实 chat.db 的拷贝（_tools/_sweep/data/），
+  // 而四道 pre-push 门禁 + npm test + npm run verify + pack.ps1 自己是**全绿**的。
+  // 精确到集合：新增目录必须显式改这条断言，改的时候就得说明为什么。
+  check('pack.ps1 的 $dirs 恰好是 node/node_modules/public（多一个都要显式放行）',
+    dirsList.length === 3 && ['node', 'node_modules', 'public'].every((n) => dirsList.includes(n)),
+    `实际：${dirsList.join(', ')}`);
+  // ── 守住 $forbidden 里那条 _tools/* 规则（2026-10-07）────────────────────
+  // $dirs 那条挡的是「有人主动加目录」；这条挡的是「有人把兜底规则删了」。
+  // 两条独立：只留前者时，只要有人顺手删掉 $forbidden 里一行（看起来像多余条目），
+  // 「_tools 被加进 $dirs」这个组合就又没人拦了。
+  // 先剥注释：pack.ps1 的注释里为了解释这条规则，必然要提到 _tools 与 data/*，
+  // 不剥注释就等于用我自己的说明文字满足断言（本仓 12.x 反复踩的坑）。
+  const packCodeNoCmt = pack.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
+  check('pack.ps1 的 $forbidden 覆盖 _tools/（gitignore 的排查目录，含 GitHub PAT 与真实库拷贝）',
+    packCodeNoCmt.length >= 5000 && /\$forbidden\s*=\s*\$listing[\s\S]{0,500}?_tools\/\*/.test(packCodeNoCmt),
+    `剥注释后 ${packCodeNoCmt.length} 字节（体量下限防「被空串满足」）`);
   // 源码树里真得有这一页。少了它，上面两条会变成「钉住一个不存在的东西」。
   check('待打包的说明页确实存在于源码树',
     fs.existsSync(path.join(ROOT, 'public', 'guide', 'index.html')));

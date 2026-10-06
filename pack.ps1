@@ -877,7 +877,20 @@ Write-Host ("      scripts/ verified: " + $scriptFiles.Count + " shipped, " + $s
 # Also: no tsc build output may survive for server/ or shared/ (belt to the argv-filter braces).
 # A .d.ts is generated, gitignored, environment-dependent and useless to the end user; shipping
 # it is what made two consecutive CI builds of the same source differ by one entry.
-$forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like "src/*" -or $_ -like ".git/*" -or $_ -like "server/*.d.ts" -or $_ -like "shared/*.d.ts" }
+# _tools/ added 2026-10-07. It is gitignored (.gitignore:89) and holds one-off debug /
+# alignment tooling -- including _tools/_sweep/data/, a full copy of the real data/
+# directory. That copy carries .github_token and .auth_token right next to chat.db.
+# It cannot reach $members today: it appears in none of $dirs / $splitDirs / $files /
+# $scripts / $scriptFiles, and the only tar call in this file takes @members as argv, so
+# there is no directory walk that could pick it up. This entry therefore changes nothing
+# right now, and that is the point -- it is a belt for the ONE way _tools/ could ever
+# ship: someone adds it to $dirs. The wildcard `-like "data/*"` above does NOT cover it
+# (PowerShell's -like is a whole-string match, so "data/*" requires the path to START
+# with data/; `_tools/_sweep/data/.github_token` does not). Without this line, that one
+# commit would ship a live GitHub PAT to every recipient with all four pre-push gates,
+# npm test, npm run verify and pack.ps1 itself green -- the same failure shape as the
+# 2026-09-27 PII guard, which printed a calm "SKIPPED" on the runner while publishing.
+$forbidden = $listing | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like "_tools/*" -or $_ -like "src/*" -or $_ -like ".git/*" -or $_ -like "server/*.d.ts" -or $_ -like "shared/*.d.ts" }
 if ($forbidden) {
   Write-Host ("::error::archive contains files that must never be shipped: " + (($forbidden | Select-Object -First 10) -join ', '))
   Write-Host "[error] archive contains files that must never be shipped:"
