@@ -4429,6 +4429,69 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     Object.keys(dIdCount).length >= 150, `静态 id 数=${Object.keys(dIdCount).length}`);
 }
 
+
+// ── 自动回复「持续跟进」（常驻监视器）接线 ────────────────────────────────────
+// 背景：后端 autoReplyWatcher.ts + /api/auto-reply/watch 五个端点早就写完了，而且真跑过
+// （data/auto_reply_watch.log 355 轮 tick、相邻间隔中位数正好 180s、跨 5 天），
+// 但**前端零调用方** + 配置默认 enabled:false ⇒ 用户只能手敲 curl 才能开，
+// 界面上根本开不了 = 功能不存在。三层判据：控件锚元素 / 真打端点 / 安全默认。
+{
+  const wHtml = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  const wCode = stripComments(wHtml);
+  const WATCH_IDS = ['watchInterval', 'watchMaxPerRun', 'watchThrottle', 'watchHrCooldown',
+    'watchPlatforms', 'watchRealSend', 'watchStart', 'watchStop', 'watchSaveCfg', 'watchState', 'watchLog'];
+  // ⚠️ 必须锚到**元素**：只测 includes('watchStart') 会被 JS 里的 $('#watchStart') 满足，
+  //    把整个 <button> 删掉断言照样绿（2026-10-03 emailForce 那条假区分力就是这么来的）。
+  const anchor = (id: string) => new RegExp('<[a-z]+[^>]*\\bid="' + id + '"', 'i').test(wHtml);
+  const wMiss = WATCH_IDS.filter((id) => !anchor(id));
+  check('持续跟进：11 个控件都锚到真实元素（只测 includes 会被 JS 里的 #id 引用满足）',
+    wMiss.length === 0, `缺元素：${wMiss.join('、')}`);
+  check('持续跟进：控件锚元素扫描确有区分力（防「正则写错 ⇒ 恒绿」）',
+    anchor('replyOut') && !anchor('watchNotExistXyz'),
+    '同一正则对真实 id 必须命中、对不存在的 id 必须不命中');
+
+  const WATCH_APIS = ['/api/auto-reply/watch/status', '/api/auto-reply/watch/config',
+    '/api/auto-reply/watch/start', '/api/auto-reply/watch/stop'];
+  const wMissApi = WATCH_APIS.filter((u) => !wCode.includes(u));
+  check('持续跟进：前端真的打了 watch 四端点（后端有路由、前端不打 ⇒ 点了没反应且不报错）',
+    wMissApi.length === 0, `未调用：${wMissApi.join('、')}`);
+
+  // 🔴 安全底线：真发送开关**不得预勾选** —— 否则一点「开启」就自动向 HR 发真消息（不可撤回）
+  const rsTag = wHtml.match(/<input[^>]*\bid="watchRealSend"[^>]*>/i);
+  check('持续跟进：真发送开关不得预勾选（默认只预览，绝不自动外发）',
+    !!rsTag && !/\bchecked\b/i.test(rsTag[0]),
+    '预勾选 ⇒ 开启监视器即自动给 HR 发真消息；这是本功能唯一一道「不可撤回」闸门');
+
+  // SSE 格式与单次运行不同：watcher 发 {type:'tick',kind,ev}，真实事件在 ev 子对象里
+  check('持续跟进：SSE 按 tick/kind/ev 解析（照抄 #replyRun 的直发格式 ⇒ 一条都显示不出来）',
+    /['"]tick['"]/.test(wCode) && /\bkind\b/.test(wCode) && /\bev\.ev\b/.test(wCode),
+    'watcher 发的是 tick 包裹体；直发 {type:sent} 那套在这里取不到任何东西');
+
+  // startWatcher() 内部先 loadConfig()（读盘覆盖内存）再置 enabled=true
+  // ⇒ 必须「先 POST config 落盘、再 start」，否则面板上改的参数会被磁盘旧值静默覆盖
+  check('持续跟进：开启时先落盘参数再启动（反了 ⇒ 改完参数点开启会静默沿用旧值）',
+    /watch\/config'[\s\S]{0,500}?watch\/start'/.test(wCode),
+    'startWatcher 内部 loadConfig 会覆盖内存 config；顺序反了不报错、但参数白改');
+}
+
+// ── 防复发护栏：HTML 注释里不得出现「块注释起始」token ────────────────────────
+// 2026-10-06 事故：卡片注释里写了 `/api/auto-reply/watch` 紧跟一个星号，
+// 而 scripts/lib/stripComments.ts **不认 HTML 的 <!-- -->** ⇒ 把它当成块注释开始，
+// 一路剥到 3100 行之后 JS 注释结尾处的「星号加斜杠」⇒ 静默吃掉 email 面板与 lightbox 整段 DOM。
+// 两条既有断言（emailForce / lightbox）当场变红，而**总行数完全不变**
+// （该库用空行替换被剥内容）⇒ 只看行数会漏诊。这类「注释把 DOM 吃了」必须机械拦住。
+{
+  const hRaw = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  const hOPN = String.fromCharCode(47, 42);   // 不直接写字面量：写出来会截断本文件自己的注释
+  const hComments = hRaw.match(/<!--[\s\S]*?-->/g) || [];
+  const hDanger = hComments.filter((c) => c.includes(hOPN));
+  check('console.html：HTML 注释里不得出现块注释起始 token（stripComments 不认 <!-- -->）',
+    hDanger.length === 0,
+    `危险注释 ${hDanger.length} 处：${hDanger.map((c) => c.replace(/\s+/g, ' ').slice(0, 70)).join(' | ')}`);
+  check('console.html：上面的 HTML 注释扫描确有产出（防「正则写错 ⇒ 恒绿」）',
+    hComments.length >= 20, `HTML 注释数=${hComments.length}`);
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`

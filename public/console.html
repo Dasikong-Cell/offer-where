@@ -676,6 +676,48 @@
               <span class="muted small" id="replyStatus" style="align-self:center"></span>
             </div>
             <div class="out" id="replyOut"></div>
+
+
+            <!-- 持续跟进（常驻监视器）—— 后端 /api/auto-reply/watch 五个端点的**唯一入口**
+                 ⚠️ 没有这张卡片时，那五个端点全仓零调用方：后端能力其实完整
+                 （setInterval 轮询 / running 互斥 / AbortController / 配置落盘 /
+                 bootstrapWatcher 启动自动恢复 / watchEmitter → SSE 实时广播），
+                 界面上却没有任何入口 ⇒ 默认 enabled:false 且开不了 = 功能不存在。
+                 🔴 HTML 注释里**不得出现**斜杠加星号：scripts/lib/stripComments.ts 不认
+                 HTML 注释，会把它当成块注释开始、一路剥到下一个星号加斜杠 ⇒ 静默吃掉几千行。 -->
+            <div class="card" style="margin-top:16px;padding:14px">
+              <h2 style="margin-bottom:6px">持续跟进（常驻监视器）</h2>
+              <div class="muted small" style="margin-bottom:10px">
+                开启后后端每隔「间隔」秒自动跑一轮（含刚收到的新消息），不必再手点上面的「开始自动回复」。
+                <b>仅在后端进程运行时生效</b>；本设置会落盘，后端下次启动自动恢复。
+              </div>
+              <div class="row2">
+                <div><label class="f">间隔（秒，最小 30）</label>
+                  <input id="watchInterval" type="number" min="30" step="10" value="180" style="width:110px" /></div>
+                <div><label class="f">单轮最多发送（0 = 不限）</label>
+                  <input id="watchMaxPerRun" type="number" min="0" step="1" value="20" style="width:110px" /></div>
+              </div>
+              <div class="row2" style="margin-top:8px">
+                <div><label class="f">两次发送最小间隔（秒，防风控）</label>
+                  <input id="watchThrottle" type="number" min="0" step="5" value="45" style="width:110px" /></div>
+                <div><label class="f">同一 HR 冷却（秒）</label>
+                  <input id="watchHrCooldown" type="number" min="0" step="60" value="3600" style="width:110px" /></div>
+              </div>
+              <div class="muted small" id="watchPlatforms" style="margin-top:10px">运行平台：加载中…</div>
+              <label class="toggle" style="margin-top:8px"><input type="checkbox" id="watchRealSend" />
+                真实发送（<b>不勾 = 只预览、不会真发</b>）</label>
+              <div class="note warn" style="margin-top:8px">
+                ⚠️ 勾上「真实发送」后，监视器会<b>自动把消息真实发给 HR</b>（发出即不可撤回）。
+                请先用预览观察一两轮，确认回复内容与目标人选无误后再开；账号风控风险自负。
+              </div>
+              <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <button class="btn primary sm" id="watchStart">开启持续跟进</button>
+                <button class="btn sm" id="watchStop">停止</button>
+                <button class="btn sm" id="watchSaveCfg">保存参数</button>
+                <span class="muted small" id="watchState"></span>
+              </div>
+              <div class="out" id="watchLog"></div>
+            </div>
           </div>
 
           <!-- email -->
@@ -3245,6 +3287,8 @@ async function fillReplyPlatformSelect(){
     sel.innerHTML = '<option value="boss">BOSS直聘</option><option value="liepin">猎聘</option>';
     console.warn('自动回复平台清单获取失败，已退回内置两项：', e);
   }
+  // 平台清单就绪（成功或退回）后渲染监视器的平台勾选框 —— 真相源同上
+  watchPlatformBoxes();
 }
 /** 选中「待校准」平台时给出可见说明 —— 否则「选了却没反应」会被当成功能坏了。
  *  ⚠️ 必须定义在顶层：放进别的函数体里会让这里的调用抛 ReferenceError（整页初始化中断）。 */
@@ -3496,7 +3540,7 @@ $('#deliverTabs').addEventListener('click', e=>{
   //    「网申」已迁到「自动填充」页（同一个功能不留两个入口），故列表里去掉 wangshen。
   ['batch','reply','email'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
   // 切到「自动回复」页时顺手探一次登录态，避免用户盲跑
-  if(b.dataset.tab==='reply') checkReplyLogin();
+  if(b.dataset.tab==='reply'){ checkReplyLogin(); refreshWatchStatus(true); watchPlatformBoxes(); watchOpenStream(); }
 });
 
 /* batch apply */
@@ -3725,6 +3769,210 @@ $('#replyStop').addEventListener('click', async ()=>{
 });
 $('#replyCheck').addEventListener('click', checkReplyLogin);
 $('#replyPlatform').addEventListener('change', ()=>{ checkReplyLogin(); showReplyCalibNote(); });
+
+/* ---------- 自动回复：持续跟进（常驻监视器）----------
+   🔴 后端 autoReplyWatcher.ts + /api/auto-reply/watch/* 五个端点此前**全仓零调用方**：
+      能力是完整的（setInterval 轮询 / running 互斥防叠加 / AbortController 可中断 /
+      配置落盘 / bootstrapWatcher 启动自动恢复 / watchEmitter→SSE 实时广播），
+      但界面上开不了 ⇒ 默认 enabled:false 之下等于功能不存在。这里补上唯一入口。
+   默认**关闭**、且默认**不真发送**：点「开启持续跟进」才开始，勾「真实发送」才真发。
+   ⚠️ SSE 事件格式与单次运行**不同**，别照抄 #replyRun 的解析：
+        /api/auto-reply/run   直发 {type:'sent'|'skipped'|…}
+        /api/auto-reply/watch 发 {type:'status'|'tick',…}，tick 的真实事件在 ev 字段里。 */
+let WATCH_STREAM_STARTED = false;
+
+/** 渲染「运行平台」勾选框 —— 平台清单沿用 REPLY_PLATFORMS（后端单一真相源）。
+ *  动态生成而不是写死 id：加平台时这里自动跟上（曾因硬编码 boss+liepin 把已校准平台挡在门外）。 */
+function watchPlatformBoxes(){
+  const box = $('#watchPlatforms');
+  if(!box) return;
+  const list = REPLY_PLATFORMS || [];
+  if(!list.length){ box.textContent = '运行平台：（未取到平台清单，切到本页会重试）'; return; }
+  const prev = {};
+  $$('.watchpf').forEach(c=>{ prev[c.value] = c.checked; });
+  box.innerHTML = '运行平台：' + list.map(p=>{
+    const name = (PLATFORMS.find(x=>x.id===p.id)||{}).name || p.id;
+    // 首次渲染只默认勾**已校准**的平台：未校准的勾了也找不到会话、不会真正回复
+    const on = (p.id in prev) ? prev[p.id] : !!p.calibrated;
+    return '<label class="toggle" style="margin-right:14px">'
+      + '<input type="checkbox" class="watchpf" value="' + esc(p.id) + '"' + (on?' checked':'') + ' /> '
+      + esc(name) + (p.calibrated?'':' · 待校准') + '</label>';
+  }).join('');
+}
+
+/** 读面板参数 ⇒ POST /watch/config 的 patch。
+ *  platforms 一个都没勾时**不传**（保留后端原值），避免把平台列表清空成 [] 后监视器空转。 */
+function collectWatchCfg(){
+  const num = (sel, def, min) => {
+    const el = $(sel);
+    const v = el ? Number(el.value) : NaN;
+    return Number.isFinite(v) ? Math.max(min, Math.floor(v)) : def;
+  };
+  const cfg = {
+    intervalSec: num('#watchInterval', 180, 30),
+    maxPerRun: num('#watchMaxPerRun', 20, 0),
+    throttleSec: num('#watchThrottle', 45, 0),
+    hrCooldownSec: num('#watchHrCooldown', 3600, 0),
+    realSend: !!($('#watchRealSend') && $('#watchRealSend').checked),
+  };
+  const pfs = $$('.watchpf').filter(c=>c.checked).map(c=>c.value);
+  if(pfs.length) cfg.platforms = pfs;
+  return cfg;
+}
+
+/** 渲染状态。fillCfg=true 时**同时回填参数控件**（只在首次载入/用户主动操作后做，
+ *  否则会跟用户正在输入的框抢值 —— 输入中的框一律跳过）。 */
+function applyWatchStatus(s, fillCfg){
+  if(!s) return;
+  const el = $('#watchState');
+  if(el){
+    if(s.running){
+      el.textContent = '● 运行中 · 每 ' + s.intervalSec + ' 秒一轮 · ' + (s.realSend?'真实发送':'仅预览');
+      el.style.color = '#3fb950';
+    } else if(s.enabled){
+      // enabled 却没有定时器：后端进程被重启过（bootstrapWatcher 只挂定时器、不立即跑）
+      el.textContent = '⚠ 已启用但定时器未运行（后端可能刚重启，等首个间隔）';
+      el.style.color = '#e8a33d';
+    } else {
+      el.textContent = '○ 已停止（不会自动回复）';
+      el.style.color = '';
+    }
+  }
+  if(fillCfg){
+    const back = (sel, v) => { const i = $(sel); if(i && v !== undefined && v !== null) i.value = String(v); };
+    back('#watchInterval', s.intervalSec);
+    back('#watchMaxPerRun', s.maxPerRun);
+    back('#watchThrottle', s.throttleSec);
+    back('#watchHrCooldown', s.hrCooldownSec);
+    const rs = $('#watchRealSend'); if(rs) rs.checked = !!s.realSend;
+    if(Array.isArray(s.platforms)) $$('.watchpf').forEach(c=>{ c.checked = s.platforms.indexOf(c.value) >= 0; });
+  }
+}
+
+const watchOut = (line)=>{
+  const out = $('#watchLog'); if(!out || !line) return;
+  out.textContent += (out.textContent?NL:'') + line;
+  out.scrollTop = out.scrollHeight;
+};
+
+/** 把一条 tick 事件翻译成人话（格式见本块顶部注释）。 */
+function watchLine(ev){
+  const at = ev.at ? new Date(ev.at).toLocaleTimeString('zh-CN',{hour12:false}) : '';
+  switch(ev.kind){
+    case 'start': return '▶ [' + at + '] 本轮开始 · ' + ((ev.platforms||[]).join(' / ') || '无平台');
+    case 'end': return '■ [' + at + '] 本轮结束';
+    case 'platform-done': return '  ✓ [' + at + '] ' + ev.platform + '：发送 ' + ev.sent + ' · 跳过 ' + ev.skipped;
+    case 'platform-error': return '  ✗ [' + at + '] ' + ev.platform + '：错误 ' + (ev.error || '');
+    case 'event': {
+      const e = ev.ev || {};
+      switch(e.type){
+        case 'conv': return '    · ' + (e.name || e.hr || '?') + (e.company ? '（' + e.company + '）' : '');
+        case 'sent': return '    ✓ 已发送：' + String(e.text||'').slice(0,120);
+        case 'dry': return '    ✎ 拟回复：' + String(e.text||'').slice(0,120);
+        case 'send-resume': return '    ✓ 已发送简历';
+        case 'accept-resume': return '    ✓ 已同意「请求附件简历」卡片';
+        case 'accept-resume-preview': return '    · 收到简历请求（预览模式不点击）';
+        case 'skipped': return '    ⊘ 跳过：' + (e.reason || '');
+        case 'intent': return '    ◇ 意图：' + (e.intent || '');
+        case 'error': return '    ✗ ' + (e.message || '');
+        default: return '';
+      }
+    }
+    default: return '';
+  }
+}
+
+async function refreshWatchStatus(fillCfg){
+  try{
+    const s = await api('/api/auto-reply/watch/status');
+    applyWatchStatus(s, !!fillCfg);
+    if(s && s.running) watchOpenStream();   // 已在运行（例如刷新页面）⇒ 自动接上实时日志
+    return s;
+  }catch(e){
+    const el = $('#watchState');
+    if(el){ el.textContent = '状态获取失败：' + e.message; el.style.color = '#f85149'; }
+    return null;
+  }
+}
+
+/** 订阅监视器 SSE（用 fetch 而不是 EventSource：EventSource 不能带令牌头）。 */
+function watchOpenStream(){
+  if(WATCH_STREAM_STARTED) return;
+  WATCH_STREAM_STARTED = true;
+  fetch('/api/auto-reply/watch', {headers:authHeaders()}).then(resp=>{
+    if(!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+    const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    const pump = () => reader.read().then(({done,value})=>{
+      if(done) throw new Error('流已结束');
+      buf += dec.decode(value,{stream:true});
+      let idx;
+      while((idx = buf.indexOf(NL+NL)) >= 0){
+        const chunk = buf.slice(0,idx); buf = buf.slice(idx+2);
+        const dataLine = chunk.split(NL).find(l=>l.startsWith('data: '));
+        if(!dataLine) continue;
+        let ev; try{ ev = JSON.parse(dataLine.slice(6)); }catch(_){ continue; }
+        if(ev.type === 'status'){ applyWatchStatus(ev); watchOut('— 已接上监视器日志流'); }
+        else if(ev.type === 'tick'){
+          if(ev.kind === 'end') refreshWatchStatus(false);
+          watchOut(watchLine(ev));
+        }
+      }
+      return pump();
+    });
+    return pump();
+  }).catch(e=>{
+    WATCH_STREAM_STARTED = false;
+    watchOut('监视器日志流断开（' + e.message + '）· 重新开启或刷新页面可重连');
+  });
+}
+
+function watchFail(msg, e){
+  const el = $('#watchState');
+  if(el){ el.textContent = msg + '：' + (e && e.message ? e.message : e); el.style.color = '#f85149'; }
+}
+
+$('#watchStart').addEventListener('click', async ()=>{
+  const btn = $('#watchStart'); btn.disabled = true;
+  try{
+    // 🔴 顺序不能反：startWatcher() 内部先 loadConfig()（读盘覆盖内存）再置 enabled=true，
+    //    所以必须**先**把面板参数 POST 落盘，**再** start，否则「改完参数直接点开启」会静默沿用旧值。
+    // 🔴 先订阅 SSE 再启动：startWatcher() 是 immediate，首轮的 start/conv 事件会在
+    //    POST 返回**之前**就推出去；等拿到响应才连流 ⇒ 第一轮最早那批事件静默丢失（探针实测：
+    //    日志里只有中后期的 conv/拟回复，看不到「本轮开始」）。
+    watchOpenStream();
+    await api('/api/auto-reply/watch/config', {method:'POST', body:JSON.stringify(collectWatchCfg())});
+    const r = await api('/api/auto-reply/watch/start', {method:'POST'});
+    const st = (r && r.status) || null;
+    applyWatchStatus(st, true);
+    const out = $('#watchLog'); if(out) out.textContent = '';
+    watchOut('已开启：每 ' + ((st&&st.intervalSec)||'?') + ' 秒一轮，'
+      + ((st&&st.realSend) ? '【真实发送】' : '【仅预览，不会真发】') + ' · 等待后端第一轮…');
+  }catch(e){ watchFail('开启失败', e); }
+  btn.disabled = false;
+});
+
+$('#watchStop').addEventListener('click', async ()=>{
+  const btn = $('#watchStop'); btn.disabled = true;
+  try{
+    const r = await api('/api/auto-reply/watch/stop', {method:'POST'});
+    applyWatchStatus((r && r.status) || null, true);
+    watchOut('已停止持续跟进（已发出的消息不受影响）');
+  }catch(e){ watchFail('停止失败', e); }
+  btn.disabled = false;
+});
+
+$('#watchSaveCfg').addEventListener('click', async ()=>{
+  const btn = $('#watchSaveCfg'); btn.disabled = true;
+  try{
+    const r = await api('/api/auto-reply/watch/config', {method:'POST', body:JSON.stringify(collectWatchCfg())});
+    applyWatchStatus((r && r.status) || null, true);
+    watchOut('参数已保存' + (r && r.status && r.status.enabled ? '（监视器在运行，间隔变更已即时生效）' : '（监视器未运行，启动时生效）'));
+  }catch(e){ watchFail('保存失败', e); }
+  btn.disabled = false;
+});
+
+/* 首次载入取一次状态：面板默认不在前台，但状态/参数要显示对（避免显示成空白让人以为没这功能） */
+refreshWatchStatus(true);
 
 /* ---------- email apply (offerbiu) ----------
    ⚠️ 后端 SSE 事件的文案字段是 **`message`**（不是 `msg`）。曾全写成 `ev.msg` ⇒ `undefined`：
