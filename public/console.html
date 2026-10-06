@@ -286,6 +286,14 @@
   .lightbox .lb-close{position:absolute;top:14px;right:18px;background:rgba(255,255,255,.12);color:#fff;border:0;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer}
   .lightbox .lb-close:hover{background:rgba(255,255,255,.25)}
   .lightbox .lb-cap{position:absolute;left:0;right:0;bottom:12px;text-align:center;color:#dfe6f0;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none;padding:0 60px;word-break:break-all}
+  /* 页内 PDF 预览：外壳内嵌 PDF 查看器不可靠（wry 默认禁 msPdfOOUI）⇒ pdf.js 画 canvas */
+  .lightbox .lbpdf{max-height:86vh;overflow:auto;display:flex;flex-direction:column;gap:12px;cursor:default}
+  .lightbox .lbpdf canvas{max-width:100%;height:auto;background:#fff;border-radius:6px;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+  .lightbox .lbbusy{background:#fff;border-radius:8px;padding:20px 26px;color:#333;cursor:default;font-size:13px}
+  /* 壳里开不了新窗口 ⇒ 外站网址 / 本机目录给「可复制」的页内面板 */
+  .lightbox .lbcopy{background:#fff;border-radius:10px;padding:18px 20px;max-width:620px;cursor:default;color:#222}
+  .lightbox .lbcopy .u{width:100%;margin:10px 0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:#f7f8fa;color:#222}
+  .lightbox .lbcopy .row{display:flex;gap:10px;align-items:center}
 
   .empty{text-align:center;color:var(--muted2);padding:40px 0;font-size:13px}
   .spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
@@ -428,7 +436,7 @@
            还可能把当前视图清掉。这条在页面上看起来完全正常，只有真点一次才发现。
            目标 /guide/ 由后端 express.static(public/) 直接托管（见 scripts/guide_check.ts 第 9 节），
            是 GET 无副作用路径，鉴权开启时也不需要令牌。 -->
-      <div style="margin-top:8px"><a href="/guide/" target="_blank" rel="noopener"
+      <div style="margin-top:8px"><a href="/guide/" data-open-link="/guide/" data-open-label="使用说明"
         style="color:#9ecbff;text-decoration:none">使用说明 / 常见问题 ↗</a></div>
     </div>
   </aside>
@@ -1850,7 +1858,7 @@ $('#rmPdf').addEventListener('click', async ()=>{
     const r = await api('/api/resume/docs/' + encodeURIComponent(RM_DOC.id) + '/pdf',
       { method:'POST', body: JSON.stringify({ doc: rmDocFromForm() }) });
     // PDF 必须落盘（CDP 要一个文件路径）⇒ 由静态目录提供，前端只拿到相对 URL
-    if(msg) msg.innerHTML = '已生成：<a href="' + esc(r.url) + '" target="_blank" rel="noopener">打开 PDF</a>';
+    if(msg) msg.innerHTML = '已生成：<a href="' + esc(r.url) + '" data-open-link="' + esc(r.url) + '" data-open-label="简历 PDF">打开 PDF</a>';
   }catch(e){
     // 503 = 浏览器不在线（不是服务端坏）。把原因如实显示，别让用户以为功能炸了
     if(msg) msg.textContent = '生成失败：' + e.message;
@@ -1982,8 +1990,8 @@ async function runRecord(){
     const r=await api('/api/apply/record?platform='+encodeURIComponent(platform)+'&seconds='+encodeURIComponent(sec));
     if(!r || !r.ok){ out.innerHTML='<div class="note warn">录制失败：'+esc((r&&r.error)||'未取到帧（目标平台窗口是否已打开？）')+'</div>'; return; }
     let h='<div class="note small" style="margin-bottom:8px">已录制 '+r.frames.length+' 帧（间隔约 '+(r.intervalMs||0)+'ms，跨度约 '+r.seconds+'s）→ <code>'+esc(r.dir||'')+'</code>　'
-      + '<a href="'+esc(r.dir||'')+'" target="_blank">打开目录</a></div><div style="display:flex;flex-wrap:wrap;gap:8px">';
-    for(const f of r.frames) h+='<a href="'+esc(f)+'" target="_blank"><img src="'+esc(f)+'" style="width:132px;height:84px;object-fit:cover;border:1px solid var(--line);border-radius:6px" onerror="this.style.display=\'none\'"></a>';
+      + '<a href="'+esc(r.dir||'')+'" data-open-dir="'+esc(r.dir||'')+'" data-open-label="录像目录">复制目录路径</a></div><div style="display:flex;flex-wrap:wrap;gap:8px">';
+    for(const f of r.frames) h+='<a href="'+esc(f)+'" data-open-link="'+esc(f)+'" data-open-label="录像帧"><img src="'+esc(f)+'" style="width:132px;height:84px;object-fit:cover;border:1px solid var(--line);border-radius:6px;cursor:zoom-in" onerror="this.style.display=\'none\'"></a>';
     h+='</div>';
     out.innerHTML=h;
   }catch(e){ out.innerHTML='<div class="note warn">录制失败：'+esc(e.message)+'</div>'; }
@@ -2009,7 +2017,7 @@ async function runVidStop(){
     const link=r.video||r.player||r.dir;
     out.innerHTML='<div class="note small">已归档 <b>'+r.frames+'</b> 帧 / '+r.seconds+'s '
       +(r.video?'（已合成 mp4）':'（本机无 ffmpeg，已生成连续播放页）')
-      +' → <a href="'+esc(link)+'" target="_blank">打开回看</a></div>';
+      +' → <a href="'+esc(link)+'" data-open-video="'+esc(link)+'">打开回看</a></div>';
   }catch(e){ out.innerHTML='<div class="note warn">归档失败：'+esc(e.message)+'</div>'; }
 }
 (function initRecorder(){
@@ -2618,7 +2626,7 @@ async function optimizeTailor(){
     if(out) out.innerHTML = '<div class="note b-ok" style="background:var(--ok-soft);color:var(--ok);border-color:transparent">'
       + '✅ 定制简历已生成' + (r.cached ? '（命中缓存，直接复用上次结果）' : '') + '</div>'
       + '<div class="kv"><span>文件</span><b style="word-break:break-all">'+esc(String(r.pdfPath||'').split(/[\\/]/).pop())+'</b></div>'
-      + '<div style="margin-top:12px"><a class="btn" href="'+esc(r.url||'#')+'" target="_blank" rel="noopener">打开 PDF</a></div>'
+      + '<div style="margin-top:12px"><a class="btn" href="'+esc(r.url||'')+'" data-open-link="'+esc(r.url||'')+'" data-open-label="简历 PDF">打开 PDF</a></div>'
       + '<div class="note small" style="margin-top:12px">这个文件已经能被投递链路当作附件使用（邮箱直投传 tailor:true 会自动复用同一份）。</div>';
     if(msg) msg.textContent = '完成。';
   }catch(e){
@@ -2895,7 +2903,7 @@ function pfMatchRow(x){
 /** 简历优化台账行。产物可能被清理策略删掉 ⇒ 只有 hasPdf 时才给链接，不给死链。 */
 function pfTailorRow(x){
   const when = x.generatedAt ? new Date(x.generatedAt).toLocaleString('zh-CN') : '';
-  const link = x.hasPdf ? ' <a href="'+esc(x.url)+'" target="_blank" rel="noopener">PDF</a>' : '';
+  const link = x.hasPdf ? ' <a href="'+esc(x.url)+'" data-open-link="'+esc(x.url)+'" data-open-label="定制简历 PDF">PDF</a>' : '';
   return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+x.position : ''))
     + (when ? ' <span class="muted small">'+esc(when)+'</span>' : '') + '</span>'
     + '<b>'+(x.matchScore == null ? '—' : esc(String(x.matchScore))+' 分')+link+'</b></div>';
@@ -3006,7 +3014,7 @@ async function checkUpdate(){
     if(r && r.updateAvailable && r.latest){
       host.innerHTML = '🆕 有新版本：<b>' + esc(r.latest.tag) + '</b>（当前 v' + esc(r.current.version)
         + (r.current.commit ? ' / ' + esc(String(r.current.commit).slice(0,7)) : '')
-        + '）。<a href="' + esc(r.latest.url) + '" target="_blank" rel="noopener">前往 Releases 下载</a>'
+        + '）。<a href="#" data-open-link="' + esc(r.latest.url) + '" data-open-label="新版本下载">前往 Releases 下载</a>'
         + ' —— 更新方式：下载新包解压覆盖（登录态在 C:\\chrome-cdp-profile*，不在解压目录，重装不丢）。';
     }else if(r && r.latest){
       host.textContent = '✅ 已是最新版（' + esc(r.latest.tag) + '，发布于 ' + (r.latest.publishedAt ? esc(String(r.latest.publishedAt).slice(0,10)) : '未知日期') + '）。';
@@ -3037,7 +3045,7 @@ async function renderWizard(){
     let act = '';
     if(it.id==='windows') act = '<button class="btn sm" data-wz="windows">一键拉起全部平台窗口</button>';
     else if(it.id==='resume') act = '<button class="btn sm" data-wz="resume">去上传简历</button>';
-    else if(it.id==='chrome') act = '<a class="btn sm" href="https://www.google.com/chrome/" target="_blank" rel="noopener">打开 Chrome 下载页</a>';
+    else if(it.id==='chrome') act = '<a class="btn sm" href="#" data-open-link="https://www.google.com/chrome/" data-open-label="Chrome 下载页">打开 Chrome 下载页</a>';
     return '<div class="kv" style="align-items:flex-start;gap:12px;padding:8px 0;border-bottom:1px solid rgba(128,128,128,.18)">'
       + '<span style="min-width:24px;flex:none;opacity:.7">' + (idx+1) + '.</span>'
       + '<b style="font-weight:500;flex:none;min-width:96px">' + esc(it.label) + '</b>'
@@ -4220,10 +4228,9 @@ function renderResumeCurrent(r){
       + (ok?'<span><button class="btn sm" data-prev="'+esc(pv)+'" data-prev-label="'+esc(label)+'">预览</button></span>':'<span class="muted">—</span>')
       + '</div>';
   }).join('');
-  // 🔴 桌面壳（Tauri）拦截 window.open ⇒ 点「预览」毫无反应（与证据回溯 target=_blank 同源）。
-  // 改走页内 lightbox 的 iframe：同源签名 URL，不依赖请求头；PDF 由外壳内嵌查看器渲染。
+  // 桌面壳开不了新窗口，且外壳内嵌 PDF 查看器不可靠 ⇒ 走统一出口 openLink()（同源 PDF 用 pdf.js）
   $$('[data-prev]').forEach(function(b){ b.addEventListener('click', function(){
-    openLightbox('<iframe src="'+esc(b.dataset.prev)+'" title="简历预览"></iframe>', (b.dataset.prevLabel||'简历')+' · 预览');
+    openLink(b.dataset.prev, (b.dataset.prevLabel||'简历')+' · 预览');
   }); });
 }
 const dz = $('#dropZone'); const rf = $('#resumeFile');
@@ -5152,7 +5159,7 @@ function appCardHtml(a){
     + '<div class="tn'+(n.cls?' '+n.cls:'')+'">'+esc(n.text)+'</div>'
     + '<div class="m"><select data-appst="'+esc(a.id)+'">'+appStatusOptions(a)+'</select>'
     +   '<button class="btn sm" data-apptime="'+esc(a.id)+'">改时间</button>'
-    +   (a.job_url ? '<a class="btn sm" href="'+esc(a.job_url)+'" target="_blank" rel="noopener">原岗位</a>' : '')
+    +   (a.job_url ? '<a class="btn sm" href="#" data-open-link="'+esc(a.job_url)+'" data-open-label="原岗位">原岗位</a>' : '')
     +   '<button class="btn sm" data-appdel="'+esc(a.id)+'">删</button></div>'
     + '</div>';
 }
@@ -5332,7 +5339,7 @@ function renderAppsTable(list){
       + '<td class="small"'+(n.cls==='warn'?' style="color:var(--warn)"':' class="small muted"')+'>'+esc(n.text)+'</td>'
       + '<td><select data-appst="'+esc(a.id)+'">'+appStatusOptions(a)+'</select></td>'
       + '<td><button class="btn sm" data-apptime="'+esc(a.id)+'">改时间</button> '
-      + (a.job_url ? '<a class="btn sm" href="'+esc(a.job_url)+'" target="_blank" rel="noopener">原岗位</a> ' : '')
+      + (a.job_url ? '<a class="btn sm" href="#" data-open-link="'+esc(a.job_url)+'" data-open-label="原岗位">原岗位</a> ' : '')
       + '<button class="btn sm" data-appdel="'+esc(a.id)+'">删</button></td></tr>';
   }).join('');
   bindAppActions('#appsTbl');
@@ -5491,9 +5498,84 @@ function openModal(title, bodyHtml){ $('#modalTitle').textContent=title; $('#mod
 $('#modalClose').addEventListener('click', ()=>$('#modal').classList.remove('open'));
 $('#modal').addEventListener('click', e=>{ if(e.target.id==='modal') $('#modal').classList.remove('open'); });
 
-/* ---------- lightbox：证据截图/录像页内放大 ----------
-   桌面壳（Electron 类）里 <a target="_blank"> 开不了新窗口 ⇒ 点缩略图毫无反应；
-   改为页内全屏层：点图/录像链接 → 放大展示，点空白/✕/Esc 关闭。 */
+/* ---------- 统一「点开」出口（桌面壳只能页内开） ----------
+   桌面壳（Tauri）里「开新窗口」的两种写法都会被静默吞掉（点击毫无反应）；
+   且 wry 默认带 --disable-features=msPdfOOUI ⇒ 外壳内嵌 PDF 查看器不可靠。
+   ⇒ 全站只留这一个出口，任何一处漏改都会退化成「点了没反应」：
+     · 同源 PDF       → pdf.js 画到 canvas（不依赖外壳插件）
+     · 同源图片       → lightbox <img>
+     · 同源其它       → lightbox <iframe>
+     · 外站 / 本机目录 → 页内「可复制地址」面板（壳里没有开窗口的通道） */
+function lbSameOrigin(u){ try{ return new URL(u, location.href).origin === location.origin; }catch(e){ return false; } }
+function lbIsPdf(u){ return /\.pdf(\?|#|$)/i.test(u) || /\/api\/resume\/file(\?|$)/.test(u); }
+function lbIsImg(u){ return /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(u); }
+/** 外站网址 / 本机磁盘目录：壳里开不了，给一个可复制的地址。 */
+function openLinkPanel(url, label, why){
+  openLightbox('<div class="lbcopy">'
+    + '<div style="font-size:13px;line-height:1.6">'+esc(why||'本窗口无法直接打开该地址。')+'</div>'
+    + '<input class="u" readonly value="'+esc(url)+'" onclick="this.select()">'
+    + '<div class="row"><button class="btn primary sm" id="lbCopyBtn">复制</button>'
+    + '<span class="small muted" id="lbCopyTip">复制后粘贴到 Chrome 地址栏打开</span></div>'
+    + '</div>', label||'');
+  const b=$('#lbCopyBtn'); if(!b) return;
+  b.addEventListener('click', function(){
+    const done=function(){ const t=$('#lbCopyTip'); if(t) t.textContent='已复制 ✅'; };
+    const sel=function(){ const i=$('#lightboxBody input'); if(i){ i.select(); try{ document.execCommand('copy'); done(); }catch(e){} } };
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(done, sel); }
+    else { sel(); }
+  });
+}
+let PDFJS_LIB=null;
+/** 懒加载 vendored pdf.js（约 1.4MB，不进首屏）。 */
+async function ensurePdfjs(){
+  if(PDFJS_LIB) return PDFJS_LIB;
+  const m=await import('/vendor/pdfjs/pdf.min.mjs');
+  m.GlobalWorkerOptions.workerSrc='/vendor/pdfjs/pdf.worker.min.mjs';
+  PDFJS_LIB=m; return m;
+}
+/** 同源 PDF：逐页画到 canvas。带 X-Auth-Token（pdf.js 支持 httpHeaders），局域网下也不 401。 */
+async function openPdfPreview(url, label){
+  openLightbox('<div class="lbbusy">PDF 加载中…</div>', label||'');
+  try{
+    const pdfjs=await ensurePdfjs();
+    const doc=await pdfjs.getDocument({ url:url, httpHeaders:authHeaders() }).promise;
+    const host=$('#lightboxBody'), wrap=document.createElement('div');
+    wrap.className='lbpdf'; host.innerHTML=''; host.appendChild(wrap);
+    for(let i=1;i<=doc.numPages;i++){
+      const page=await doc.getPage(i);
+      const vp=page.getViewport({ scale:1.5 });
+      const cv=document.createElement('canvas');
+      cv.width=Math.floor(vp.width); cv.height=Math.floor(vp.height);
+      await page.render({ canvasContext:cv.getContext('2d'), viewport:vp }).promise;
+      wrap.appendChild(cv);
+    }
+  }catch(e){
+    openLinkPanel(url, label, 'PDF 页内渲染失败（'+((e&&e.message)||e)+'）。可复制链接到 Chrome 打开。');
+  }
+}
+/** 全站统一的「点开」入口。 */
+function openLink(url, label){
+  if(!url) return;
+  let abs=url; try{ abs=new URL(url, location.href).href; }catch(e){}
+  if(!lbSameOrigin(abs)) return openLinkPanel(abs, label, '外部网址：桌面壳开不了新标签页。');
+  if(lbIsPdf(abs)) return openPdfPreview(abs, label);
+  if(lbIsImg(abs)) return openLightbox('<img src="'+esc(abs)+'" alt="'+esc(label||'')+'">', label||'');
+  return openLightbox('<iframe src="'+esc(abs)+'" title="'+esc(label||'')+'"></iframe>', label||'');
+}
+/* 委托：所有 [data-open-link] / [data-open-dir] / [data-open-video] 一个监听器搞定。
+   用委托而非逐个绑定 —— 这些节点分布在多个面板，且部分由 innerHTML 动态重建。 */
+document.addEventListener('click', function(e){
+  const el=e.target && e.target.closest ? e.target.closest('[data-open-link],[data-open-dir],[data-open-video]') : null;
+  if(!el) return;
+  e.preventDefault();
+  if(el.dataset.openDir) return openLinkPanel(el.dataset.openDir, el.dataset.openLabel||'', '这是本机磁盘上的目录（不是网址），请复制路径后在文件资源管理器中打开。');
+  if(el.dataset.openVideo) return openEvidenceVideo(el.dataset.openVideo);
+  openLink(el.dataset.openLink, el.dataset.openLabel||'');
+});
+
+/* ---------- lightbox：页内全屏层（证据放大 / PDF 预览 / 可复制地址） ----------
+   桌面壳（Tauri）里开新窗口的写法一律失效 ⇒ 全部改页内层；
+   点图/录像链接 → 放大展示；点空白/✕/Esc 关闭。入口见 openLink()。 */
 function openLightbox(innerHtml, cap){
   $('#lightboxBody').innerHTML=innerHtml;
   $('#lightboxCap').textContent=cap||'';

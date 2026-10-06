@@ -693,9 +693,41 @@ check('签名可替代请求头的路径清单是显式白名单（含 /api/resu
     /'\/api\/resume\/file'/.test(readText('server/services/authToken.ts')),
   '漏了 /api/resume/file ⇒ 控制台「预览简历」按钮恒 401');
 check('控制台简历预览用后端签发的 previewUrl（不是自己拼裸路径）',
-  /openLightbox\('<iframe src="'\+esc\(b\.dataset\.prev\)/.test(readText('public/console.html')) && !/window\.open\(b\.dataset\.prev/.test(readText('public/console.html')) &&
+  /openLink\(b\.dataset\.prev/.test(readText('public/console.html')) && !/window\.open\(/.test(readText('public/console.html')) &&
     /data-prev="'\+esc\(pv\)/.test(readText('public/console.html')),
-  '桌面壳（Tauri）拦截 window.open ⇒ 预览必须改页内 lightbox；签名 URL 也不可省（iframe 发不出请求头）');
+  '桌面壳（Tauri）拦截 window.open ⇒ 预览必须走统一出口 openLink()；签名 previewUrl 照旧不可省');
+// 全站「点开」收敛到唯一出口（2026-10-06 D6）：桌面壳静默吞掉「开新窗口」的两种写法，
+// 且 wry 默认禁 msPdfOOUI ⇒ 外壳内嵌 PDF 查看器不可靠、不能拿 iframe 兜底。
+// 任一处漏改 = 用户看到「点了没反应」，而三道门禁全绿。
+{
+  const cHtml = readText('public/console.html');
+  check('控制台不再出现 target 的新窗口链接（桌面壳开不了新窗口，点击被静默吞掉）',
+    (cHtml.match(/target="_blank"/g) || []).length === 0,
+    '命中 ' + (cHtml.match(/target="_blank"/g) || []).length + ' 处');
+  check('控制台不再直接调用 window.open（同上）',
+    (cHtml.match(/window\.open\(/g) || []).length === 0);
+  check('统一「点开」出口齐备：openLink + pdf.js 预览 + 可复制地址面板 + 委托监听',
+    /function openLink\(/.test(cHtml) && /function openPdfPreview\(/.test(cHtml)
+    && /function openLinkPanel\(/.test(cHtml)
+    && /\[data-open-link\],\[data-open-dir\],\[data-open-video\]/.test(cHtml),
+    '缺出口 ⇒ 改过的链接又会退化成「点了没反应」');
+  // 🔴 $$ vs $：$ 只返回**单个**元素，对它调 .forEach 直接 TypeError，
+  //    而这类绑定都写在 try/异步流程里 ⇒ 整块静默失效：按钮点了毫无反应，三道门禁却全绿。
+  //    实测（2026-10-06 D6）：一次编辑脚本把 $$('[data-prev]') 写成了 $(...) ⇒ 简历「预览」全废。
+  check('预览按钮的绑定用 $$ 而不是 $（$ 只取第一个元素，.forEach 必然 TypeError 且静默失效）',
+    /\$\$\('\[data-prev\]'\)\.forEach/.test(cHtml) && !/(^|[^$])\$\('\[data-prev\]'\)/.test(cHtml),
+    '写成 $(...) ⇒ 一个版本按钮都绑不上，页面不报错、点了没反应');
+  check('没有任何地方对 $() 的结果调 forEach/map/filter（$ 是 querySelector，返回单元素）',
+    !/(^|[^$])\$\('[^']*'\)\s*\.(forEach|map|filter)/.test(cHtml),
+    '$ 选多元素必 TypeError')
+  check('反向护栏：确有一批链接已改走 data-open-*（防正则写错 ⇒ 上面两条恒绿）',
+    (cHtml.match(/data-open-(link|dir|video)=/g) || []).length >= 8,
+    '命中 ' + (cHtml.match(/data-open-(link|dir|video)=/g) || []).length + ' 处');
+  check('vendored pdf.js 随包存在（否则页内 PDF 预览必失败）',
+    fs.existsSync(path.join(ROOT, 'public/vendor/pdfjs/pdf.min.mjs'))
+    && fs.existsSync(path.join(ROOT, 'public/vendor/pdfjs/pdf.worker.min.mjs'))
+    && fs.statSync(path.join(ROOT, 'public/vendor/pdfjs/pdf.worker.min.mjs')).size > 500000);
+}
 // 控制台那条裸 fetch 必须带上令牌，否则「鉴权一开，自动回复就用不了」
 // （而它走的是 GET，正是这次要收紧的对象）。
 check('控制台调 /api/auto-reply/run 时带上令牌头',
