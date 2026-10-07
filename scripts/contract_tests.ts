@@ -745,9 +745,24 @@ check('控制台简历预览用后端签发的 previewUrl（不是自己拼裸�
 }
 // 控制台那条裸 fetch 必须带上令牌，否则「鉴权一开，自动回复就用不了」
 // （而它走的是 GET，正是这次要收紧的对象）。
-check('控制台调 /api/auto-reply/run 时带上令牌头',
-  /fetch\(url,\s*\{headers:\s*authHeaders\(\)\}\)/.test(readText('public/console.html')),
-  '裸 fetch 不带 X-Auth-Token ⇒ 鉴权开启后自动回复恒 401，用户会以为是登录态坏了');
+{
+  // ⚠️ 不能把正则钉成 `{headers:authHeaders()}}` 这一个**精确形状**：2026-10-07 给这条请求加了
+  //    `signal`（点「停止」要能立刻断开本地流，见下面的「自动回复按钮」一节）之后，它就从
+  //    「带令牌」变成「疑似裸 fetch」—— 断言红得没错，但它测的是「参数长什么样」，而不是
+  //    「令牌带没带上」。⇒ 只钉 headers 是 authHeaders()，后面允不允许别的选项不该影响它。
+  const cFetch = readText('public/console.html');
+  // ⚠️ 末尾是 `\}\)`（先转义 }、再转义 )），别写成 `\)\}` —— 装反之后两条断言会同时红，
+  //    而正则**打印出来一模一样**，只有逐码点 diff 才看得出（2026-10-07 实测踩过）。
+  const tokenRe = /fetch\(url,\s*\{headers:\s*authHeaders\(\)(?:\s*,[^}]*)?\}\)/;
+  check('控制台调 /api/auto-reply/run 时带上令牌头',
+    tokenRe.test(cFetch),
+    '裸 fetch 不带 X-Auth-Token ⇒ 鉴权开启后自动回复恒 401，用户会以为是登录态坏了');
+  check('上面那条正则确有区分力（裸 fetch 必假；带 signal 但没令牌也必假；本次形状必真）',
+    !tokenRe.test('const resp=await fetch(url);')
+    && !tokenRe.test('fetch(url, {signal:ctrl.signal})')
+    && tokenRe.test('fetch(url, {headers:authHeaders(), signal:ctrl.signal})'),
+    '');
+}
 
 // ═══════════════════════════════════════════════════════════
 console.log('\n══════ A3. 回复话术的「事实边界」兜底（防编造个人信息） ══════');
@@ -4922,6 +4937,75 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('后端：上面那条扫描确有区分力（变量形式不误报、字面量形式抓得住）',
     !/listApplications\(\s*[1-9]\d*\s*[,)]/.test('db.listApplications(limit, offset, filter)')
     && /listApplications\(\s*[1-9]\d*\s*[,)]/.test('db.listApplications(2000)'), '');
+}
+
+// ── 自动回复「开始/停止」按钮：可用性必须由客户端自己决定（2026-10-07 用户实测）──
+// 症状：点「停止」之后「开始自动回复」按钮半天不弹回来（一直是灰的、点不动），状态停在「连接中…」。
+// 根因两层，都在前端：
+//  ① 恢复按钮的语句被放在 try/catch **之后**，而 try 里「响应不 OK 就 return」会跳过它
+//     ⇒ 服务端一次 409 就能把按钮**永久**按死（页面不报错，只能刷新控制台）。
+//  ② 恢复按钮的**时机**绑在「SSE 流结束」上。而 /api/auto-reply/stop 只是给后端一个中止信号，
+//     运行器要到下一个中止检查点才收尾（可能正卡在一次 CDP 调用或 AI 生成里）⇒ 期间按钮一直灰。
+// 「按钮弹不弹得回来」静态看不出来，但「恢复语句在不在 finally 里」「abort 在不在 POST 之前」
+// 是能机械钉住的 —— 这两条就是本节的判据。
+{
+  const rbHtml = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8')
+    .replace(/<!--[\s\S]*?-->/g, '');          // ⚠️ stripComments 不认 HTML 的 <!-- -->
+  // ⚠️ 归一行尾后再做**按行定位**：本文件的 console.html 是纯 CRLF，而下面要用 '\n});' 找边界。
+  //    不归一 ⇒ 边界永远找不到、切片恒空 ⇒ 这一节的断言全部恒绿（本仓库最经典的坑）。
+  const rb = stripComments(rbHtml).replace(/\r\n/g, '\n');
+  const rcnt = (hay: string, needle: string) => hay.split(needle).length - 1;
+  const handlerOf = (id: string) => {
+    const i = rb.indexOf(`$('#${id}').addEventListener('click'`);
+    if (i < 0) return '';
+    const j = rb.indexOf('\n});', i);          // 顶层绑定的收尾（两处都是行首 });）
+    return rb.slice(i, j > i ? j : Math.min(rb.length, i + 6000));
+  };
+  const runH = handlerOf('replyRun');
+  const stopH = handlerOf('replyStop');
+
+  check('自动回复按钮：两个 handler 切片都足够长（切片恒空/被第一个内部 $(\'# 截断 ⇒ 下面几条会被满足）',
+    runH.length > 800 && stopH.length > 400,
+    `run=${runH.length}B stop=${stopH.length}B`);
+  check('自动回复按钮：顶层声明 REPLY_RUN（保存本页正在监听的那条流；没有它就没法「本地」断开）',
+    rcnt(rb, 'let REPLY_RUN = null;') === 1, `cnt=${rcnt(rb, 'let REPLY_RUN = null;')}`);
+  check('自动回复按钮：运行请求带 AbortSignal（不带 ⇒ 点停止只能干等服务端把流收尾）',
+    rcnt(runH, 'signal:ctrl.signal') === 1, `cnt=${rcnt(runH, 'signal:ctrl.signal')}`);
+  // ⚠️ 这个 handler 里有**两处** btn.disabled=false;，两处都正当 —— 别把判据写成「全文件只有一处」：
+  //    ① 登录态异常、用户点了「取消」的那条早退（在 try **之前** ⇒ finally 覆盖不到它，必须自己恢复）；
+  //    ② finally 里那条（本次新增，覆盖「中途任何失败/中止」）。
+  //    要钉的是「② 确实在 finally 里」，而不是「只有一处」。
+  check('🔴 自动回复按钮：恢复按钮在 finally 里（放在 try/catch 之后 ⇒ 一次非 200 响应就永久按死）',
+    rcnt(runH, '}finally{') === 1 && rcnt(runH, 'btn.disabled=false;') === 2
+    && /finally\{[\s\S]*?btn\.disabled=false;\s*\}/.test(runH),
+    `finally=${rcnt(runH, '}finally{')} disabled=${rcnt(runH, 'btn.disabled=false;')}`);
+  check('自动回复按钮：登录态异常时的「取消」早退路径仍自己恢复按钮（它在 try 之前，finally 覆盖不到）',
+    /if\(!go\)\{[\s\S]{0,120}?btn\.disabled=false;/.test(runH), '');
+  check('自动回复按钮：AbortError 不得被写成「失败」（用户主动停的不是错误，写成失败会误导排查）',
+    runH.includes("e.name==='AbortError'"), '');
+  check('自动回复按钮：非 200 给可操作提示（409 = 上一次还没收尾），不是裸 HTTP 409',
+    runH.includes('resp.status===409'), '');
+  check('🔴 自动回复按钮：停止时**先**本地 abort、**再** POST /stop（反了 ⇒ 按钮仍要等服务端收尾）',
+    rcnt(stopH, 'REPLY_RUN.abort()') === 1
+    && stopH.indexOf('REPLY_RUN.abort()') < stopH.indexOf("api('/api/auto-reply/stop'"),
+    `abort@${stopH.indexOf('REPLY_RUN.abort()')} post@${stopH.indexOf("api('/api/auto-reply/stop'")}`);
+  check('🔴 自动回复按钮：abort 之后、POST 之前就恢复按钮，中间不夹 await（这一行是「回弹」快慢的全部秘密）',
+    rcnt(stopH, 'btn.disabled=false;') === 1
+    && stopH.indexOf('btn.disabled=false;') > stopH.indexOf('REPLY_RUN.abort()')
+    && stopH.indexOf('btn.disabled=false;') < stopH.indexOf("await api('/api/auto-reply/stop'"),
+    `abort@${stopH.indexOf('REPLY_RUN.abort()')} disabled@${stopH.indexOf('btn.disabled=false;')} post@${stopH.indexOf("await api('/api/auto-reply/stop'")}`);
+  check('自动回复按钮：停止信号仍照发给后端（只断本地流 = 后端继续跑，那是「假停止」）',
+    stopH.includes("api('/api/auto-reply/stop'"), '');
+  check('自动回复按钮：「顺序」判据确有区分力（空串/倒序/缺 needle 都必须判假，否则它可能恒真）',
+    (() => {
+      const ok = (s: string) => s.indexOf('btn.disabled=false;') > s.indexOf('REPLY_RUN.abort()')
+        && s.indexOf('btn.disabled=false;') < s.indexOf("await api('/api/auto-reply/stop'");
+      const good = "REPLY_RUN.abort() REPLY_RUN=null; btn.disabled=false; await api('/api/auto-reply/stop'";
+      const bad1 = "await api('/api/auto-reply/stop' X btn.disabled=false; REALY abort()";
+      const bad2 = "btn.disabled=false; X REPLY_RUN.abort() X await api('/api/auto-reply/stop'";
+      // 空串：indexOf 全 -1 ⇒ -1 > -1 为假 ⇒ 必须判假（会恒真的写法在这里现形）
+      return ok(good) === true && ok(bad1) === false && ok(bad2) === false && ok('') === false;
+    })(), '');
 }
 
 console.log(`\n══════ 合约测试汇总 ══════`);

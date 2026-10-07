@@ -3818,6 +3818,10 @@ async function checkReplyLogin(){
 }
 
 /* auto reply (SSE 流式消费) */
+/** 本页正在监听的那条单次运行流（null = 没有）。存在的理由见 #replyStop 的注释：
+ *  按钮可用性必须由**客户端自己**决定，不能等服务端把 SSE 流收尾 —— 那个收尾要等运行器
+ *  走到下一个中止检查点，而它可能正卡在一次 CDP 调用或 AI 生成里，几秒到几十秒不定。 */
+let REPLY_RUN = null;
 $('#replyRun').addEventListener('click', async ()=>{
   const btn=$('#replyRun'); btn.disabled=true;
   const out=$('#replyOut'); out.textContent=''; $('#replyStatus').textContent='连接中…';
@@ -3833,11 +3837,13 @@ $('#replyRun').addEventListener('click', async ()=>{
   const url='/api/auto-reply/run?platform='+encodeURIComponent(platform)
     +'&realSend='+realSend+'&unreadOnly='+unreadOnly;
   let sent=0, skipped=0, total=0;
+  // 本页这条流自己的中止开关：点「停止」时用它**立刻**断开客户端，不等服务端收尾。
+  const ctrl=new AbortController(); REPLY_RUN=ctrl;
   try{
     // 鉴权开启时这条也要带令牌：它是 GET，但 realSend=1 会真的发消息，
     // 而服务端已把它列进「带副作用的 GET」（裸 fetch 默认不带任何头）。
-    const resp=await fetch(url, {headers:authHeaders()});
-    if(!resp.ok||!resp.body){ const t=await resp.text().catch(()=>''); out.textContent=t||('HTTP '+resp.status); $('#replyStatus').textContent='失败'; return; }
+    const resp=await fetch(url, {headers:authHeaders(), signal:ctrl.signal});
+    if(!resp.ok||!resp.body){ const t=await resp.text().catch(()=>''); out.textContent=t||('HTTP '+resp.status); $('#replyStatus').textContent=(resp.status===409)?'上一次运行还没收尾（后端仍在运行）—— 稍等 1~2 秒再点':'失败'; return; }
     const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
     while(true){
       const {done,value}=await reader.read(); if(done) break;
@@ -3869,12 +3875,34 @@ $('#replyRun').addEventListener('click', async ()=>{
       }
     }
     $('#replyStatus').textContent='完成（事件 '+total+' · 发送 '+sent+' · 跳过 '+skipped+'）';
-  }catch(e){ out.textContent += (out.textContent?NL:'')+'错误：'+e.message; $('#replyStatus').textContent='失败'; }
-  btn.disabled=false;
+  }catch(e){
+    // 🔴 点「停止」时我们从客户端 abort 了这条流 ⇒ 这里必然收到 AbortError。
+    //    它不是失败：状态文案已由 #replyStop 写好，**绝不能**覆盖成「失败」。
+    if(!(e && e.name==='AbortError')){ out.textContent += (out.textContent?NL:'')+'错误：'+e.message; $('#replyStatus').textContent='失败'; }
+  }finally{
+    // 🔴 恢复按钮必须放在 finally。原实现把恢复语句放在 try/catch **之后**，而 try 里那条
+    //    「响应不 OK 就 return」会跳过它 ⇒ 服务端一次 409（上一次运行还没收尾时就是）就能把
+    //    「开始自动回复」永久按死：页面不报错、按钮再也不弹回来，只能刷新控制台。
+    if(REPLY_RUN===ctrl) REPLY_RUN=null;
+    btn.disabled=false;
+  }
 });
+/** 停止：**先断开本页这条流，再通知后端**。
+ *  🔴 顺序不能反，也不能只做后半截 —— 这正是「点了停止、开始按钮半天不弹回来」的根因：
+ *     POST /api/auto-reply/stop 只是给后端一个中止信号，运行器要到下一个中止检查点才真的
+ *     收尾（中间可能正卡在一次 CDP 调用或 AI 生成里），这期间 res 一直不 end，而原实现把
+ *     #replyRun 的 disabled 绑在「SSE 流结束」上 ⇒ 按钮一直是灰的、点不动。
+ *     客户端 abort 是**本地动作**，当场生效；后端那条信号照发（不发就真的停不下来）。 */
 $('#replyStop').addEventListener('click', async ()=>{
-  try{ await api('/api/auto-reply/stop', {method:'POST'}); $('#replyStatus').textContent='已发送停止信号'; }
-  catch(e){ $('#replyStatus').textContent='停止失败：'+e.message; }
+  const listening=!!REPLY_RUN;
+  if(REPLY_RUN){ try{ REPLY_RUN.abort(); }catch(e){ /* 已结束，忽略 */ } REPLY_RUN=null; }
+  // 这一行是「回弹」快慢的全部秘密：它不等任何网络往返。
+  const btn=$('#replyRun'); if(btn) btn.disabled=false;
+  $('#replyStatus').textContent = listening ? '已停止（本页已断开，正在通知后端…）' : '已通知后端停止（本页没有正在监听的运行）';
+  try{
+    await api('/api/auto-reply/stop', {method:'POST'});
+    if(listening) $('#replyStatus').textContent='已停止';
+  }catch(e){ $('#replyStatus').textContent='本页已断开，但停止信号没发出去：'+e.message; }
 });
 $('#replyCheck').addEventListener('click', checkReplyLogin);
 $('#replyPlatform').addEventListener('change', ()=>{ checkReplyLogin(); showReplyCalibNote(); });
