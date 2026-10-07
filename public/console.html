@@ -855,9 +855,13 @@
            数据同源（GET /api/jobs），不做任何二次写库。 -->
       <section class="view" id="view-jobs">
         <div class="card">
+          <!-- 计数口径：`#jobsCount` 写的是「筛出 N / 库内 M」，M 来自服务端真数
+               （`GET /api/jobs` 的 total = SQL COUNT(*)）。它原来恒等于**被 LIMIT 1000
+               截断后**的长度 —— 库里 2945 条时页面一直显示「1000 个岗位」，不报错、
+               不告警，看着就像个写死的常量。 -->
           <h2>校招信息库 <span class="tag" id="jobsCount">加载中…</span></h2>
           <div class="row2" style="margin-bottom:10px">
-            <div><input id="jobsQ" placeholder="搜索公司 / 职位 / JD 关键词…" /></div>
+            <div><input id="jobsQ" placeholder="搜索公司 / 职位 / 城市 / JD 关键词…" /></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <select id="jobsSource"><option value="">全部平台</option></select>
               <select id="jobsCity"><option value="">全部城市</option></select>
@@ -872,7 +876,17 @@
                 <option value="expired">已截止</option>
                 <option value="none">未填截止</option>
               </select>
-              <button class="btn" id="jobsReset" title="把搜索框、四个下拉和快捷标签一起恢复成「不筛」；不影响当前视图">重置筛选</button>
+              <!-- 排序：**必须**能在「最新入库」和「匹配分」之间切。
+                   旧接口只按匹配分排（`(match_score IS NULL), match_score DESC`），库里有分的
+                   1322 条恰好占满前 1000 名 ⇒ 还没评分的新岗位全被挤掉，页面看起来就像
+                   「岗位池不会更新」。默认改成最新入库，`match` 档把旧口径原样留着。
+                   ⚠️ 它**不是**筛选条件 ⇒ 刻意不放进 JOBS_FILTER_SELECTS（「重置筛选」不该
+                      顺手把排序也重置了 —— 那会让人以为按钮把页面弄坏了）。 -->
+              <select id="jobsSort" title="排序在分页之前生效">
+                <option value="new">排序：最新入库</option>
+                <option value="match">排序：匹配分优先</option>
+              </select>
+              <button class="btn" id="jobsReset" title="把搜索框、四个下拉和快捷标签一起恢复成「不筛」；不影响当前视图与排序">重置筛选</button>
               <button class="btn" id="jobsRefresh">刷新</button>
             </div>
           </div>
@@ -895,6 +909,27 @@
             </table>
           </div>
           <div class="kcg" id="jobsCards" style="display:none;margin-top:10px"></div>
+          <!-- 分页条：只在多于 1 页时显示（见 renderJobsPager）。
+               分页做在**筛选 + 排序之后**（jobsSorted → jobsPage），所以「搜索 + 翻页」是
+               复合的：搜到 30 条就只翻这 30 条，不会出现「搜出 2 条却说共 2945 条」。
+               为什么不做成服务端分页：本页筛选里有「截止倒计时的**本地日历**档位」这类判断
+               （手机通过局域网访问时，浏览器时区未必等于服务端时区），搬进 SQL 就等于把口径
+               复制给后端一份，两套必然漂移；而 40 个前端单测钉的正是这一份口径。
+               量级实测：2945 条**轻量列** = 1.7 MiB（jd 正文不下发，它一项就占 60.9%），
+               本机/局域网回环，不值得为它引入第二套筛选口径。 -->
+          <div id="jobsPager" class="note small" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <button class="btn sm" id="jobsPrev">‹ 上一页</button>
+            <span id="jobsPageInfo">—</span>
+            <button class="btn sm" id="jobsNext">下一页 ›</button>
+            <label style="display:flex;align-items:center;gap:6px;margin-left:6px">每页
+              <select id="jobsPageSize" style="width:auto">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+            <span id="jobsLoadNote" style="color:var(--warn)"></span>
+          </div>
         </div>
       </section>
 
@@ -1808,6 +1843,9 @@ function navigate(view){
   if(view==='dashboard') loadDashboard();
   if(view==='apps') loadMyApps();
   if(view==='jobs') loadJobs();
+  // 离开「校招信息库」必须把轮询停掉，否则它会一直在后台打接口 —— 而用户早就不看这一页了。
+  // 放在 navigate 的**末尾**统一调用（而不是塞进上面那一行）：停表与开表是同一个判断。
+  jobsPollSync();
   if(view==='jobsadd') loadJobsAdd();
   // 自动填充页有**两块**要初始化：表单记忆（form_memory）+ 自动填充信息（profile 53 项）。
   // 少写一个 ⇒ 进页面看到的是「点『刷新』读取…」的静态占位，看着像加载慢、其实是没接线。
@@ -2273,19 +2311,30 @@ function renderMatchHistory(){
   }
 }
 
-function mtPreviewJd(){
+/** 岗位预览。头部信息同步就有（来自列表），JD 正文要**按 id 单取** ——
+ *  列表接口刻意不下发正文（`jd` 一项占响应体 60.9%）。
+ *  🔴 **绝不能**用 `j.jd` 判「这个岗位有没有 JD」：那个字段现在恒为 undefined，
+ *     会把**每一个**岗位都说成「没有真 JD 文本」—— 而库里 80% 的岗位有正文。
+ *     这是「把缺失当结论」的老毛病，判据改用列表下发的 `has_jd`，正文再单独取。 */
+async function mtPreviewJd(){
   const host = $('#mtJdPreview'); if(!host) return;
   const id = ($('#mtJob') && $('#mtJob').value) || '';
   const j = MT_JOBS.filter(x=>x.id === id)[0];
   if(!j){ host.textContent = '从上方选择岗位后显示…'; return; }
   const d = deadlineInfo(j.deadline);
-  host.innerHTML = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>'
+  const head = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>'
     + '<div class="small muted" style="margin:4px 0 8px">'+esc(jobSrcName(j.source))
     + (j.city ? ' · '+esc(j.city) : '') + (j.job_type ? ' · '+esc(j.job_type) : '')
-    + ' · '+esc(d.text)+'</div>'
-    + (j.jd && String(j.jd).trim()
-        ? esc(String(j.jd).slice(0, 1200))
-        : '<span class="muted">该岗位没有真 JD 文本（只有卡片摘要或长图）—— 直接匹配分数会偏低，建议切「粘贴 JD」手工补充。</span>');
+    + ' · '+esc(d.text)+'</div>';
+  const none = '<span class="muted">该岗位没有真 JD 文本（只有卡片摘要或长图）—— 直接匹配分数会偏低，建议切「粘贴 JD」手工补充。</span>';
+  if(!j.has_jd){ host.innerHTML = head + none; return; }
+  host.innerHTML = head + '<div class="small muted">读取 JD 正文…</div>';
+  const full = await fetchJobFull(id);
+  // 等待期间用户又换了岗位 ⇒ 这次结果作废。否则面板会显示**上一个**岗位的 JD，
+  // 而它看起来完全正常（标题对、正文错），是最难被发现的那种错。
+  if((($('#mtJob') && $('#mtJob').value) || '') !== id) return;
+  const jd = full && full.jd ? String(full.jd) : '';
+  host.innerHTML = head + (jd ? esc(jd.slice(0, 1200)) : none);
 }
 
 async function loadMatch(){
@@ -2306,8 +2355,16 @@ async function loadMatch(){
   const js = $('#mtJob');
   if(js && !js.dataset.filled){
     try{ const r = await api('/api/jobs'); MT_JOBS = (r && r.jobs) || []; }catch(e){ MT_JOBS = []; }
-    js.innerHTML = '<option value="">选择岗位…</option>' + MT_JOBS.slice(0,300).map(j=>
-      '<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('');
+    // 🔴 下拉一次列几千个选项既卡又没法用，所以确实要限量 —— 但**限量必须写在选项里**：
+    //    否则用户在下拉里找不到某个岗位时会以为「这个岗位不在库里」，而库里其实有。
+    const MT_JOB_MAX = 300;
+    const mtShown = MT_JOBS.slice(0, MT_JOB_MAX);
+    js.innerHTML = '<option value="">选择岗位…</option>' + mtShown.map(j=>
+      '<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('')
+      + (MT_JOBS.length > mtShown.length
+          ? '<option value="" disabled>—— 下拉只列前 ' + mtShown.length + ' 个（共 ' + MT_JOBS.length
+            + ' 个）；要挑其它岗位请到「校招信息库」搜索后点「详情」——</option>'
+          : '');
     js.dataset.filled = '1';
     js.addEventListener('change', mtPreviewJd);
     if(js.options.length > 1){ js.selectedIndex = 1; mtPreviewJd(); }
@@ -2593,15 +2650,22 @@ async function loadResumeMake(){
 }
 
 /* ---------- 简历优化 ---------- */
-function optimizePreviewJd(){
+/** 同 mtPreviewJd：JD 正文按 id 单取，判据用 `has_jd` 而不是恒为 undefined 的 `j.jd`。 */
+async function optimizePreviewJd(){
   const host = $('#opJd'); if(!host) return;
   const id = ($('#opJob') && $('#opJob').value) || '';
   const j = OP_JOBS.filter(x=>x.id === id)[0];
   if(!j){ host.textContent = '选择岗位后显示…'; return; }
-  host.innerHTML = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>'
-    + (j.jd && String(j.jd).trim()
-        ? '<div style="margin-top:6px">'+esc(String(j.jd).slice(0,1200))+'</div>'
-        : '<div class="muted" style="margin-top:6px">该岗位无真 JD 文本 —— 定制效果会打折。</div>');
+  const head = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>';
+  const none = '<div class="muted" style="margin-top:6px">该岗位无真 JD 文本 —— 定制效果会打折。</div>';
+  if(!j.has_jd){ host.innerHTML = head + none; return; }
+  host.innerHTML = head + '<div class="muted" style="margin-top:6px">读取 JD 正文…</div>';
+  const full = await fetchJobFull(id);
+  if((($('#opJob') && $('#opJob').value) || '') !== id) return;
+  const jd = full && full.jd ? String(full.jd) : '';
+  host.innerHTML = head + (jd
+    ? '<div style="margin-top:6px">'+esc(jd.slice(0, 1200))+'</div>'
+    : none);
 }
 
 function optimizeReportHtml(r, sugg){
@@ -4413,10 +4477,17 @@ async function loadRecList(){
   const src=$('#recSource').value, st=$('#recStatus').value;
   const q = new URLSearchParams(); if(src) q.set('source',src); if(st) q.set('status',st);
   let jobs=[]; try{ const r = await api('/api/jobs?'+q.toString()); jobs = (r&&r.jobs)||[]; }catch(e){}
-  $('#recCount').textContent = jobs.length+' 个';
+  // 🔴 上限本身是合理的（一次往 DOM 里塞 2900 行没有意义），但**必须写在界面上**：
+  //    原来这里写「2945 个」而表格只画 200 行 —— 同一页上两个数字互相矛盾，没有任何地方
+  //    会报错，用户只会以为「筛出来就这么些」。**上限不是问题，静默的上限才是。**
+  const REC_MAX = 200;
+  const shown = jobs.slice(0, REC_MAX);
+  $('#recCount').textContent = (jobs.length > shown.length)
+    ? ('显示前 ' + shown.length + ' / 共 ' + jobs.length + ' 个')
+    : (jobs.length + ' 个');
   const tb = $('#recTbl tbody');
   if(!jobs.length){ tb.innerHTML='<tr><td colspan="7" class="empty">无数据</td></tr>'; return; }
-  tb.innerHTML = jobs.slice(0,200).map(j=>{
+  tb.innerHTML = shown.map(j=>{
     let jd='<span class="badge b-mut">无</span>';
     if(j.jd && (j.jd+'').trim()) jd='<span class="badge b-info">真JD</span>';
     else if(j.jd_source==='image'||(j.jd_images&&j.jd_images!=='[]'&&j.jd_images)) jd='<span class="badge b-pur">长图</span>';
@@ -4466,15 +4537,19 @@ $('#ocrRetry').addEventListener('click', async ()=>{
 });
 
 async function showJob(id){
-  let j=null; try{ const r = await api('/api/jobs'); j=(r.jobs||[]).find(x=>x.id===id); }catch(e){}
-  openModal('岗位详情', '<div class="kv"><span>公司</span><b>'+esc(j&&j.company)+'</b></div>'
-    + '<div class="kv"><span>职位</span><b>'+esc(j&&j.position)+'</b></div>'
-    + '<div class="kv"><span>平台</span><b>'+esc(j&&pfName(j.source))+'</b></div>'
-    + '<div class="kv"><span>城市</span><b>'+esc(j&&j.city)+'</b></div>'
-    + '<div class="kv"><span>薪资</span><b>'+esc(j&&j.salary)+'</b></div>'
-    + '<div class="kv"><span>匹配分</span><b>'+esc(j&&j.match_score)+'</b></div>'
-    + (j&&j.jd?'<div style="margin-top:10px"><b>JD：</b></div><div class="note" style="white-space:pre-wrap;max-height:240px;overflow:auto">'+esc(j.jd)+'</div>':'')
-    + (j&&j.card_text?'<div class="note warn" style="margin-top:10px">卡片摘要（非岗位描述）：'+esc(j.card_text.slice(0,200))+'</div>':'')
+  // 🔴 单条取**全字段**。这里原来是「重打一遍整个列表再从里面 find 一条」——
+  //    每点一次「详情」就把整个岗位池搬过网一次；而现在列表接口刻意不下发 `jd` 正文
+  //    （它一项就占响应体 60.9%），拿列表的行来渲染详情会得到一片空白。
+  const j = await fetchJobFull(id);
+  if(!j){ openModal('岗位详情', '<div class="empty">读不到这个岗位（可能已被删除，或服务暂时不可用）。</div>'); return; }
+  openModal('岗位详情', '<div class="kv"><span>公司</span><b>'+esc(j.company)+'</b></div>'
+    + '<div class="kv"><span>职位</span><b>'+esc(j.position)+'</b></div>'
+    + '<div class="kv"><span>平台</span><b>'+esc(pfName(j.source))+'</b></div>'
+    + '<div class="kv"><span>城市</span><b>'+esc(j.city)+'</b></div>'
+    + '<div class="kv"><span>薪资</span><b>'+esc(j.salary)+'</b></div>'
+    + '<div class="kv"><span>匹配分</span><b>'+esc(j.match_score)+'</b></div>'
+    + (j.jd?'<div style="margin-top:10px"><b>JD：</b></div><div class="note" style="white-space:pre-wrap;max-height:240px;overflow:auto">'+esc(j.jd)+'</div>':'')
+    + (j.card_text?'<div class="note warn" style="margin-top:10px">卡片摘要（非岗位描述）：'+esc(j.card_text.slice(0,200))+'</div>':'')
   );
 }
 async function showJdImage(id){
@@ -4585,8 +4660,17 @@ async function loadJdImgSelect(){
 
 /* ---------- advanced ---------- */
 async function fillJobSelect(sel){
-  let jobs=[]; try{ const r = await api('/api/jobs?status=candidate'); jobs=(r.jobs||[]).slice(0,200); }catch(e){}
-  sel.innerHTML = '<option value="">选择岗位…</option>' + jobs.map(j=>'<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('');
+  let jobs=[]; try{ const r = await api('/api/jobs?status=candidate'); jobs=(r.jobs||[]); }catch(e){}
+  // 🔴 候选一千多个，下拉只列前 200 个（这个上限是必要的）—— 但**必须写在选项里**：
+  //    原来界面上完全看不出来，用户会以为「待投的岗位就这 200 个」，
+  //    而「库里明明有、下拉里找不到」正是最容易被当成 bug 报上来的形态。
+  //    返回值仍是**全量**（调用方用它做 id → 岗位的查找，不该被显示上限影响）。
+  const ADV_JOB_MAX = 200;
+  const shown = jobs.slice(0, ADV_JOB_MAX);
+  sel.innerHTML = '<option value="">选择岗位…</option>' + shown.map(j=>'<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('')
+    + (jobs.length > shown.length
+        ? '<option value="" disabled>—— 只列前 ' + shown.length + ' 个（共 ' + jobs.length + ' 个）——</option>'
+        : '');
   return jobs;
 }
 async function loadAdvanced(){
@@ -4787,6 +4871,43 @@ let JOBS_TAGS = new Set();
 let JOBS_VIEW = 'table';
 /** 「数据变了、你先前选的那一档已经不存在了」的筛选项名 —— 静默撤掉筛选条件比报错更伤人。 */
 let JOBS_FILTER_DROPPED = [];
+/* ── 分页 / 排序 / 计数口径（本次新增） ──────────────────────────────────────
+ * 🔴 为什么这三样必须一起加：`GET /api/jobs` 原来是**写死 LIMIT 1000** 的，而页面把
+ *    「取到几条」当成「库里共几条」显示 —— 库里 2945 条时页面永远写着「1000 个岗位」，
+ *    看着就像个常量。而旧排序 `(match_score IS NULL), match_score DESC, created_at DESC`
+ *    让有分的 1322 条占满前 1000 名 ⇒ **还没评分的新岗位一条都进不来**（实测库里
+ *    最新入库的 10 条，命中 0 条）。取全量之后必须配分页，否则 2945 行一次铺进 DOM。 */
+/** 每页条数（分页做在**筛选 + 排序之后**，见 jobsPage）。 */
+let JOBS_PAGE = 100;
+let JOBS_PAGE_NO = 1;
+/** 每页上限。**渲染上限只允许有这一处** —— 表格/卡片各写一个 slice 就是两个上限，
+ *  迟早一个改了另一个没改，而两处看起来都「正常」。 */
+const JOBS_PAGE_MAX = 200;
+/** 服务端回报的**库内总数**（SQL COUNT(*)），与「本次真取到几条」是两回事。
+ *  null = 没拿到（老后端/请求失败）⇒ 界面退回用本地条数，并且**不冒充**库内总数。 */
+let JOBS_TOTAL = null;
+/** 本次真取到的条数。与 JOBS_TOTAL 不等时必须在界面上说明（见 renderJobsPager）。 */
+let JOBS_FETCHED = 0;
+/** 排序：'new' = 最新入库优先（缺省）；'match' = 匹配分优先（旧行为，仍可切回）。 */
+let JOBS_SORT = 'new';
+/** 关键词**深搜**命中的岗位 id：列表接口不再下发 jd 正文（占响应体 60.9%），
+ *  而「搜 JD 关键词」是页面承诺过的能力 ⇒ 由服务端在**全库**上 LIKE，只回 id，
+ *  前端把它当**并集**并进本地命中（只多不少）。空 Set = 纯本地搜索。 */
+let JOBS_DEEP_HIT = new Set();
+/** 深搜的请求序号：异步返回时只认最后一次，否则快速输入会渲染出**旧关键词**的结果。 */
+let JOBS_DEEP_SEQ = 0;
+/** 搜索防抖句柄（本地即时渲染 + 深搜回来后补一次）。 */
+let JOBS_Q_T = null;
+/* ── 自动刷新（「实时更新」的那一半：数字对 + 内容新） ──────────────────────────
+ * 🔴 只在「校招信息库」这一个视图可见、且标签页未被隐藏时才跑：
+ *    后台标签页每 60s 打一次接口是纯浪费，切走之后还在拉更是白烧用户的电和流量
+ *    （控制台会长期开在一边）。 */
+/** 上一次取数时岗位池的「形状」指纹。轮询发现它变了才重拉全量。 */
+let JOBS_POLL_SIG = '';
+/** 轮询定时器句柄。 */
+let JOBS_POLL_T = null;
+/** 轮询间隔。60s 的依据：采集是分钟级的动作，密于此只会让每次探测都得到同一个答案。 */
+const JOBS_POLL_MS = 60000;
 /**
  * 参与「重置筛选」与事件绑定的**全部**筛选控件 —— 一处声明，两处使用。
  * 🔴 为什么必须是常量：重置按钮和 change 绑定各抄一份清单的话，将来加一个下拉很容易只加进
@@ -4850,7 +4971,11 @@ function jobsFiltered(opt){
     if(q){
       const blob = [j.company,j.position,j.city,j.job_type,jobSrcName(j.source),j.jd,j.card_text]
         .map(x=>String(x==null?'':x)).join(' ').toLowerCase();
-      if(blob.indexOf(q) < 0) return false;
+      // 🔴 这里的 `j.jd` 恒为 undefined —— 列表接口刻意不下发 JD 正文（它一项就占响应体
+      //    60.9%），所以**必须**补上服务端深搜的命中集，否则「搜 JD 关键词」会静默失效，
+      //    而搜索框的 placeholder 里明明白白写着「JD 关键词」。
+      //    并集语义：服务端多搜只会多命中，少搜才会漏（漏了没有任何地方会报错）。
+      if(blob.indexOf(q) < 0 && !JOBS_DEEP_HIT.has(j.id)) return false;
     }
     return true;
   });
@@ -5049,11 +5174,14 @@ function jobsApplyView(){
   $$('#jobsViewTabs [data-jobview]').forEach(b=>b.classList.toggle('active', b.dataset.jobview === JOBS_VIEW));
 }
 
-/** 表格视图。 */
+/** 表格视图。
+ *  ⚠️ 这里**也**不再写 `slice(0,300)` —— 与本页卡片视图一样，渲染上限只允许有
+ *     `JOBS_PAGE_MAX` 一处。两处各写一个上限时的表现是：页脚说「共 1000 个」，
+ *     表格却只画了 300 行，而**两个数字都在同一个页面上**、谁也不觉得对方有问题。 */
 function renderJobsTable(list){
   const tb = $('#jobsTbl tbody'); if(!tb) return;
   if(!list.length){ tb.innerHTML = '<tr><td colspan="9" class="empty">没有匹配的岗位</td></tr>'; return; }
-  tb.innerHTML = list.slice(0,300).map(j=>{
+  tb.innerHTML = list.map(j=>{
     const d = deadlineInfo(j.deadline);
     const sc = (j.match_score != null) ? j.match_score : '–';
     const applied = j.status === 'applied' ? ' <span class="badge b-ok">已投</span>' : '';
@@ -5072,14 +5200,38 @@ function renderJobsTable(list){
   bindJobsRows('#jobsTbl');
 }
 
-/** 卡片视图。复用「我的投递」的 jobCardHtml —— 同一份渲染器，两处显示的字段不可能漂移。 */
+/** 卡片视图。复用「我的投递」的 jobCardHtml —— 同一份渲染器，两处显示的字段不可能漂移。
+ *  ⚠️ 这里**不再**写 `list.slice(0,300)`：渲染上限只允许有 JOBS_PAGE_MAX 这一处，
+ *     否则卡片视图的「翻页」是假的（永远只看得到前 300 条）而表格视图正常 ——
+ *     两处看着都对，只有对着数才知道差了一截。 */
 function renderJobsCards(list){
   const host = $('#jobsCards'); if(!host) return;
   if(!list.length){ host.innerHTML = '<div class="none">没有匹配的岗位</div>'; return; }
-  host.innerHTML = list.slice(0,300).map(j=>
+  host.innerHTML = list.map(j=>
     jobCardHtml(j, '<button class="btn sm" data-jv="'+esc(j.id)+'">详情</button>'
       + '<button class="btn sm" data-jdel="'+esc(j.id)+'">删</button>')).join('');
   bindJobsRows('#jobsCards');
+}
+
+/** 按 id 取单条岗位的**全字段**（含 `jd` 正文）。
+ *  🔴 列表接口刻意不下发 `jd` / `requirements` / `match_detail`（实测占响应体 79%，
+ *     `jd` 一项就 60.9%），所以「要看正文」的地方必须走这里。
+ *     在此之前 `showJob()` 的做法是**再打一遍整个列表**再从里面 find 一条 ——
+ *     每点一次「详情」就把岗位池整份搬过网一次，列表越全代价越大。
+ *  读不到返回 null（调用方自己决定说什么），绝不抛 —— 详情面板不该因为一次网络抖动整个挂掉。 */
+async function fetchJobFull(id){
+  if(!id) return null;
+  try{ const r = await api('/api/jobs/' + encodeURIComponent(id)); return (r && r.job) || null; }
+  catch(e){ return null; }
+}
+
+/** 岗位池的「当前形状」指纹 —— 轮询用它判断**服务端到底变没变**。
+ *  🔴 不能只比条数：采集器会**更新**已存在的岗位（去重后是 UPDATE 而非 INSERT），
+ *     条数不变但内容变了。所以取「总数 + 最新一条的 id 与 updated_at」。
+ *     取三个字段就够，不必把整库拉下来比。 */
+function jobsSignature(){
+  const head = JOBS_CACHE[0] || null;
+  return [JOBS_TOTAL, JOBS_CACHE.length, head ? head.id : '', head ? head.updated_at : ''].join('|');
 }
 
 async function loadJobs(){
@@ -5087,17 +5239,86 @@ async function loadJobs(){
   tb.innerHTML = '<tr><td colspan="9" class="empty">加载中…</td></tr>';
   const cd = $('#jobsCards'); if(cd) cd.innerHTML = '<div class="none">加载中…</div>';
   try{
-    const r = await api('/api/jobs');
+    // 🔴 `limit=0` = 不分页（全量），**显式写出来**：服务端缺省也是 0，但把意图写在
+    //    请求里，将来谁把服务端缺省改回某个数字时，这里不会跟着被静默截断。
+    const r = await api('/api/jobs?limit=0&sort=' + encodeURIComponent(JOBS_SORT));
     JOBS_CACHE = (r && r.jobs) || [];
+    JOBS_FETCHED = JOBS_CACHE.length;
+    // 真数来自 SQL COUNT(*)，与「本次取到几条」是两回事；拿不到就置 null ⇒ 界面退回本地
+    // 条数并且**不冒充**库内总数（显示 null 当成 0 是「静默给出错数字」的老毛病）。
+    JOBS_TOTAL = (r && typeof r.total === 'number') ? r.total : null;
     // 标签定义随列表一起下发（服务端是唯一真相源）。老后端没有这个字段 ⇒ 退化成 []，
     // chip 行会写明「当前后端未下发标签定义」，而不是静默留一片空白。
     JOBS_TAG_DEFS = (r && r.tagDefs) || [];
+    JOBS_POLL_SIG = jobsSignature();
   }catch(e){
     tb.innerHTML = '<tr><td colspan="9" class="empty">加载失败：'+esc(e.message)+'</td></tr>';
     const s = $('#jobsStat'); if(s) s.textContent = '';
     return;
   }
+  // 重新取数后原页码没有意义：取数前停在「第 12 页」，取回来只有 3 页就会渲染一片空白，
+  // 而用户完全看不出是「取没了」还是「翻过头了」。
+  JOBS_PAGE_NO = 1;
   renderJobs();
+}
+
+/** 排序。**必须在分页之前**做 —— 先切页再排序的话，排序只作用于当前这一页，
+ *  用户看到的是「每一页各自有序、整体无序」，而且改一下每页条数结论就变。
+ *  'new'  ：按 `created_at` 倒序（同值时按 id 兜底）。
+ *  'match'：有匹配分的在前、分高的在前（旧口径）；无分的排在最后并**按最新入库排** ——
+ *           旧实现里无分那批的相对顺序由 SQLite 自由决定，翻页会来回抖。
+ *  ⚠️ id 是「平台前缀 + 哈希」的 ASCII 串 ⇒ 用 `<` 比较结果是确定的。
+ *     别改成 localeCompare：那受本机区域设置影响，同一份数据在两台机器上可能排出两种顺序。
+ */
+function jobsSorted(list){
+  const arr = list.slice();
+  const cmpNew = (a, b)=>{
+    const x = String(a.created_at||''), y = String(b.created_at||'');
+    if(x !== y) return x < y ? 1 : -1;
+    const u = String(a.id||''), v = String(b.id||'');
+    return u === v ? 0 : (u < v ? 1 : -1);
+  };
+  if(JOBS_SORT !== 'match'){ arr.sort(cmpNew); return arr; }
+  const score = (o)=>{
+    const v = o.match_score;
+    return (v == null || String(v).trim() === '') ? null : Number(v);
+  };
+  arr.sort((a, b)=>{
+    const sa = score(a), sb = score(b);
+    if(sa === null && sb === null) return cmpNew(a, b);
+    if(sa === null) return 1;           // 没有分 ⇒ 排到最后
+    if(sb === null) return -1;
+    return sa === sb ? cmpNew(a, b) : (sb - sa);
+  });
+  return arr;
+}
+
+/** 对**筛选 + 排序后**的结果做客户端分页。
+ *  页码越界时自动夹住：搜索把 12 页压成 1 页后页码若还停在 7，就会渲染出一片空白，
+ *  而用户完全看不出是「筛没了」还是「翻过头了」。（与「我的投递」同一套约法。） */
+function jobsPage(list){
+  const per = Math.min(JOBS_PAGE_MAX, Math.max(1, JOBS_PAGE));
+  const pages = Math.max(1, Math.ceil(list.length / per));
+  JOBS_PAGE_NO = Math.min(Math.max(1, JOBS_PAGE_NO), pages);
+  const from = (JOBS_PAGE_NO - 1) * per;
+  return { rows: list.slice(from, from + per), pages, from, per };
+}
+
+function renderJobsPager(pg){
+  const bar = $('#jobsPager'); if(!bar) return;
+  bar.style.display = (pg.pages > 1) ? 'flex' : 'none';
+  const info = $('#jobsPageInfo');
+  if(info) info.textContent = '第 ' + JOBS_PAGE_NO + ' / ' + pg.pages + ' 页';
+  const prev = $('#jobsPrev'), next = $('#jobsNext');
+  if(prev) prev.disabled = JOBS_PAGE_NO <= 1;
+  if(next) next.disabled = JOBS_PAGE_NO >= pg.pages;
+  // 🔴 「取到几条」与「库内几条」不等时必须说出来。这是「页面显示的不是库内真数」这类缺陷
+  //    **唯一**的自动发现点 —— 它不会让任何门禁变红，只是数字悄悄偏小，而界面长得一模一样。
+  const nt = $('#jobsLoadNote');
+  if(nt){
+    nt.textContent = (JOBS_TOTAL != null && JOBS_TOTAL !== JOBS_FETCHED)
+      ? '⚠️ 库内 ' + JOBS_TOTAL + ' 条，本次只取到 ' + JOBS_FETCHED + ' 条（有截断）' : '';
+  }
 }
 
 function renderJobs(){
@@ -5111,18 +5332,26 @@ function renderJobs(){
 
   const q = jobsCtlVal('#jobsQ').trim().toLowerCase();
   const all = JOBS_CACHE;
-  const list = jobsFiltered();
+  // 🔴 顺序不能换：筛选 → 排序 → 分页。任何一步换序都会让「翻页」看到另一批数据。
+  const list = jobsSorted(jobsFiltered());
+  const pg = jobsPage(list);
   // chip 的条数依赖当前条件 ⇒ 必须在本轮重算，不能沿用上一次渲染的字符串
   renderJobsChips();
 
+  // 三层口径一起给：本页第几条到第几条 / 筛出多少 / 库内多少。
+  // 只报一个数正是本次要修的缺陷 —— 读者无从分辨那是库内总数还是显示上限，
+  // 而它当时恒等于**被 LIMIT 1000 截断后**的长度（库里 2945 条时永远写「1000 个岗位」）。
+  const denom = (JOBS_TOTAL == null) ? all.length : JOBS_TOTAL;
   const cnt = $('#jobsCount');
-  if(cnt) cnt.textContent = (list.length === all.length) ? (all.length+' 个岗位') : (list.length+' / '+all.length+' 个');
+  if(cnt) cnt.textContent = (list.length === denom) ? (denom+' 个岗位') : (list.length+' / '+denom+' 个');
   const st = $('#jobsStat');
   if(st){
     const base = all.length
-      ? '岗位池共 '+all.length+' 个，当前筛出 '+list.length+' 个' + (q ? '（关键词「'+q+'」）' : '')
+      ? '岗位池共 '+denom+' 个，当前筛出 '+list.length+' 个' + (q ? '（关键词「'+q+'」）' : '')
       : '岗位库为空 —— 去「添加岗位」录一条，或到「投递中心」采集。';
     let extra = '';
+    if(pg.pages > 1) extra += '　｜　本页第 '+(pg.from+1)+'–'+(pg.from+pg.rows.length)+' 条（共 '+pg.pages+' 页）';
+    if(JOBS_SORT === 'match') extra += '　｜　按匹配分排序：无匹配分的岗位排在最后';
     if(JOBS_TAGS.size) extra += '　｜　快捷标签：'+Array.from(JOBS_TAGS).join(' + ');
     // 被禁用的筛选器必须在这里说清原因：否则用户只看到「下拉是灰的」，分不清是自己没选对
     // 还是数据压根没有 —— 这正是「静默失效」最伤人的地方。
@@ -5134,7 +5363,11 @@ function renderJobs(){
   // 只渲染**当前可见**的那一个视图：两个都渲染会让每次按键都建两遍 DOM，
   // 而隐藏的那个还可能与可见的那个不同步（各自一套数据 ⇒ 迟早分成两种结果）。
   // 切视图走 renderJobs 重跑，代价是一次本地过滤（无网络请求）。
-  if(JOBS_VIEW === 'card') renderJobsCards(list); else renderJobsTable(list);
+  // ⚠️ 两个视图都只吃**分页后**的 pg.rows。卡片视图此前额外写过 `slice(0,300)`，
+  //    于是「翻页」对卡片视图根本无效（永远只看得到前 300 条），而表格视图看着正常。
+  //    渲染上限**只允许有 JOBS_PAGE_MAX 这一处**。
+  if(JOBS_VIEW === 'card') renderJobsCards(pg.rows); else renderJobsTable(pg.rows);
+  renderJobsPager(pg);
   jobsApplyView();
 }
 
@@ -5149,17 +5382,117 @@ function jobsResetFilters(){
   renderJobs();
 }
 
-$('#jobsQ').addEventListener('input', renderJobs);
+/** 关键词**深搜**：`jd` 正文不再随列表下发，但「搜 JD 关键词」这个能力不能丢 ——
+ *  而且它原来只在**被截断的前 1000 条**里搜，现在是在全库上搜。
+ *  @return 命中集是否已是最新（false = 这次响应过期/被更新的请求取代，调用方不要重渲染）。 */
+async function jobsDeepSearch(){
+  const q = jobsCtlVal('#jobsQ').trim();
+  // 少于 2 个字符不值得打后端：`LIKE '%x%'` 会命中大半个库，既慢又没意义。
+  // ⚠️ 这个门槛必须与后端 `searchJobIds` 的**一致**：前端更低会白等一个恒空的结果，
+  //    更高则「本地搜得到、JD 搜不到」，两套行为用户无法解释。
+  if(q.length < 2){ JOBS_DEEP_HIT = new Set(); JOBS_DEEP_SEQ++; return true; }
+  const seq = ++JOBS_DEEP_SEQ;
+  let ids = [];
+  try{
+    const r = await api('/api/jobs?ids=1&q=' + encodeURIComponent(q));
+    ids = (r && r.ids) || [];
+  }catch(e){
+    // 深搜失败 ⇒ 退回纯本地搜索。**绝不**因此把结果清空（那等于「网络抖一下就搜不到东西」）。
+    ids = [];
+  }
+  // 过期响应直接丢：连续输入时先发的请求可能后回来，否则会渲染出**上一个关键词**的结果。
+  if(seq !== JOBS_DEEP_SEQ) return false;
+  if(jobsCtlVal('#jobsQ').trim() !== q) return false;
+  JOBS_DEEP_HIT = new Set(ids);
+  return true;
+}
+
+/* ---------- 岗位池自动刷新（「实时更新」的那一半：数字对 + 内容新） ---------- */
+/** 该不该继续轮询。两条都要满足：① 当前停在「校招信息库」；② 标签页没被切到后台。
+ *  ⚠️ 少任何一条都会变成「用户早就不看这一页了，浏览器还在每 60s 打接口」。
+ *  判据取 **DOM 真相**（`#view-jobs` 有没有 .active），与 navigate() 同一口径 ——
+ *  另设一个 currentView 变量就等于把「当前在哪一页」存了两份，迟早有一份是旧的。 */
+function jobsPollWanted(){
+  const v = $('#view-jobs');
+  const onJobs = !!(v && v.classList && v.classList.contains('active'));
+  const visible = (typeof document === 'undefined') || document.hidden !== true;
+  return onJobs && visible;
+}
+
+/** 一次轮询：先打**轻量探测**（只要最新 1 条 + 总数），确认真变了才重拉全量。
+ *  🔴 直接重拉全量是错的：60s 一次 × 1.7 MiB，而采集是分钟级的动作 —— 绝大多数探测
+ *     拿到的都是同一个答案。探测响应只有几百字节。
+ *  抽成顶层函数（而不是塞进 setInterval 的匿名回调）是为了**能被探针直接调用**：
+ *  否则「轮询到底管不管用」只能靠等 60 秒来验证，那就没人会去验它。 */
+async function jobsPollTick(){
+  if(!jobsPollWanted()) return false;
+  let r = null;
+  try{ r = await api('/api/jobs?limit=1&sort=new'); }catch(e){ return false; }
+  if(!r || typeof r.total !== 'number') return false;
+  const head = ((r.jobs || [])[0]) || null;
+  // 指纹 = 总数 + 最新一条的 id 与 updated_at。
+  // 🔴 不能只比条数：采集器撞到已存在的岗位时走的是 UPDATE，条数不变而内容变了。
+  // 🔴 也不能用 JOBS_CACHE.length 参与比较：本地可能只取到一部分（老后端截断），
+  //    那时「条数相等但库已经变了」⇒ 拿条数比会**永远探测不到变化**。
+  const remote = [r.total, head ? head.id : '', head ? head.updated_at : ''].join('|');
+  const local  = [JOBS_TOTAL, (JOBS_CACHE[0] || {}).id || '', (JOBS_CACHE[0] || {}).updated_at || ''].join('|');
+  if(remote === local) return false;
+  await loadJobs();
+  return true;
+}
+
+/** 开/停轮询。幂等：重复调用不会叠出两个定时器。 */
+function jobsPollSync(){
+  const want = jobsPollWanted();
+  if(want && JOBS_POLL_T == null){
+    JOBS_POLL_T = setInterval(()=>{ jobsPollTick(); }, JOBS_POLL_MS);
+  } else if(!want && JOBS_POLL_T != null){
+    clearInterval(JOBS_POLL_T); JOBS_POLL_T = null;
+  }
+}
+
+// 搜索框：本地即时渲染（防抖）+ 深搜回来后补一次。
+// 两段式是刻意的：等深搜回来再渲染会让每次按键都慢一个往返；只渲染本地则 JD 命中会缺席。
+// 顺序不能反（先深搜再渲染）——否则深搜期间的输入会被它自己覆盖。
+$('#jobsQ').addEventListener('input', ()=>{
+  clearTimeout(JOBS_Q_T);
+  JOBS_PAGE_NO = 1;                 // 关键词变了，原页码没有意义
+  renderJobs();                     // ① 本地即时：轻量字段立刻筛出来
+  JOBS_Q_T = setTimeout(async ()=>{  // ② 深搜补齐 JD 命中集后再渲染一次
+    if(await jobsDeepSearch()) renderJobs();
+  }, 220);
+});
 JOBS_FILTER_SELECTS.forEach(sel=>{
-  const e = $(sel); if(e) e.addEventListener('change', renderJobs);
+  const e = $(sel); if(e) e.addEventListener('change', ()=>{ JOBS_PAGE_NO = 1; renderJobs(); });
 });
 $('#jobsReset').addEventListener('click', jobsResetFilters);
 $('#jobsRefresh').addEventListener('click', loadJobs);
+// 排序：**本地**重排（全量数据在手），零请求 —— 但必须回到第 1 页：
+// 停在「第 12 页」时换个排序，看到的是新顺序里毫不相干的一段，而用户以为自己还在看开头。
+$('#jobsSort').addEventListener('change', (e)=>{
+  JOBS_SORT = (e.target.value === 'match') ? 'match' : 'new';
+  JOBS_PAGE_NO = 1;
+  renderJobs();
+});
+// 分页：翻页只重渲染，不重新拉数据（全量已在 JOBS_CACHE 里）。
+$('#jobsPrev').addEventListener('click', ()=>{ JOBS_PAGE_NO--; renderJobs(); });
+$('#jobsNext').addEventListener('click', ()=>{ JOBS_PAGE_NO++; renderJobs(); });
+$('#jobsPageSize').addEventListener('change', (e)=>{
+  JOBS_PAGE = Math.max(1, Number(e.target.value) || 100);
+  JOBS_PAGE_NO = 1;            // 每页条数变了，原页码没有意义
+  renderJobs();
+});
 // 切视图只改 JOBS_VIEW 再重跑 renderJobs：单一渲染入口，不存在「隐藏的那半没更新」。
 $$('#jobsViewTabs [data-jobview]').forEach(b=>b.addEventListener('click', ()=>{
   JOBS_VIEW = b.dataset.jobview;
   renderJobs();
 }));
+// 标签页切到后台就停表、切回来立刻补一次 —— 只在 visibilitychange 上开开关，
+// 不额外做「切回来先探一次」的特例：jobsPollSync 之后那一拍本来就会跑。
+document.addEventListener('visibilitychange', ()=>{
+  jobsPollSync();
+  if(jobsPollWanted()) jobsPollTick();
+});
 
 /* ---------- 添加岗位 ---------- */
 function loadJobsAdd(){

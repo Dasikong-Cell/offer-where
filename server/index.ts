@@ -1448,15 +1448,70 @@ app.post("/api/resume/parse", async (req, res) => {
 
 // ============= 岗位池（Offerbiu / 手动） =============
 
+/** 岗位池单次取数的硬顶（`?limit=` 之上限），否则 `?limit=999999999` 就把整库搬过网。 */
+const JOBS_MAX_LIMIT = 5000;
+
+/**
+ * GET /api/jobs
+ *   &source= &status=  精确筛选（走 SQL）
+ *   &sort= new（缺省，最新入库优先）| match（匹配分优先）
+ *   &limit= 本页条数（**0 = 不分页，全量**；缺省 0，上限 JOBS_MAX_LIMIT）
+ *   &offset= 跳过前几条（仅 limit > 0 时生效）
+ *   &ids=1&q=<关键词>  深搜模式：只在全库上找命中的 id（见 db.searchJobIds）
+ * 回 `{ jobs, total, limit, offset, sort, tagDefs }`。
+ *
+ * 🔴 三个修复点，全属「截断发生在筛选/排序之前」这一族：
+ *  ① `limit` 缺省从写死的 **1000** 改成 **0（全量）**。原来是 `params.push(opts.limit || 1000)`,
+ *     一个**与库大小无关的硬上限**：库里 2945 条时页面永远显示「1000 个岗位」。
+ *     连带受害者是下拉候选、快捷标签、筛选器禁用判断 —— 它们全从被切断的集合里推，于是
+ *     页面写出「岗位库里没有任何一条记录带标签」这种**与事实相反**的说明（库里 993 条带标签、
+ *     115 条带截止日），而「截止状态」下拉被误判成恒空并禁用。
+ *  ② `total` 改成 `db.countJobs()`（真数）。原来写 `list.length` —— 那是截断后的长度。
+ *  ③ 默认排序从「匹配分优先」改成「最新入库优先」。这不只是口味问题：旧排序是
+ *     `(match_score IS NULL), match_score DESC, created_at DESC LIMIT 1000`，库里有分的
+ *     1322 条恰好排满前 1000 名 ⇒ **所有还没评分的新岗位（1612 条）一条都进不来**。
+ *     实测：库里 `created_at` 最新的 10 条，在旧接口返回的 1000 条里命中 **0** 条。
+ *     （`?sort=match` 仍可拿回旧口径。）
+ *  ④ 响应体只回**轻量列**（`db.listJobsLean`，不含 jd/requirements/match_detail）。
+ *     全字段全量约 5.9 MiB，轻量约 1.7 MiB。要 jd 正文请走 `GET /api/jobs/:id`。
+ */
 app.get("/api/jobs", (req, res) => {
   try {
-    const { source, status } = req.query;
-    const list = db.listJobs({ source: source as string, status: status as string });
+    const filter = {
+      source: req.query.source ? String(req.query.source) : undefined,
+      status: req.query.status ? String(req.query.status) : undefined,
+    };
+    const sort: db.JobSort = req.query.sort === 'match' ? 'match' : 'new';
+
+    // ── 深搜模式：JD 正文不搬过网，但「搜 JD 关键词」这个能力不能丢。
+    // 前端把命中的 id 当**并集**并进本地命中，所以这里多搜无害、少搜才会漏。
+    if (String(req.query.ids || '') === '1') {
+      const q = String(req.query.q || '');
+      const ids = db.searchJobIds(q, filter);
+      return res.json({ ids, matched: ids.length, total: db.countJobs(filter), q });
+    }
+    // 传了 q 却不在深搜模式 ⇒ 明确 400。静默忽略才是真麻烦：调用方会以为
+    // 「服务端按关键词筛过了」，实际拿到的是全量，然后拿全量去展示一个筛选后的界面。
+    if (req.query.q !== undefined) {
+      return res.status(400).json({
+        error: '按关键词取数请加 &ids=1（只回命中的 id）；本接口的 jobs 恒为全量/分页结果，不按 q 过滤',
+      });
+    }
+
+    const rawLimit = req.query.limit === undefined ? 0 : Number(req.query.limit);
+    const limit = !Number.isFinite(rawLimit) ? 0
+      : rawLimit <= 0 ? 0
+        : Math.min(JOBS_MAX_LIMIT, Math.floor(rawLimit));
+    const rawOffset = Number(req.query.offset);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+
+    const total = db.countJobs(filter);
+    const jobs = db.listJobsLean({ ...filter, limit, offset, sort });
     // tagDefs：「校招信息库」快捷关注标签的定义（key / label / hint）。
     // 由服务端下发而不是前端再抄一份 —— 抄一份就是第二个真相源，改一边忘一边时
     // 前端会渲染出后端根本不认识的标签，点下去恒 0 条且没有任何地方会报错。
     // 前端只用它拿「展示顺序 + 文案」，**是否渲染某个标签仍由数据实测值决定**（count > 0）。
-    res.json({ jobs: list, total: list.length, tagDefs: CARD_UI_TAGS });
+    res.json({ jobs, total, limit, offset, sort, tagDefs: CARD_UI_TAGS });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "获取岗位失败" });
   }
@@ -2421,6 +2476,30 @@ app.post("/api/jobs/locate", async (req, res) => {
 /** 排除词表（打招呼决策的默认排除项，前端只读展示） */
 app.get("/api/jobs/exclude-keywords", (_req, res) => {
   res.json({ keywords: DEFAULT_EXCLUDE_KEYWORDS });
+});
+
+/**
+ * GET /api/jobs/:id —— 单个岗位的**全字段**（含 `jd` 正文）。
+ *
+ * 🔴 为什么要单开一个端点：`GET /api/jobs` 现在只回轻量列（`jd` 一项就占响应体
+ *    60.9%），而「详情」恰恰要看正文。在此之前 `showJob()` 的做法是**再打一遍
+ *    `GET /api/jobs`，然后从里面 find 一条** —— 每点一次「详情」就把整个岗位池
+ *    搬过网一次，而且列表越全代价越大（这正是本次要修的缺陷的放大器）。
+ *
+ * ⚠️ **注册位置有硬约束**：必须在所有静态子路径（`/api/jobs/image-jd`、
+ *    `/api/jobs/remote-stat`、`/api/jobs/ocr-status`、`/api/jobs/interview-prep`、
+ *    `/api/jobs/exclude-keywords` 等）**之后**。Express 按注册顺序匹配，`:id` 是个
+ *    通配段 —— 放前面会把上面那几个接口整个吞掉（返回「岗位不存在」404，而没有任何
+ *    地方会报错）。合约测试里有一条断言机械地钉住这个顺序。
+ */
+app.get("/api/jobs/:id", (req, res) => {
+  try {
+    const job = db.getJob(String(req.params.id));
+    if (!job) return res.status(404).json({ error: "岗位不存在" });
+    res.json({ job });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "获取岗位详情失败" });
+  }
 });
 
 /** 对指定岗位批量「邮箱直投」（channel=email + realSend，SSE 进度） */

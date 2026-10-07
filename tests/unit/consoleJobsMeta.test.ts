@@ -19,13 +19,17 @@ import {
   makeEl, makeSelect, evalIn, setState, fnOf, type StubEl,
 } from '../support/consoleHarness.js';
 
-/** 「校招信息库」用到的顶层函数（抠不到就断言失败，见 extractFn）。 */
+/** 「校招信息库」用到的顶层函数（抠不到就断言失败，见 extractFn）。
+ *  ⚠️ 新增一个被 renderJobs 调用的顶层函数时**必须**加进这里 —— 少了它沙箱里就是
+ *     ReferenceError，整个 B 批单测一起红，而报错信息只指向「某个函数不存在」。 */
 const FN_NAMES = [
   'esc', 'deadlineInfo', 'deadlineMatch', 'jobSrcName',
   'jobTags', 'jobHasTag', 'jobGrad', 'jobsCtlVal', 'jobsFiltered',
   'setJobsOptions', 'fillJobsFilters', 'jobsFilterAvailability', 'jobsAvailTags',
   'syncJobsTags', 'jobsSoonChipHtml', 'renderJobsChips', 'bindJobsRows', 'jobsApplyView',
   'renderJobsTable', 'renderJobsCards', 'renderJobs', 'jobsResetFilters', 'jobCardHtml',
+  // 分页 / 排序 / 计数口径（renderJobs 依次调用它们 —— 顺序即管线：筛 → 排 → 分页）
+  'jobsSorted', 'jobsPage', 'renderJobsPager',
 ];
 
 /** 下拉用 `<select>` 桩（带浏览器语义），其余用普通元素桩。 */

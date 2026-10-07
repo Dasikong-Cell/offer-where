@@ -1006,14 +1006,134 @@ export interface JobRow {
   updated_at: string;
 }
 
-export function listJobs(opts: { source?: string; status?: string; limit?: number } = {}): JobRow[] {
-  let sql = 'SELECT * FROM jobs WHERE 1=1';
-  const params: any[] = [];
-  if (opts.source) { sql += ' AND source = ?'; params.push(opts.source); }
-  if (opts.status) { sql += ' AND status = ?'; params.push(opts.status); }
-  sql += ' ORDER BY (match_score IS NULL), match_score DESC, created_at DESC LIMIT ?';
-  params.push(opts.limit || 1000);
-  return db.prepare(sql).all(...params) as JobRow[];
+/** 岗位池列表的取数选项（内部脚本与路由共用）。 */
+export interface JobListOpts {
+  source?: string;
+  status?: string;
+  /**
+   * 正数 = 本页最多几条；**<= 0 = 不分页（全量）**。
+   * 🔴 默认值从 `1000` 改成 **0（全量）**，这是本次缺陷的根因所在：
+   *    原来是 `params.push(opts.limit || 1000)` —— 一个**与库大小无关的硬上限**。
+   *    所有「先取一批、再在应用层筛」的调用点（批量投递、自动回复、JD 回填、
+   *    以及控制台的校招信息库）都在**静默地**只看到前 1000 条，谁都不报错。
+   */
+  limit?: number;
+  offset?: number;
+  /** `'new'` = 最新入库优先（默认）；`'match'` = 匹配分优先（旧行为）。 */
+  sort?: JobSort;
+}
+
+/** 岗位池排序口径。 */
+export type JobSort = 'new' | 'match';
+
+/**
+ * 两个排序口径的 ORDER BY。
+ * 🔴 **都必须带 `id DESC` 兜底**：`created_at` 是毫秒时刻，同毫秒入库的一批岗位
+ *    （采集器批量写库时非常常见 —— 实测一次能有一屏同毫秒的行）在 LIMIT/OFFSET 下
+ *    顺序由引擎自由决定，翻页时会**漏掉或重复**记录，而每一页单独看都「没问题」。
+ */
+export function jobOrderBy(sort: JobSort = 'new'): string {
+  return sort === 'match'
+    ? ' ORDER BY (match_score IS NULL), match_score DESC, created_at DESC, id DESC'
+    : ' ORDER BY created_at DESC, id DESC';
+}
+
+/** 岗位池 WHERE 片段与参数（列表 / 计数 / 深搜**必须共用这一份**）。 */
+function jobWhere(opts: { source?: string; status?: string } = {}): { sql: string; params: string[] } {
+  const conds: string[] = [];
+  const params: string[] = [];
+  if (opts.source) { conds.push('source = ?'); params.push(String(opts.source)); }
+  if (opts.status) { conds.push('status = ?'); params.push(String(opts.status)); }
+  return { sql: conds.length ? ' WHERE ' + conds.join(' AND ') : '', params };
+}
+
+/**
+ * 岗位池**总数**——与分页/截断无关，任何时候都返回「库里符合条件的条数」。
+ * 存在的理由：`GET /api/jobs` 原来把 `total` 写成 `list.length`，那是**被 LIMIT 1000
+ * 截断后**的长度 ⇒ 恒 ≤ 1000。控制台拿它当「库内共多少」显示，于是库里 2945 条时
+ * 页面说「1000 个岗位」，而且没有任何地方会报错（数字看着完全合理）。
+ */
+export function countJobs(opts: { source?: string; status?: string } = {}): number {
+  const w = jobWhere(opts);
+  return (query<{ c: number }>(`SELECT COUNT(*) c FROM jobs${w.sql}`, w.params)[0] || { c: 0 }).c;
+}
+
+/**
+ * 岗位池取数（**全字段**，含 `jd` 正文）。给内部脚本与服务端逻辑用。
+ * ⚠️ 不要拿它直接喂接口 —— 全量全字段响应体约 5.9 MiB，列表请走 `listJobsLean()`。
+ */
+export function listJobs(opts: JobListOpts = {}): JobRow[] {
+  const w = jobWhere(opts);
+  const order = jobOrderBy(opts.sort);
+  if (opts.limit && opts.limit > 0) {
+    return query<JobRow>(
+      `SELECT * FROM jobs${w.sql}${order} LIMIT ? OFFSET ?`,
+      [...w.params, opts.limit, Math.max(0, Math.floor(opts.offset || 0))]);
+  }
+  return query<JobRow>(`SELECT * FROM jobs${w.sql}${order}`, w.params);
+}
+
+/**
+ * 列表页返回的岗位行。
+ *
+ * 🔴 **刻意不含 `jd` / `requirements` / `match_detail`**（用 Omit 而不是把字段填 null：
+ *    填 null 会让调用方以为「这个岗位没有 JD」，而 Omit 让「想在列表里用 jd」
+ *    在**编译期**就报错 —— 要正文请走 `GET /api/jobs/:id`）。
+ *    实测这三个字段占响应体的 **79%**（`jd` 一项 60.9% + `match_detail` 17.9%），
+ *    而列表页一个字都不用它们：它是把「响应体大小」从 5.9 MiB 压到 1.7 MiB 的全部秘密。
+ *    `has_jd` 顶上「有没有真 JD」这个**列表页真正要用的信息**（职位记录的「真JD」徽章）。
+ */
+export type JobListRow = Omit<JobRow, 'jd' | 'requirements' | 'match_detail'> & {
+  /** 1 = 有非空 `jd` 正文（等价于原来的 `j.jd && j.jd.trim()`，不把正文搬过网） */
+  has_jd: number;
+};
+
+/** 列表接口的列清单（显式列举，不是 `SELECT *` 再删）。
+ *  🔴 必须显式：`SELECT *` 会把 `jd` 从盘里读出来再在 JS 里删掉 —— 白读 6 MiB。 */
+const JOB_LIST_COLUMNS = [
+  'id', 'source', 'company', 'position', 'city', 'salary', 'apply_url', 'deadline',
+  'job_type', 'grad_year', 'tags', 'match_score', 'matched_at', 'quarantine', 'skip_reason',
+  'card_text', 'jd_images', 'jd_source', 'ocr_status', 'posted_at', 'remote', 'status',
+  'created_at', 'updated_at',
+].join(', ') + ", CASE WHEN jd IS NOT NULL AND TRIM(jd) <> '' THEN 1 ELSE 0 END AS has_jd";
+
+/** 岗位池列表取数（**轻量**，给 `GET /api/jobs` 用）。 */
+export function listJobsLean(opts: JobListOpts = {}): JobListRow[] {
+  const w = jobWhere(opts);
+  const order = jobOrderBy(opts.sort);
+  if (opts.limit && opts.limit > 0) {
+    return query<JobListRow>(
+      `SELECT ${JOB_LIST_COLUMNS} FROM jobs${w.sql}${order} LIMIT ? OFFSET ?`,
+      [...w.params, opts.limit, Math.max(0, Math.floor(opts.offset || 0))]);
+  }
+  return query<JobListRow>(`SELECT ${JOB_LIST_COLUMNS} FROM jobs${w.sql}${order}`, w.params);
+}
+
+/**
+ * 关键词深搜，**只回 id**。
+ *
+ * 存在的理由（两个缺陷叠在一起）：
+ *  ① 列表接口不再下发 `jd` 正文 ⇒ 「搜 JD 关键词」这个页面承诺过的能力会消失；
+ *  ② 原来那个搜索只在**已经被 LIMIT 1000 截断的**行上做，也就是「搜不全」。
+ * 现在改成：服务端在**全库**上做 LIKE，只回命中的 id 列表（最坏也就几十 KB），
+ * 前端把它当**并集**并进本地命中 —— 所以只会比「纯本地搜」多，绝不会少。
+ *
+ * 🔴 故意**不**搜平台名 / 岗位类型：那两维由前端本地覆盖，而前端用的是平台**中文名**
+ *    映射（`jobSrcName`）。服务端再抄一份中文名表就是第二个真相源，改一边忘一边时
+ *    搜索会静默少命中「平台名那一维」的岗位。并集语义下「多搜」安全、「少搜」才有害。
+ */
+export function searchJobIds(q: string, opts: { source?: string; status?: string } = {}): string[] {
+  const kw = String(q == null ? '' : q).trim();
+  if (kw.length < 2) return [];
+  // LIKE 的通配符必须转义：用户搜「50%」时 `%` 会变成「任意串」，命中集凭空放大。
+  const esc = kw.replace(/[\\%_]/g, (m) => '\\' + m);
+  const like = '%' + esc + '%';
+  const w = jobWhere(opts);
+  const cols = ['company', 'position', 'city', 'jd', 'card_text'];
+  const likeSql = cols.map((c) => `COALESCE(${c}, '') LIKE ? ESCAPE '\\'`).join(' OR ');
+  const sql = `SELECT id FROM jobs${w.sql ? w.sql + ' AND' : ' WHERE'} (${likeSql})`
+    + ' ORDER BY created_at DESC, id DESC';
+  return query<{ id: string }>(sql, [...w.params, ...cols.map(() => like)]).map((r) => r.id);
 }
 
 export function getJob(id: string): JobRow | undefined {

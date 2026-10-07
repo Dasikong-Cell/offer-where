@@ -64,6 +64,21 @@ const fails: string[] = [];
 // 必须在顶层定义（原第 1448 行的局部定义让 A2 段的顶层调用取不到它 → 崩溃）。
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const readText = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+/**
+ * 抠出一个 `const NAME = [ … ];` 的字面量正文（含两侧方括号）。找不到返回 ''。
+ *
+ * 🔴 为什么必须有它：`cnt(dbSrc, "'grad_year', 'tags',") === 1` 这类「全文件恰好一次」的断言，
+ *    只要**别处再出现一个列出同一批列的清单**（例如 `JOB_LIST_COLUMNS`）就会变成 2 次而变红
+ *    —— 而红的位置并不是缺陷所在，那是一次**误报**。断言必须限定在它真正要守的那个构造里。
+ *    （`fnBody()` 解决的是同一类问题，但那只适用于函数体，不适用于常量数组。）
+ */
+function constArrayBody(src: string, name: string): string {
+  const at = src.indexOf('const ' + name + ' = [');
+  if (at < 0) return '';
+  const end = src.indexOf(']', at);
+  return end < 0 ? '' : src.slice(at, end + 1);
+}
 function check(name: string, ok: boolean, detail = '') {
   ok ? pass++ : fail++;
   if (!ok) fails.push(name);
@@ -3581,7 +3596,13 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     '缺这段，升级后的老库会直接报 no such column: posted_at');
 
   check('posted_at 进了列白名单（防「列名来自对象键」注入）',
-    countMatches(dbT, /'jd_source', 'ocr_status', 'posted_at', 'remote', 'status',/g) === 1);
+    // ⚠️ 限定在 JOB_UPDATABLE_COLUMNS 这一个数组里计数，**不能**用「全文件恰好一次」：
+    //    db.ts 里还有另一个列清单（`JOB_LIST_COLUMNS`，列表接口的显式列）也含 posted_at，
+    //    全文件计数会因「另一处也列出同一批列」变成 2 而红 —— 那是一次误报，不是缺陷。
+    countMatches(constArrayBody(dbT, 'JOB_UPDATABLE_COLUMNS'),
+      /'jd_source', 'ocr_status', 'posted_at', 'remote', 'status',/g) === 1
+    && countMatches(constArrayBody(dbT, 'JOB_UPDATABLE_COLUMNS'),
+      /'posted_at'/g) === 1);
 
   check('upsertJob 从 card_text 自动解析（已有采集器零改动获得发布时间）',
     countMatches(dbT, /const guess = parsePostedAt\(job\.card_text\)\.date;/g) === 1);
@@ -3674,13 +3695,21 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
   check('添加岗位：岗位类型以 jobType 提交（后端不认直传的 job_type）',
     n1(cH, "jobType: $('#jaType').value || null,") === 1);
 
-  check('校招信息库：loadJobs 真的向 /api/jobs 取数并渲染进 jobsTbl',
+  check('校招信息库：loadJobs 向 /api/jobs 取**全量**（limit=0）并渲染进 jobsTbl',
     // ⚠️ 这里**不能**用 `n1(cH, "api('/api/jobs')") === 1`：showJob（职位记录面板在用）里
     //    也有同一句 ⇒ 计数恒为 2 而失败。改成在 loadJobs 的**函数体内**找调用 ——
     //    既不受别处同名调用影响，也不会因为将来多一处调用而假红。
     (() => {
       const body = (cH.match(/async function loadJobs\(\)\{([\s\S]*?)\n\}/) || [])[1] || '';
-      return body.length > 0 && /api\('\/api\/jobs'\)/.test(body);
+      // 🔴 必须钉住 `limit=0`，不能只钉「调了这个端点」：
+      //    只写 `api('/api/jobs')` 的话，取多少条完全由**服务端缺省值**决定 ——
+      //    谁把缺省改回一个数字，这里就静默退回「只取前 N 条」，页面照常渲染，
+      //    只是岗位池永远少一截、而「库内共几个」也永远偏小（本次缺陷的原始形态）。
+      return body.length > 0
+        && /api\('\/api\/jobs\?limit=0&sort=' \+ encodeURIComponent\(JOBS_SORT\)\)/.test(body)
+        // 真数来自服务端 total，不是本地数组长度：写 `JOBS_TOTAL = JOBS_CACHE.length`
+        // 就等于把「截断后的条数」冒充成「库内条数」，和修之前一模一样地错。
+        && /JOBS_TOTAL = \(r && typeof r\.total === 'number'\) \? r\.total : null;/.test(body);
     })()
     && n1(cHtml, 'id="jobsTbl"') === 1
     // 详情/删除的绑定已抽成 bindJobsRows(scope)：表格与卡片**共用一份**删除逻辑
@@ -3954,7 +3983,10 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
       && cnt(jobsSection, 'class="kcg"') === 1, '');
     check('校招信息库：两块容器**互斥显示**，切视图走同一个渲染入口（不留「隐藏的那半是旧的」）',
       cnt(fnBody(pCode, 'jobsApplyView'), "JOBS_VIEW === 'card'") === 2
-      && cnt(pCode, "if(JOBS_VIEW === 'card') renderJobsCards(list); else renderJobsTable(list);") === 1
+      // 🔴 两个视图的实参都必须是**分页后**的 pg.rows。钉字面量 `list` 会让「渲染全量」
+      //    也满足这条（分页成了看不见的摆设）；而卡片视图原先另写了 `slice(0,300)`，
+      //    于是翻页对它完全无效、表格却正常 —— 两个视图看着都对。
+      && cnt(pCode, "if(JOBS_VIEW === 'card') renderJobsCards(pg.rows); else renderJobsTable(pg.rows);") === 1
       && cnt(pCode, 'JOBS_VIEW = b.dataset.jobview;') === 1,
       '两个视图各渲染一次的话，每次按键建两遍 DOM，且隐藏的那个会与可见的不同步');
     check('校招信息库：卡片视图复用「我的投递」的**同一份**卡片渲染器（两处各写一份必然漂移）',
@@ -3972,9 +4004,14 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     // ⑤ 判据唯一化 + 候选不再是「只建一次」
     check('校招信息库：表格 / 卡片 / chip 计数 / 届别计数**共用同一个**筛选判据',
       cnt(pCode, 'function jobsFiltered(opt){') === 1
-      && cnt(pCode, 'const list = jobsFiltered();') === 1
+      // 🔴 钉住**管线顺序**：筛选 → 排序 → 分页。任何一步换序都会让「翻页」看到另一批数据
+      //    （先分页再排序 ⇒ 每页各自有序、整体无序；先排序再筛选本身没错但白排一遍）。
+      && cnt(pCode, 'const list = jobsSorted(jobsFiltered());') === 1
       && cnt(pCode, 'jobsFiltered({ skipGrad: true })') === 1
       && cnt(pCode, 'jobsFiltered({ tags: new Set([...JOBS_TAGS, d.key]) })') === 1
+      // 排序必须在分页**之前**：`jobsPage(jobsSorted(...))` 才是对的顺序。
+      && cnt(pCode, 'const pg = jobsPage(list);') === 1
+      && cnt(pCode, 'jobsPage(jobsSorted(') === 0
       && cnt(pCode, 'const list = all.filter(') === 0,
       '各写一套的话，chip 上显示 12 条、点下去出来 7 条，谁都不知道该信哪个');
     check('校招信息库：下拉候选不再「只建一次」（采集到新平台/新城市后下拉必须跟着变）',
@@ -3997,7 +4034,9 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
       && cnt(dbSrc, "addJobCol('tags');") === 1
       && cnt(dbSrc, 'ALTER TABLE jobs ADD COLUMN ${name} TEXT') === 1, '');
     check('grad_year / tags 在**四处**写入链路上同步（漏一处 ⇒ 列存在但永远写不进去）',
-      cnt(dbSrc, "'grad_year', 'tags',") === 1
+      // ⚠️ 两条列清单一律限定在 JOB_UPDATABLE_COLUMNS 里数：db.ts 还有 `JOB_LIST_COLUMNS`
+      //    （列表接口的显式列）也列出 grad_year / tags，全文件计数会凭 2 次而误红。
+      cnt(constArrayBody(dbSrc, 'JOB_UPDATABLE_COLUMNS'), "'grad_year', 'tags',") === 1
       && cnt(dbSrc, "'grad_year', 'tags'] as const;") === 1
       && cnt(dbSrc, 'grad_year, tags, match_score') === 1
       && cnt(dbSrc, '@posted_at, @grad_year, @tags, @match_score') === 1
@@ -4027,6 +4066,189 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
       && cnt(bfSrc, 'if (!has(r.grad_year) && d.gradYear) patch.grad_year = d.gradYear;') === 1
       && cnt(bfSrc, 'if (!has(r.tags) && d.tags) patch.tags = d.tags;') === 1
       && cnt(bfSrc, 'if (!has(r.deadline) && d.deadline) patch.deadline = d.deadline;') === 1, '');
+  }
+
+  // ---- 岗位池：真总数 / 全量取数 / 分页排序 / 实时刷新 ----
+  // 缺陷形态（2026-10-07 实测）：
+  //   ① `GET /api/jobs` 是**写死的 LIMIT 1000**（`params.push(opts.limit || 1000)`），
+  //      而 `total` 写成 `list.length` ⇒ 库内 2945 条时页面永远显示「1000 个岗位」；
+  //   ② 默认排序 `(match_score IS NULL), match_score DESC, created_at DESC LIMIT 1000`，
+  //      库里有分的 1322 条恰好占满前 1000 名 ⇒ **还没评分的新岗位一条都进不来**
+  //      （实测库里 created_at 最新的 10 条，命中 0 条）；
+  //   ③ 下拉候选 / 快捷标签 / 筛选器禁用判断全从**这个被切断的集合**里推，于是页面写出
+  //      「岗位库里没有任何一条记录带标签」（库里 993 条带标签）、「截止状态筛选已禁用」
+  //      （库里 115 条带截止日）—— 两句都与事实相反，且不会让任何门禁变红。
+  // 这一批的不变量：**筛选/排序必须发生在截断之前；数字必须来自库，不是来自取回的那一页。**
+  {
+    const pCode = stripComments(pHtml);
+    const jobsSection = sectionOf('view-jobs');
+    const dbSrc = stripComments(fs.readFileSync(new URL('../server/db.ts', import.meta.url), 'utf8'));
+    // server/index.ts 是 CRLF ⇒ 跨行 needle 前先归一（写死 \n 在 CRLF 上静默不匹配）
+    const iSrc = stripComments(fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8'))
+      .replace(/\r\n/g, '\n');
+    const fnBody = (src: string, name: string) => {
+      const m = src.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}'));
+      return m ? m[1] : '';
+    };
+    const jobsHandler = (() => {
+      const i = iSrc.indexOf('app.get("/api/jobs", (req, res) => {');
+      return i < 0 ? '' : iSrc.slice(i, i + 4000);
+    })();
+    const listCols = constArrayBody(dbSrc, 'JOB_LIST_COLUMNS');
+
+    // 反向护栏：切片/抠取失败时，下面所有 `=== 0` / `< 0` 类断言都会被空串满足（本仓库反复踩的恒绿陷阱）
+    check('岗位池断言自检：handler / 列表列清单 / jobs 段三处切片都非空（防整段恒绿）',
+      jobsHandler.length > 500 && listCols.length > 200 && jobsSection.length > 500,
+      `handler=${jobsHandler.length}B listCols=${listCols.length}B section=${jobsSection.length}B`);
+
+    check('🔴 /api/jobs 的 total 取自 countJobs（写成 list.length ⇒ 恒 ≤ 上限，界面照抄成「共 1000 条」）',
+      cnt(jobsHandler, 'const total = db.countJobs(filter);') === 1
+      && cnt(jobsHandler, 'total: list.length') === 0
+      && cnt(dbSrc, 'export function countJobs(') === 1
+      && cnt(dbSrc, 'SELECT COUNT(*) c FROM jobs${w.sql}') === 1,
+      '库内 2945 条而页面说 1000 条：不报错、不告警，数字看着完全合理');
+
+    check('🔴 listJobs 的 limit 缺省必须是**全量**（`opts.limit || 1000` 就是那个硬上限）',
+      cnt(dbSrc, 'params.push(opts.limit || 1000)') === 0
+      && cnt(dbSrc, 'params.push(opts.limit)') === 0
+      && cnt(dbSrc, 'if (opts.limit && opts.limit > 0) {') === 2
+      && cnt(jobsHandler, 'const rawLimit = req.query.limit === undefined ? 0 : Number(req.query.limit);') === 1,
+      '「默认截断」是本次缺陷的根：所有「先取一批再在应用层筛」的调用点都静默只看到前 1000 条');
+
+    check('🔴 两个排序口径都必须带 id 兜底（只按 created_at ⇒ 同毫秒顺序由引擎定，翻页漏或重）',
+      cnt(dbSrc, 'export function jobOrderBy(') === 1
+      && cnt(dbSrc, 'match_score DESC, created_at DESC, id DESC') === 1
+      // ⚠️ 不能数 `' ORDER BY created_at DESC, id DESC'`：`listApplications` / `listEvidenceApplications`
+      //    里也有同一句（各自 1 次），全文件计数恒为 3。钉 `: ' ORDER BY …';` 这个**三元分支**形状。
+      && cnt(dbSrc, ": ' ORDER BY created_at DESC, id DESC';") === 1,
+      '采集器批量写库时「一屏同毫秒」的行非常常见');
+
+    check('🔴 排序缺省档是「最新入库」（默认 match ⇒ 新岗位全被挤到 1000 名之外）',
+      cnt(dbSrc, "sort === 'match'") === 1
+      && cnt(iSrc, "req.query.sort === 'match' ? 'match' : 'new'") === 1,
+      '实测库里最新入库的 10 条在旧接口返回集里命中 0 条 —— 页面看起来就像「岗位池不会更新」');
+
+    check('🔴 列表只回轻量列：jd / requirements / match_detail 不得进列表',
+      cnt(dbSrc, 'const JOB_LIST_COLUMNS = [') === 1
+      && cnt(listCols, "'jd'") === 0
+      && cnt(listCols, "'requirements'") === 0
+      && cnt(listCols, "'match_detail'") === 0
+      && cnt(dbSrc, 'END AS has_jd') === 1
+      && cnt(dbSrc, 'export function listJobsLean(') === 1
+      && cnt(dbSrc, 'SELECT ${JOB_LIST_COLUMNS} FROM jobs') === 2
+      // 全字段取数只允许有 listJobs 那一处（`SELECT *` 会把 jd 从盘里读出来再在 JS 里删掉）。
+      // `listJobs` 本身有「分页 / 不分页」两个分支 ⇒ 恰好 2 次。
+      && cnt(dbSrc, 'SELECT * FROM jobs${w.sql}') === 2,
+      '这三个字段占响应体 79%（jd 一项 60.9%）；谁把 jd 加回列表，整库响应体立刻回到 5.9 MiB 而没人会注意');
+
+    check('🔴 关键词深搜：只回 id、搜全库、LIKE 通配符转义、有最小长度门槛',
+      cnt(dbSrc, 'export function searchJobIds(') === 1
+      && cnt(dbSrc, 'SELECT id FROM jobs') === 1
+      && cnt(dbSrc, "LIKE ? ESCAPE '\\\\'") === 1
+      && cnt(dbSrc, 'if (kw.length < 2) return [];') === 1
+      && cnt(dbSrc, "const cols = ['company', 'position', 'city', 'jd', 'card_text'];") === 1
+      && cnt(jobsHandler, "const ids = db.searchJobIds(q, filter);") === 1,
+      '列表不下发 jd 正文之后「搜 JD 关键词」只能靠它；转义漏了 ⇒ 搜「50%」命中大半个库');
+
+    check('关键词深搜：前后端的长度门槛必须一致（不一致 ⇒ 本地搜得到、JD 搜不到，两套行为无法解释）',
+      cnt(fnBody(pCode, 'jobsDeepSearch'), 'if(q.length < 2){') === 1
+      && cnt(dbSrc, 'if (kw.length < 2) return [];') === 1,
+      '前端门槛更低会白等一个恒空结果；更高则两套行为并存');
+
+    check('🔴 GET /api/jobs/:id 注册在所有静态子路径**之后**（放前面会把它们整个吞掉且不报错）',
+      cnt(iSrc, 'app.get("/api/jobs/:id"') === 1
+      && iSrc.indexOf('app.get("/api/jobs/:id"') > iSrc.indexOf('app.get("/api/jobs/image-jd"')
+      && iSrc.indexOf('app.get("/api/jobs/:id"') > iSrc.indexOf('app.get("/api/jobs/remote-stat"')
+      && iSrc.indexOf('app.get("/api/jobs/:id"') > iSrc.indexOf('app.get("/api/jobs/ocr-status"')
+      && iSrc.indexOf('app.get("/api/jobs/:id"') > iSrc.indexOf('app.get("/api/jobs/interview-prep"')
+      && iSrc.indexOf('app.get("/api/jobs/:id"') > iSrc.indexOf('app.get("/api/jobs/exclude-keywords"'),
+      'Express 按注册顺序匹配，`:id` 是通配段 —— 放前面时 /api/jobs/image-jd 会返回「岗位不存在」404');
+
+    check('校招信息库：详情按 id 单取，不再重打一遍列表（每点一次详情就搬一次整个岗位池）',
+      cnt(pCode, 'async function fetchJobFull(id){') === 1
+      && cnt(fnBody(pCode, 'showJob'), 'await fetchJobFull(id)') === 1
+      && cnt(fnBody(pCode, 'showJob'), "api('/api/jobs')") === 0
+      && cnt(pCode, "api('/api/jobs/' + encodeURIComponent(id))") === 1,
+      '');
+
+    check('🔴 JD 预览的判据是 has_jd，不是恒为 undefined 的 j.jd（后者把每个岗位都说成「没有真 JD」）',
+      cnt(pCode, 'async function mtPreviewJd(){') === 1
+      && cnt(pCode, 'async function optimizePreviewJd(){') === 1
+      && cnt(fnBody(pCode, 'mtPreviewJd'), 'if(!j.has_jd)') === 1
+      && cnt(fnBody(pCode, 'optimizePreviewJd'), 'if(!j.has_jd)') === 1
+      && cnt(pCode, '(j.jd && String(j.jd).trim()') === 0,
+      '列表不再下发 jd 正文 ⇒ `j.jd && …` 恒为假，会把 80% 有正文的岗位说成「没有真 JD 文本」');
+
+    check('校招信息库：分页控件 6 件套都锚到真实元素（缺 id ⇒ $() 得 null，翻页静默失效）',
+      ['jobsPager', 'jobsPrev', 'jobsPageInfo', 'jobsNext', 'jobsPageSize', 'jobsLoadNote']
+        .every((id) => cnt(jobsSection, 'id="' + id + '"') === 1)
+      && ['#jobsPager', '#jobsPrev', '#jobsPageInfo', '#jobsNext', '#jobsPageSize', '#jobsLoadNote']
+        .every((s) => cnt(pCode, "'" + s + "'") >= 1),
+      '');
+
+    check('校招信息库：分页/排序控件 id 各出现恰好一次（两处同 id ⇒ $ 只取第一个、改一半不报错）',
+      ['jobsPager', 'jobsPrev', 'jobsPageInfo', 'jobsNext', 'jobsPageSize', 'jobsLoadNote', 'jobsSort']
+        .every((id) => cnt(pHtml, 'id="' + id + '"') === 1)
+      && cnt(pCode, "JOBS_SORT = (e.target.value === 'match') ? 'match' : 'new';") === 1,
+      '');
+
+    check('🔴 渲染上限只允许有 JOBS_PAGE_MAX 一处（两个视图各写一个 slice(0,300) ⇒ 翻页是摆设）',
+      // ⚠️ 只能钉 `list.slice(0,300)` 这个**具体实参**，不能缩成 `slice(0,300)`：
+      //    页面上还有两处**正当**的 300（错误信息截断 `t.slice(0,300)`、AI 匹配页下拉的
+      //    `MT_JOBS.slice(0,300)`），宽 needle 会命中它们 ⇒ 断言红在与缺陷无关的地方。
+      cnt(pCode, 'list.slice(0,300)') === 0
+      && cnt(fnBody(pCode, 'renderJobsCards'), '.slice(') === 0
+      && cnt(fnBody(pCode, 'renderJobsTable'), '.slice(') === 0
+      && cnt(pCode, 'const JOBS_PAGE_MAX = 200;') === 1
+      && cnt(fnBody(pCode, 'jobsPage'), 'JOBS_PAGE_MAX') === 1,
+      '实测两个视图**各有一处** slice(0,300)：页脚说「共 1000 个」而表格只画 300 行，两个数字在同一页上却谁也不报错');
+
+    check('校招信息库：计数行给的是「筛出 / 库内真数」（denom 取 JOBS_TOTAL，拿不到才退回本地条数）',
+      cnt(fnBody(pCode, 'renderJobs'), 'const denom = (JOBS_TOTAL == null) ? all.length : JOBS_TOTAL;') === 1
+      && cnt(fnBody(pCode, 'renderJobs'), "(list.length === denom) ? (denom+' 个岗位')") === 1,
+      '库内总数拿不到时退回本地条数并**不冒充**库内总数（写成 0 就是「静默给出错数字」）');
+
+    check('🔴 「取到几条 ≠ 库内几条」必须说出来（这是「数字悄悄偏小」唯一能自动发现的点）',
+      cnt(fnBody(pCode, 'renderJobsPager'), 'JOBS_TOTAL !== JOBS_FETCHED') === 1
+      && cnt(fnBody(pCode, 'renderJobsPager'), '有截断') === 1,
+      '这类缺陷不会让任何门禁变红，界面则长得一模一样');
+
+    check('🔴 轮询只在「校招信息库」可见 + 标签页未隐藏时跑（少任一条 ⇒ 用户不看也一直打接口）',
+      cnt(fnBody(pCode, 'jobsPollWanted'), "v.classList.contains('active')") === 1
+      && cnt(fnBody(pCode, 'jobsPollWanted'), 'document.hidden !== true') === 1
+      && cnt(pCode, 'function jobsPollSync(){') === 1
+      && cnt(fnBody(pCode, 'jobsPollSync'), 'clearInterval(JOBS_POLL_T)') === 1
+      && cnt(fnBody(pCode, 'navigate'), 'jobsPollSync();') === 1
+      && cnt(pCode, "document.addEventListener('visibilitychange', ()=>{") === 1,
+      '判据取 DOM 真相（#view-jobs 有没有 .active）；另设 currentView 变量 = 把「当前在哪页」存两份');
+
+    check('🔴 轮询先打轻量探测、确认变了才重拉全量（60s × 1.7 MiB 直接重拉，绝大多数是白拉）',
+      cnt(fnBody(pCode, 'jobsPollTick'), "api('/api/jobs?limit=1&sort=new')") === 1
+      && cnt(fnBody(pCode, 'jobsPollTick'), 'if(remote === local) return false;') === 1
+      && cnt(fnBody(pCode, 'jobsPollTick'), 'await loadJobs();') === 1,
+      '只比条数 ⇒ 采集器 UPDATE 已存在的岗位时永远探测不到变化；用本地 length 比 ⇒ 被截断时永远相等');
+
+    check('关键词深搜：过期响应必须丢弃（否则快速输入会渲染出**上一个**关键词的结果）',
+      cnt(fnBody(pCode, 'jobsDeepSearch'), 'if(seq !== JOBS_DEEP_SEQ) return false;') === 1
+      && cnt(fnBody(pCode, 'jobsDeepSearch'), "if(jobsCtlVal('#jobsQ').trim() !== q) return false;") === 1
+      // 失败不清空：清空 = 「网络抖一下就搜不到东西」
+      && cnt(fnBody(pCode, 'jobsDeepSearch'), "JOBS_DEEP_HIT = new Set(ids);") === 1
+      && cnt(fnBody(pCode, 'jobsFiltered'), 'JOBS_DEEP_HIT.has(j.id)') === 1,
+      '');
+
+    check('🔴 列表类上限必须写在界面上（静默截断 ⇒ 用户以为「库里就这些」「下拉里没有就是没有」）',
+      // 三条 needle 都足够独特 ⇒ 直接全文件计数（不套 fnBody：`loadMatch` 体型大、
+      // 内部缩进块多，抠函数体反而容易抠到别处，抠空了还会让整条恒绿）。
+      // ① 职位记录：上限 200，但计数行必须写「显示前 200 / 共 N 个」
+      cnt(pCode, "('显示前 ' + shown.length + ' / 共 ' + jobs.length + ' 个')") === 1
+      // ② AI 匹配页下拉：限量必须带一条 disabled 说明选项
+      && cnt(pCode, '下拉只列前 ') === 1
+      // ③ 高级页的岗位下拉：同上（文案不同 ⇒ 两条各钉各的，改掉任一处都会被抓住）
+      && cnt(pCode, '—— 只列前 ') === 1
+      // 下拉的**返回值仍是全量**：调用方用它做 id → 岗位查找，不该被显示上限影响
+      && cnt(fnBody(pCode, 'fillJobSelect'), 'return jobs;') === 1
+      && cnt(fnBody(pCode, 'fillJobSelect'), '().slice(') === 0,
+      '上限本身不是问题，静默的上限才是：同一页上「共 2945 个」与只画 200 行可以并存很久而无人察觉');
   }
 
   // ---- C 批：个人中心汇总（三源：岗位库 / 磁盘台账 / 本机 localStorage） ----
