@@ -22,7 +22,7 @@ import {
   zhilianChatDriver, job51ChatDriver, nowcoderChatDriver, iguopinChatDriver,
   yupaoChatDriver, chinahrChatDriver, yingjieshengChatDriver,
 } from '../server/services/apply/platformsChat.js';
-import { guardFabricatedLocation } from '../server/services/apply/autoReply.js';
+import { humanizeReply, composeReply, pickVariant, guardOnsiteCommitment, guardFabricatedOrigin, guardFabricatedLocation } from '../server/services/apply/autoReply.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins, canInjectToken, lanOriginsFromIps } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isConsoleAsset } from '../server/services/authToken.js';
@@ -780,6 +780,101 @@ console.log('\n══════ A3. 回复话术的「事实边界」兜底（
   check('不误伤「我在找工作状态」', !guardFabricatedLocation('我在找工作状态，可以尽快到岗', '昆明').stripped);
   check('不误伤「我目前不在本地」', !guardFabricatedLocation('我目前不在本地，面试安排再沟通', '昆明').stripped);
   check('不误伤普通回复', !guardFabricatedLocation('您好，我对这个岗位很感兴趣', '昆明').stripped);
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A4. 回复话术「去 AI 味」+ 到岗承诺兜底（2026-10-08） ══════');
+// 背景：用户反馈「自动回答 AI 味太重」。两处根因：
+//   ① 规则兜底模板本身就是客服体（「您好，感谢您的回复。…盼复，谢谢！」）；
+//   ② 模型即使被要求口语化，仍会稳定地带上寒暄与客套收尾。
+// 处置：模板改口语 + SYSTEM 加「反套话」硬约束与风格对照 + 输出侧 humanizeReply 机械清理。
+// 另：话术改短之后实测模型更爱给绝对表态（「随时可以到岗」），故补 guardOnsiteCommitment ——
+// 那是被明令禁止的「替候选人做承诺」，改短不能以放松安全为代价。
+{
+  // ── humanizeReply：剥套话 ──
+  const h1 = humanizeReply('感谢您的回复。我对贵公司的「Java开发」依然很感兴趣，盼复，谢谢！');
+  check('剥句首寒暄「感谢您的回复。」', !h1.includes('感谢您的回复'));
+  check('剥句尾客套「盼复，谢谢！」', !h1.includes('盼复') && !h1.includes('谢谢'));
+  check('正文保留（不许连正文一起删）', h1.includes('Java开发'));
+  check('「问候 + 套话」连用一起剥',
+    !humanizeReply('您好！感谢您的回复。关于面试时间，我这边可以的。').includes('感谢您的回复'));
+  check('单独问好不得误删', humanizeReply('您好，我看到岗位了。').startsWith('您好'));
+  check('本来就口语 ⇒ 原样返回（幂等）', humanizeReply('好嘞，那我周三下午过去~') === '好嘞，那我周三下午过去~');
+  check('整条都是客套 ⇒ 不清成空串', humanizeReply('盼复').length > 0);
+  check('非尾部「谢谢」不误删正文', humanizeReply('麻烦您把面试地址发我一下，谢谢！').includes('面试地址'));
+
+  // ── composeReply：全部意图都不得含套话、都够短 ──
+  // 两个不同种子各跑一遍，覆盖同一意图的两条变体（只跑一个种子会漏掉另一条）
+  const SMELL_WORDS = ['感谢您的回复', '很高兴收到您的消息', '盼复', '期待您的回复', '贵公司', '如有任何问题', '综上所述'];
+  const ALL_INTENTS = [
+    'interview_scheduled', 'reject', 'ask_interview_time', 'ask_availability', 'ask_resume', 'ask_salary',
+    'ask_onsite', 'ask_experience', 'ask_education', 'ask_phone', 'greeting', 'other',
+  ] as const;
+  const repCtx = { position: 'Java开发', round: 1, profile: { name: '张三', education: '本科', major: '软件工程' } };
+  const allTexts = ALL_INTENTS.flatMap((it) => ['测试甲', '测试乙'].map((c) => ({ it, text: composeReply(it as any, { ...repCtx, company: c }) })));
+  const dirty = allTexts.filter((x) => SMELL_WORDS.some((w) => x.text.includes(w)));
+  check('规则话术 12 个意图 × 2 变体都不含套话词', dirty.length === 0,
+    dirty.map((x) => x.it + ':' + x.text).join(' | '));
+  const tooLong = allTexts.filter((x) => x.text.length > 70);
+  check('规则话术都够短（≤70 字；真人不会在 IM 里写长段）', tooLong.length === 0,
+    tooLong.map((x) => x.it + '=' + x.text.length + '字').join(', '));
+
+  // ── pickVariant：确定性 + 有差异 ──
+  check('同种子必得同一结果（否则没法断言）', pickVariant(['a', 'b', 'c'], 'seed-x') === pickVariant(['a', 'b', 'c'], 'seed-x'));
+  const greets = new Set(['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛'].map((c) => composeReply('greeting', { ...repCtx, company: c })));
+  check('8 家公司至少 2 种措辞（不是所有人收到同一句）', greets.size > 1, greets.size + ' 种');
+
+  // ── guardOnsiteCommitment：到岗绝对表态 ──
+  check('「随时可以到岗」→ 替换为留余地话术',
+    guardOnsiteCommitment('随时可以到岗，您怎么安排都行', 'ask_onsite').stripped);
+  check('替换话术本身不含绝对表态',
+    !guardOnsiteCommitment('随时可以到岗', 'ask_onsite').text.match(/随时|都行|都可以/));
+  check('合规话术不拦（一两周内可以到岗）',
+    !guardOnsiteCommitment('一两周内可以到岗，具体日期咱们再确认。', 'ask_onsite').stripped);
+  check('非到岗意图不拦（把误伤面压到最小）',
+    !guardOnsiteCommitment('随时可以到岗', 'ask_salary').stripped);
+  check('到岗兜底确实能拦住本轮实测到的那句',
+    guardOnsiteCommitment('随时可以到岗，时间上也能商量，您这边怎么安排都行。', 'ask_onsite').stripped);
+
+  // ── guardFabricatedOrigin：籍贯编造 ──
+  // 来源：本轮跑话术安全回归时真实抓到的一条 —— HR 问「你家里是哪里」，模型答
+  // 「家是南方的」。这**同样是编造个人信息**（档案里没有籍贯），但既有 BAD 词表
+  // 只盯「我老家/我来自」，这种模糊说法直接漏过去了 ⇒ 词表与兜底一起补。
+  const o1 = guardFabricatedOrigin('家是南方的，主要在看昆明的机会。', '昆明');
+  check('「家是南方的」→ 拦截（原先漏掉的模糊说法）', o1.stripped);
+  check('籍贯兜底替换后保留期望城市', o1.text.includes('昆明'));
+  check('「我老家云南」同样拦', guardFabricatedOrigin('我老家云南的', '昆明').stripped);
+  check('「我是湖南人」同样拦', guardFabricatedOrigin('我是湖南人', null).stripped);
+  check('无期望城市也给出安全话术', guardFabricatedOrigin('家是南方的', null).text.length > 0);
+  check('不误伤「大家是来面试的吗」（前缀约束的作用）',
+    !guardFabricatedOrigin('大家是来面试的吗', '昆明').stripped);
+  check('普通回复不拦', !guardFabricatedOrigin('您好，我对这个岗位很感兴趣', '昆明').stripped);
+
+  // ── 静态：接线顺序与 prompt 约束不许被静默删掉 ──
+  const arSrc = readText('server/services/apply/autoReply.ts');
+  // 🔴 断言必须**限定在 AI 分支那一小段**里，不能对全文件 indexOf。
+  // 教训（本轮破坏性对照 M1 抓出来的）：「humanizeReply」这个形状在文件里出现**两处**
+  // —— AI 分支与规则兜底分支各一处 return。用全文件 indexOf 时，把 AI 分支的
+  // humanize 整个摘掉，断言照样全绿（被兜底分支那一处满足了）。
+  // 这正是「同一形状出现两次 ⇒ 全文件查找失准」的老坑，只是换了个位置。
+  const aiStart = arSrc.indexOf('if (ai && ai.trim()) {');
+  const fbStart = arSrc.indexOf('signIfNeeded(humanizeReply(fallback)');
+  const aiBlock = aiStart >= 0 && fbStart > aiStart ? arSrc.slice(aiStart, fbStart) : '';
+  check('抓到了 AI 分支代码块（范围判据自身的存在性自检）', aiBlock.length > 80, 'len=' + aiBlock.length);
+  check('AI 分支返回前确实过了 humanizeReply', aiBlock.includes('humanizeReply('));
+  // 🔴 只钉**函数名**，绝不钉参数名。本轮实测又踩了一次：因为中间插进了籍贯兜底，
+  // 把 `guarded.text` 改名成 `origin.text`，断言立刻因 `onsite=-1` 变红 —— 而产品行为完全正确。
+  // 这与「断言钉死 fetch 的精确参数形状」是同一个坑，只是这次发生在静态断言上。
+  const iGuard = aiBlock.indexOf('guardFabricatedLocation(');
+  const iOrigin = aiBlock.indexOf('guardFabricatedOrigin(');
+  const iOnsite = aiBlock.indexOf('guardOnsiteCommitment(');
+  const iHum = aiBlock.indexOf('humanizeReply(');
+  check('三道兜底 guard 都排在 humanizeReply 之前（顺序反了会被标点整理改掉）',
+    iGuard >= 0 && iOrigin >= 0 && iOnsite >= 0 && iGuard < iHum && iOrigin < iHum && iOnsite < iHum,
+    'location=' + iGuard + ' origin=' + iOrigin + ' onsite=' + iOnsite + ' humanize=' + iHum);
+  check('SYSTEM 里保留了「禁止 AI 味套话」约束', arSrc.includes('禁止出现 AI / 客服套话'));
+  check('SYSTEM 里保留了风格对照示例（只写禁令模型学不会怎么写）', arSrc.includes('风格对照'));
+  check('temperature 抬到 0.8（降低「所有人收到同一句」的雷同感）', arSrc.includes('temperature: 0.8'));
 }
 
 // ═══════════════════════════════════════════════════════════

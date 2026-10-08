@@ -231,41 +231,182 @@ export function detectIntent(text: string): HrIntent {
 }
 
 const pos = (ctx: ReplyContext) => ctx.position || '相关岗位';
-const com = (ctx: ReplyContext) => ctx.company || '贵公司';
+const com = (ctx: ReplyContext) => ctx.company || '您这边';
 const name = (ctx: ReplyContext) => ctx.profile?.name || '';
 
-/** 生成回复文案 */
+/** 稳定哈希（djb2）：纯函数、无随机源，用于确定性变体选取 */
+function hashSeed(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/**
+ * 从若干同义话术里确定性地挑一条。
+ *
+ * 种子用「公司 + 岗位 + 轮次」：同一 HR 的多轮回复不会重复同一句，
+ * 不同 HR 之间措辞也不一样 —— 真人绝不可能对所有人说一字不差的话，
+ * 「每家公司收到的回复都长得一模一样」本身就是最刺眼的 AI 味。
+ * 刻意不用 Math.random：确定性才能被断言（否则单测只能测「非空」）。
+ */
+export function pickVariant(list: string[], seed?: string): string {
+  if (!list.length) return '';
+  return list[hashSeed(String(seed || '')) % list.length];
+}
+
+/**
+ * 句首寒暄套话（不含句末标点，匹配时允许后跟任意标点）。
+ * 刻意**不含**独立的「您好」——真人也会先问好，删掉反而生硬。
+ */
+const OPEN_PLEASANTRIES = [
+  '您好，感谢您的回复', '非常感谢您的回复', '感谢您的回复', '谢谢您的回复', '感谢回复',
+  '您好，感谢您的关注', '感谢您的关注', '谢谢您的关注',
+  '您好，很高兴收到您的消息', '很高兴收到您的消息', '很高兴收到您的来信', '感谢您的来信',
+  '您好，感谢您对我的关注',
+];
+
+/** 句首问候语（本身不该删 —— 真人也会问好；只有「问候 + 套话」连用时才一起剥掉） */
+const LEAD_GREET_RE = /^(?:您好|你好|哈喽|hi|hello)[。！!，,、;；~～\s]*/i;
+
+/** 句尾客套（锚定到结尾，可连串出现：`, 盼复，谢谢！` 会被整段删除） */
+const TAIL_PLEASANTRIES_RE =
+  /[。！!，,、;；~～\s]*(?:(?:期待您的回复|期待您的回音|静候回复|盼复|盼回复|盼您回复|如有(?:任何)?(?:问题|疑问|需要)随时(?:联系|告诉)我|随时(?:联系|咨询)我|祝(?:您)?(?:工作|招聘|求职)顺利|祝好|谢谢[您你]?[！!。]?)[。！!，,、;；~～\s]*)+$/;
+
+/**
+ * 输出侧「去 AI 味」（2026-10-08）。
+ *
+ * 背景：即使 SYSTEM 里已要求「口语化、1~3 句」，模型仍会**稳定地**带上客服式寒暄与客套收尾
+ * （实测高发），叠在规则兜底模板上更明显 —— 真人 HR 一眼就能看出这不是人打的字。
+ * 故在返回前再加一道**纯代码**清理（与 guardFabricatedLocation 同一个位置、同样思路：
+ * 对模型的自觉不完全信任，关键形态用机械手段兜住）。
+ *
+ * 只做「删套话」，**绝不截断正文** —— 截断可能丢掉 HR 问到的关键信息，风险大于收益，
+ * 长度约束交给 prompt。
+ *
+ * @returns 清理后的话术；若清理后为空（整条都是套话）则退回上一级结果，保证永不为空串。
+ */
+export function humanizeReply(text: string): string {
+  const raw = String(text || '').trim();
+  if (!raw) return text;
+
+  // 1) 剥句首寒暄（可能连着两三条）
+  //    先试「就是套话」，再试「问候语 + 套话」（如「您好！感谢您的回复。」——模型极爱这么开头）。
+  //    注意不能一律删「您好」：只在它后面紧跟套话时才算寒暄，单独问好要留着。
+  let opened = raw;
+  for (let i = 0; i < 3; i++) {
+    const hit = OPEN_PLEASANTRIES.find((g) => opened.startsWith(g));
+    if (hit) {
+      const rest = opened.slice(hit.length).replace(/^[。！!，,、;；~～\s]+/, '').trim();
+      if (rest) { opened = rest; continue; }
+      break; // 整条都是寒暄 ⇒ 别删成空
+    }
+    const gre = opened.match(LEAD_GREET_RE);
+    if (gre) {
+      const afterGreet = opened.slice(gre[0].length);
+      const hit2 = OPEN_PLEASANTRIES.find((g) => afterGreet.startsWith(g));
+      if (hit2) {
+        const rest = afterGreet.slice(hit2.length).replace(/^[。！!，,、;；~～\s]+/, '').trim();
+        if (rest) { opened = rest; continue; }
+      }
+    }
+    break;
+  }
+
+  // 2) 剥句尾客套
+  const closed = opened.replace(TAIL_PLEASANTRIES_RE, '').trim();
+
+  // 3) 收尾标点整理（删掉客套后可能残留「，。」或「。。」）
+  const t = (closed || opened)
+    .replace(/[，,]\s*([。！!])/g, '$1')
+    .replace(/。{2,}/g, '。')
+    .replace(/^[，,、;；]+/, '')
+    .replace(/[，,、;；]+$/, '')
+    .trim();
+
+  return t || raw;
+}
+
+/**
+ * 生成回复文案（规则兜底：未配置 LLM / 模型调用失败时使用）。
+ *
+ * 每个意图给 2 条**同义**变体，按会话种子择一 —— 写法短、口语、不加客服套话，
+ * 与 AI 分支保持同一套说话风格（用户看到的最终风格不该因为「有没有 AI」而突变）。
+ */
 export function composeReply(intent: HrIntent, ctx: ReplyContext = {}): string {
   const n = name(ctx);
   const phone = ctx.profile?.phone;
+  const edu = ctx.profile?.education || '本科';
+  const major = ctx.profile?.major || '软件工程';
+  const seed = `${ctx.company || ''}|${ctx.position || ''}|${ctx.round || 1}`;
+  const pick = (list: string[]) => pickVariant(list, seed);
+
   switch (intent) {
     case 'interview_scheduled':
-      return `好的，已收到面试安排。我会准时参加，提前做好准备。届时若有变动我会及时与您沟通，谢谢！`;
+      return pick([
+        '收到，我会准时到，谢谢您安排！',
+        '好的，那我准时过去，麻烦您到时候发下具体地点~',
+      ]);
     case 'reject':
-      return `好的，理解。感谢您的时间和反馈，祝您招聘顺利，也希望能有机会再次合作！`;
+      return pick([
+        '好的，理解，谢谢您抽时间看我的简历，祝好。',
+        '明白了，谢谢您的反馈，祝您招聘顺利。',
+      ]);
     case 'ask_interview_time':
-      return `您提的时间我可以。麻烦告知具体的日期、时间点以及面试形式（线上/线下），我会准时参加。如果有需要提前准备的内容也请一并告知，谢谢！`;
+      return pick([
+        '这个时间可以的，您定就好。方便说下是线上还是线下吗？',
+        '我这边时间好安排，您看什么时间合适？另外是线上还是现场面？',
+      ]);
     case 'ask_availability':
-      return `我目前时间比较灵活，工作日基本都可以配合。您看什么时间方便？我按您的时间来安排。`;
+      return pick([
+        '时间上没什么问题，工作日都能配合，您看哪天合适？',
+        '我这边时间比较灵活，按您方便的安排来就行~',
+      ]);
     case 'ask_resume':
-      return `您好，我的简历已作为文件发送，请您查收。如果文件打不开或需要其他格式，随时告诉我，我再补发一份。简历里项目经历写得比较详细，您有任何想了解的都可以直接问我。`;
+      return pick([
+        '简历刚发过去了，麻烦您查收下~',
+        '好的，简历已经发您了，您看下有没有需要补充的。',
+      ]);
     case 'ask_salary':
-      return `我的期望薪资可以面议，主要还是看岗位的发展空间和整体匹配度。方便的话我们先沟通一下具体职责和团队情况，再谈薪资会更好一些。`;
+      return pick([
+        '薪资可以面议，主要看岗位情况，方便的话先聊聊具体职责？',
+        '这个我想先了解下岗位内容，薪资面议可以吗？',
+      ]);
     case 'ask_onsite':
-      return `我目前在找工作状态，确认录用后可以较快到岗，一般一到两周内就能入职，具体时间可以协商。`;
+      return pick([
+        '我这边到岗比较快，一般一两周就行，具体时间可以商量。',
+        '确认录用的话一两周内能到岗，时间上比较好衔接。',
+      ]);
     case 'ask_experience':
-      return `我有相关的项目与实习经历，主要做 Java 后端和 Web 全栈方向，常用 Spring Boot、MySQL、MyBatis，也做过前后端联调。具体的项目职责和技术细节简历里都有写，您有感兴趣的部分我可以展开讲。`;
+      return pick([
+        '主要做 Java 后端，Spring Boot、MySQL 用得比较多，简历里有写项目，您想了解哪块我细说。',
+        '项目主要是 Java 后端和前后端联调，简历里都写了，有想了解的您问我~',
+      ]);
     case 'ask_education':
-      return `我是${ctx.profile?.education || '本科'}学历，${ctx.profile?.major || '软件工程'}专业，简历里有完整的教育背景，您可以看下。${n ? `我是${n}。` : ''}`;
+      return pick([
+        `我是${edu}，${major}专业，简历里有写~`,
+        `${n ? `${n}，` : ''}${edu}学历，${major}专业，简历上能看到。`,
+      ]);
     case 'ask_phone':
       return phone
-        ? `好的，我的联系电话是 ${phone}，微信同号。您方便的时间都可以联系我，我也随时看消息。`
-        : `好的，我的联系方式在简历里都有（电话和邮箱），您也可以直接在这个平台上联系我，我看到会第一时间回复。`;
+        ? pick([
+            `好的，我电话是 ${phone}，微信同号，您随时联系我。`,
+            `电话 ${phone}，微信也是这个号~`,
+          ])
+        : pick([
+            '联系方式简历里都有，您也可以直接在这儿找我，我看到就回。',
+            '简历里有我的电话和邮箱，您看哪个方便都行~',
+          ]);
     case 'greeting':
-      return `您好！${n ? `我是${n}，` : ''}很高兴收到您的消息。我对${com(ctx)}的「${pos(ctx)}」很感兴趣，简历已发您，方便的话我们可以进一步沟通。`;
+      return pick([
+        `您好，看到在招「${pos(ctx)}」这个岗，简历发您了~`,
+        `${n ? `${n}，` : ''}看到${com(ctx)}的「${pos(ctx)}」挺感兴趣的，简历先发您看下。`,
+      ]);
     case 'other':
     default:
-      return `您好，感谢您的回复。我对${com(ctx)}的「${pos(ctx)}」依然很感兴趣，您刚才说的我这边没有问题。如果还有其他想了解的，随时问我都可以，盼复，谢谢！`;
+      return pick([
+        '好的，我这边没问题，您接着说~',
+        '收到，您看接下来需要我准备什么吗？',
+      ]);
   }
 }
 
@@ -405,6 +546,54 @@ export function guardFabricatedLocation(
 }
 
 /**
+ * 「绝对到岗表态」——把话说满的措辞（简短化的常见副作用）。
+ * 刻意只在 ask_onsite 意图下启用，把误伤面压到最小。
+ */
+const ONSITE_ABSOLUTE_RE =
+  /(随时可以|随时能|随时都|任何时候|什么(?:时候|时间)都(?:可以|行|没问题|能)|都行|都可以|怎么安排都行|听您安排|看您安排)/;
+
+/**
+ * 输出侧「到岗承诺」兜底（2026-10-08）。
+ *
+ * 实测：把话术改短之后，模型在「什么时候到岗」这类问题下**更爱给干脆的绝对表态**
+ * （本轮真实对照里改后出现过「随时可以到岗，时间上也能商量，您这边怎么安排都行」）——
+ * 这正是被明令禁止的「替候选人做承诺」，而消息发出去撤不回。
+ * 与 guardFabricatedLocation 同一思路：prompt 的否定式禁令遵守不稳定，关键形态用代码兜住；
+ * 宁可话术通用一点，也不能替候选人把话说满。
+ */
+export function guardOnsiteCommitment(text: string, intent: HrIntent): { text: string; stripped: boolean } {
+  if (intent !== 'ask_onsite') return { text, stripped: false };
+  if (!ONSITE_ABSOLUTE_RE.test(text)) return { text, stripped: false };
+  return { text: '一两周内可以到岗，具体日期咱们再确认。', stripped: true };
+}
+
+/**
+ * 「籍贯 / 老家」宣称。
+ * 前缀加了约束（行首或标点之后），否则「大家是来面试的吗」会被「家是」误伤。
+ */
+const ORIGIN_CLAIM_RE =
+  /(?:^|[，,。！!；;、\s])我?家(?:是|在|乡)|我?老家|籍贯|我是[\u4e00-\u9fa5]{2,4}人|土生土长/;
+
+/**
+ * 输出侧「籍贯编造」兜底（2026-10-08）。
+ *
+ * 实测：HR 问「你家里是哪里」时，模型会写「家是南方的」—— 这**同样是编造个人信息**
+ * （档案里根本没有籍贯），只是措辞比「我老家是云南」隐蔽，既有检查器与 prompt 都没盖住。
+ * 与另外两道 guard 同一思路：这类话一旦发出就撤不回，故加机械校验。
+ * 注意命中即**整条替换**，宁可话术通用，也不让模型替候选人交代家庭信息。
+ */
+export function guardFabricatedOrigin(text: string, city?: string | null): { text: string; stripped: boolean } {
+  if (!ORIGIN_CLAIM_RE.test(text)) return { text, stripped: false };
+  const c = (city || '').trim();
+  return {
+    text: c
+      ? `这个跟岗位关系不大吧。我主要在看${c}的机会，方便先聊下具体工作内容吗？`
+      : `这个跟岗位关系不大吧，主要还是看合不合适 —— 方便先聊下具体工作内容吗？`,
+    stripped: true,
+  };
+}
+
+/**
  * 用大模型生成 HR 回复话术（语境感知、自然口语），失败/未配置自动回退规则模板。
  *
  * 设计：意图仍由调用方（decide）用规则判定，这里只负责「写出一句话」。
@@ -445,7 +634,7 @@ export async function composeReplyWithAi(
     ask_availability: '对方在约面试 / 问是否有空',
     ask_resume: '对方要简历 —— 引导其查看已发送的简历附件',
     ask_salary: '对方问期望薪资 —— 建议面议、看岗位匹配度与发展空间',
-    ask_onsite: '对方问到岗时间 —— 表达可较快到岗、时间可协商',
+    ask_onsite: '对方问到岗时间 —— 说「一两周内可以到岗，具体日期再确认」这类留余地的话；严禁「随时可以」「什么时候都行」「都行」等绝对表态',
     ask_experience: '对方问经验 / 项目经历',
     ask_education: '对方问学历 / 专业 / 学校',
     ask_phone: '对方要电话 / 微信等联系方式',
@@ -461,9 +650,30 @@ export async function composeReplyWithAi(
   const SYSTEM = `你是正在求职的候选人，在招聘平台（BOSS直聘 / 猎聘等）和 HR 一对一聊天。
 要求：
 - 口语化、自然，1-3 句话，像真人求职者，不堆砌关键词、不套模板、不油腻。
+- 【像真人打字·最重要】写成**一条微信式的短消息**：1~2 句，尽量 45 字以内，最多不超过 70 字。
+  答完对方问的那件事就收住，不要补充没被问到的信息，不要总结、不要表决心。
+  真人不会在招聘 App 里写整段文字。
+- 【禁止出现 AI / 客服套话】下面这些词**一次都不要写**（它们是最明显的「机器味」来源）：
+  「感谢您的回复」「很高兴收到您的消息」「感谢您的关注」「非常荣幸」
+  「此外」「同时」「综上所述」「总的来说」「总之」「以上」
+  「期待您的回复」「盼复」「如有任何问题随时联系我」「祝工作顺利」「祝好」
+  「我具备扎实的…」「我拥有丰富的…」「致力于」「热爱学习」「具有较强的…」「贵公司」
+- 不要复述对方的问题（不要写「您问我什么时候方便面试，我……」），直接回答。
+- 不要每条都用同一个开头，连续两轮不要都用「好的」起头。中文可以省略主语。
+- 允许并鼓励口语词：「嗯嗯」「好嘞」「行」「都可以」「明白」「麻烦您」「我先看下」。
+- 【风格对照·务必对齐左侧】：
+  · 问面试时间 → 像：「这个时间可以的，您定就好。是线上还是现场面？」
+                 不像：「您好！感谢您的回复。关于面试时间，我这边是可以的，具体以您安排为准，谢谢！」
+  · 要简历     → 像：「简历刚发过去了，麻烦您查收下~」
+                 不像：「您好，我的简历已作为文件发送，请您查收。如果文件打不开或需要其他格式，随时告诉我，我再补发一份。」
+  · 问薪资     → 像：「薪资可以面议，方便的话先聊聊具体职责？」
+                 不像：「我的期望薪资可以面议，主要还是看岗位的发展空间和整体匹配度。方便的话我们先沟通一下具体职责，再谈薪资会更好一些。」
 - 绝不编造简历里没有的公司、经历、数据、证书。
 - 绝不编造「我的信息」里没有给出的**个人信息**：籍贯 / 老家 / 现居城市 / 家庭成员 / 年龄 / 婚育 / 期望薪资等，
   一律不得臆测、不得想象、不得用「应该是」式推断。被问到这类问题时，只用中性说法带过，或把话题引回岗位本身。
+  被问「你家里是哪里的 / 老家哪的 / 哪里人」时**不要回答、不要猜、不要含糊交代**
+  （「家是南方的」「老家云南」这种**同样是编造**），照这个句式把话题带回去：
+  「这个跟岗位关系不大吧，主要还是看合不合适 —— 方便先聊下具体工作内容吗？」
 - 也不要编造**在职/离职状态、工作年限、是否有 offer 在手**等未给出的经历信息
   （本候选人是在校/应届背景，不要提「离职手续」「上家单位」之类说法）。
 - 【现居地·硬规则】你**不知道**候选人的现居城市。任何情况下都不得写「我在XX」「我人在XX」「我目前在XX」这类话。
@@ -473,6 +683,8 @@ export async function composeReplyWithAi(
 - 绝不替候选人做承诺：不擅自接受或拒绝**工作地点、薪资、到岗时间、面试形式（线上/线下）与具体时间安排**等条件 —— 这些必须由本人确认。
   凡「我的信息」给出的期望城市之外的地点，一律不要表态「我可以接受」；
   面试安排用「具体时间和形式我们沟通就好」这类中性说法，不要直接应下「现场面试可以配合」。
+  **到岗时间同理**：只说「一两周内可以到岗，具体日期咱们再确认」这种留余地的话，
+  **绝不写「随时可以到岗」「什么时候都行」「都行」「都可以」「听您安排」** —— 简短不等于把话说满。
 - 若岗位所在地与「期望城市」不同：**既不要表态接受，也不要主动拒绝**（主动劝退会直接丢掉机会）。
   只用中性说法回应，例如「这个岗位在 XX 是吗？方便先介绍下具体的工作内容和情况吗」，最多说明自己的期望城市，
   **是否继续由本人判断**，不要替候选人下「不合适」的结论。
@@ -490,14 +702,23 @@ export async function composeReplyWithAi(
 【对方刚说的话】${hrMessage || ''}
 【最近对话】
 ${histText || '（无）'}
-请直接写一句回复 HR 的话（不要标题、不要用引号包裹整段）。`;
+请直接写一句回复 HR 的话（像发微信一样，一两句，不要标题、不要客套、不要用引号包裹整段）。`;
 
-  const ai = await chatText(USER, SYSTEM, { temperature: 0.7, timeoutMs: 20000 });
+  // temperature 0.8：略微抬高采样多样性。避免「每个 HR 收到的句子高度雷同」——
+  // 「重复」本身就是 AI 味的一大来源（真人绝不会对所有人说一字不差的话）。
+  const ai = await chatText(USER, SYSTEM, { temperature: 0.8, timeoutMs: 20000 });
   if (ai && ai.trim()) {
     const cleaned = ai.trim().replace(/^["'「]|["'」]$/g, '');
-    // 输出侧事实兜底：命中「我在 + 城市」即替换 —— 模型偶尔仍会把「期望城市」当现居地宣称
+    // 输出侧四道机械兜底（顺序固定，不能反）：
+    //   ① guardFabricatedLocation —— 命中「我在 + 城市」整句替换（现居地，安全优先）
+    //   ② guardFabricatedOrigin   —— 命中「家是 / 老家 / 籍贯 / 我是…人」整句替换（籍贯，同类）
+    //   ③ guardOnsiteCommitment   —— 到岗类绝对表态整句替换（不替候选人把话说满）
+    //   ④ humanizeReply           —— 剥掉客服式寒暄与客套收尾（说话风格，去 AI 味）
+    // ①②③ 都在 ④ 之前：它们是整句重写，若放在 ④ 之后，humanize 的标点整理会作用在替换文本上。
     const guarded = guardFabricatedLocation(cleaned, ctx.profile?.city);
-    return { text: signIfNeeded(guarded.text, opts), source: 'ai' };
+    const origin = guardFabricatedOrigin(guarded.text, ctx.profile?.city);
+    const onsite = guardOnsiteCommitment(origin.text, intent);
+    return { text: signIfNeeded(humanizeReply(onsite.text), opts), source: 'ai' };
   }
-  return { text: signIfNeeded(fallback, opts), source: 'rule' };
+  return { text: signIfNeeded(humanizeReply(fallback), opts), source: 'rule' };
 }
