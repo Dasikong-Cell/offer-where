@@ -23,6 +23,10 @@ import {
   yupaoChatDriver, chinahrChatDriver, yingjieshengChatDriver,
 } from '../server/services/apply/platformsChat.js';
 import { humanizeReply, composeReply, pickVariant, guardOnsiteCommitment, guardFabricatedOrigin, guardFabricatedLocation } from '../server/services/apply/autoReply.js';
+import {
+  isPlatformUrl, isSyndicationUrl, isEmailScanCandidateUrl, rootDomain, extractMailCandidates, detectSharedMailboxes,
+  judgeMailbox, suspiciousShortLocal, listEmailScanCandidates, SHARED_MAILBOX_MIN_COMPANIES,
+} from '../server/services/offerbiuEmailScan.js';
 import { tryAcquire, release } from '../server/services/apply/sessionLock.js';
 import { checkRequestOrigin, buildAllowedOrigins, canInjectToken, lanOriginsFromIps } from '../server/services/requestGuard.js';
 import { extractToken, safeEqual, isAuthEnabled, SIDE_EFFECT_GET_PATHS, PUBLIC_READ_GET_PATHS, isPublicReadGet, isConsoleAsset } from '../server/services/authToken.js';
@@ -284,15 +288,26 @@ check('写请求 + 无 Origin 本机脚本放行', checkRequestOrigin({ method: 
   check('邮箱直投提交时带上 jobIds 与 emails 映射',
     /email-apply'[\s\S]{0,300}?jobIds\b/.test(mail) && /\bemails\s*[,}]/.test(mail),
     '不传 jobIds ⇒ 后端回 error「未选择任何岗位」；emails 是规避微信限流的预取证邮箱');
-  check('邮箱直投保留「跨公司串号」隔离交互（隔离项默认不勾 + 强制开关）',
+  check('邮箱直投保留隔离交互（隔离项默认不勾 + 强制开关）',
     // ⚠️ 必须锚在 `<input id="emailForce">` **元素**上，不能只写 includes('emailForce')：
     //    JS 里还有 `$('#emailForce').checked`，只测字符串存在 ⇒ 把复选框整个删掉断言照样绿
     //    （2026-10-03 破坏对照当场抓出这条假区分力）。
-    /<input[^>]*\bid="emailForce"/.test(mail) && /q\?'':' checked'/.test(mail),
+    /<input[^>]*\bid="emailForce"/.test(mail),
     'quarantine/force 曾被整个丢失 —— 后端闸门还在，但用户无法区分也无法强制');
-  check('邮箱直投隔离项默认不勾选（安全底线，不得一键全选）',
-    /q\?'':' checked'/.test(mail),
+  // 🔴 2026-10-09 改：原两条钉的是 /q\?'':' checked'/ 这个**表达式形状** —— 把默认勾选改由
+  //    谓词函数 emailHitSafe(h) 决定后断言立刻变红，而产品行为完全正确。
+  //    这正是 A4 段「钉参数名 guarded.text」的同一类坑（30 分钟后又犯了一次）。
+  //    改成钉**判据本身**：判据里必须同时有「高置信」与「无隔离」，且勾选态必须由它驱动。
+  const safeFn = /function emailHitSafe\(h\)\{\s*return ([^;]+);/.exec(mail);
+  check('邮箱直投「默认可勾」判据 = 高置信 且 无隔离（只看 quarantine ⇒ OCR 提取的会被默默默认勾选）',
+    !!safeFn && /confidence\s*===\s*'high'/.test(safeFn[1]) && /!\s*h\.quarantine/.test(safeFn[1]),
+    safeFn ? ('判据 = ' + safeFn[1].trim()) : '没抓到 emailHitSafe 的函数体（切片失败 ⇒ 上面那条会被空串满足）');
+  check('邮箱直投命中项的勾选态由 emailHitSafe() 决定（不是恒勾）',
+    /class="emailHitChk"[\s\S]{0,160}?emailHitSafe\(h\)\?' checked':''/.test(mail),
     '退化成恒 checked ⇒ 用户一不留神就把简历发给错误公司（不可撤回）');
+  check('邮箱直投没有「一键全选」（安全底线：不得让用户一键勾上带隔离标记的项）',
+    /function pickEmailHits\(mode\)/.test(mail) && !/pickEmailHits\(\s*'all'\s*\)/.test(mail),
+    '一键全选 ⇒ 隔离项也被勾上，一次确认就把简历发给错误的公司');
   check('邮箱直投强制开关确实透传 force',
     /\$\('#emailForce'\)\.checked/.test(mail),
     '只在 UI 画开关、不把值发出去 ⇒ 闸门形同虚设');
@@ -875,6 +890,191 @@ console.log('\n══════ A4. 回复话术「去 AI 味」+ 到岗承诺
   check('SYSTEM 里保留了「禁止 AI 味套话」约束', arSrc.includes('禁止出现 AI / 客服套话'));
   check('SYSTEM 里保留了风格对照示例（只写禁令模型学不会怎么写）', arSrc.includes('风格对照'));
   check('temperature 抬到 0.8（降低「所有人收到同一句」的雷同感）', arSrc.includes('temperature: 0.8'));
+}
+
+// ═══════════════════════════════════════════════════════════
+console.log('\n══════ A5. 邮箱直投：JD 优先 + 托管域 + 共用邮箱（2026-10-09） ══════');
+{
+  // 背景（**真库实测**，不是推测）：给「微信推文 / 官网表单」岗位加邮箱直投时，旧实现三处硬伤：
+  //  ① 只扫 source:'offerbiu' —— 实测「jd 带邮箱」的 104 个岗位里 chinahr 占 35，整片漏掉；
+  //  ② 只打开页面抓 innerText —— 微信推文正文全在图片里（实测 body.innerText 仅 74~86 字、
+  //     图片 12~16 张）⇒ 这条路对推文**结构性失效**，而 OCR 结果其实早就写在 jobs.jd 里；
+  //  ③ 🔴 跨公司隔离规则在托管域上把目标全杀 —— 推文注册域是 qq.com，
+  //     「企业自有域名邮箱 ≠ 岗位注册域 ⇒ 隔离」等于要求「招聘邮箱必须以 qq.com 结尾」
+  //     ⇒ 全池 102 个 JD 邮箱里 89 个（87.3%）被判成跨公司串号，一封都发不出去。
+  // 最难察觉的不是误杀本身，是它**不报错**：扫出来全是 ⚠ 标记，看日志只会以为「这批推文质量差」。
+
+  // ---- 平台自有域 ----
+  for (const u of [
+    'https://www.zhipin.com/job_detail/x.html',
+    'https://www.zhaopin.com/job/x',
+    'https://jobs.51job.com/x.html',
+    'https://www.nowcoder.com/job/x',
+    'https://www.iguopin.com/job/x',
+    'https://www.liepin.com/job/x',
+    'https://q.yingjiesheng.com/x',
+    'https://www.chinahr.com/detail/6ab0d24a',
+    'https://www.58.com/x',
+  ]) {
+    check('平台自有域被识别：' + u.slice(8, 34), isPlatformUrl(u));
+  }
+  for (const u of [
+    'https://career.huawei.com/reccampportal/portal5/index.html',
+    'https://app.mokahr.com/campus_apply/x',
+    'https://norincogroupzhaopin.zhiye.com/',
+    'https://jobs.bytedance.com/campus',
+    'https://v.wjx.cn/vm/x.aspx',
+  ]) {
+    check('企业自有页不算平台域：' + u.slice(8, 34), !isPlatformUrl(u));
+  }
+  check('平台域判据确有区分力（不是恒真/恒假）',
+    isPlatformUrl('https://www.iguopin.com/x') && !isPlatformUrl('https://career.cec.com.cn/x'));
+
+  // ---- 托管域：推文 / 在线文档 ----
+  for (const u of ['https://mp.weixin.qq.com/s/x', 'https://docs.qq.com/doc/x', 'https://doc.weixin.qq.com/doc/x']) {
+    check('托管域被识别：' + u.slice(8, 32), isSyndicationUrl(u));
+  }
+  // 🔴 必须是「子域」而不是「后缀」：裸 qq\.com 会把腾讯官网也判成托管域
+  check('托管域判据锚在子域（裸 qq.com 不算）',
+    !isSyndicationUrl('https://qq.com/') && !isSyndicationUrl('https://career.huawei.com/x'));
+
+  // ---- 邮箱抽取 ----
+  check('占位符邮箱被丢（xxx@xxx.com 实测就在真库里）',
+    extractMailCandidates('投递邮箱：xxx@xxx.com').length === 0);
+  check('noreply 类邮箱被丢', extractMailCandidates('系统通知 noreply@example.com').length === 0);
+  check('真招聘邮箱留下且带上下文证据',
+    JSON.stringify(extractMailCandidates('简历投递邮箱：hr@company.com.cn').map((c) => c.email + '|' + c.evidence))
+    === JSON.stringify(['hr@company.com.cn|true']));
+  check('没有上下文的邮箱证据为 false（用于降级，不是丢弃）',
+    JSON.stringify(extractMailCandidates('2024 年成立于深圳 hello@abc.com').map((c) => c.evidence))
+    === JSON.stringify([false]));
+  // ⚠️ ycjubao@58.com（58/中华英才页脚的举报邮箱）**不归抽取函数管**：它语法完全合法。
+  //    拦它的是另外两道闸门 —— 平台域排除（静态）与共用邮箱检测（下面那条）。
+  //    这里把分工钉住，免得后人以为「抽取函数该顺手过滤掉 jubao」，从而把真正的防线删掉。
+  check('平台样板邮箱不靠抽取函数拦（语法合法）—— 留给共用邮箱闸门',
+    extractMailCandidates('举报邮箱 ycjubao@58.com').length === 1);
+
+  // ---- 共用邮箱闸门 ----
+  check('共用邮箱阈值 = 3 家不同公司', SHARED_MAILBOX_MIN_COMPANIES === 3);
+  const shared = detectSharedMailboxes([
+    { email: 'ycjubao@58.com', company: 'A 公司' },
+    { email: 'ycjubao@58.com', company: 'B 公司' },
+    { email: 'ycjubao@58.com', company: 'C 公司' },
+    { email: 'yinyuzhu@mcf.org.cn', company: '红树林基金会' },
+    { email: 'yinyuzhu@mcf.org.cn', company: '红树林基金会' },
+    { email: 'hr@only.com', company: '独家' },
+  ]);
+  check('横跨 3 家公司的邮箱被识别为共用邮箱', shared.has('ycjubao@58.com'));
+  // 🔴 必须按「不同**公司**数」而不是「出现次数」计：同一家公司一次挂多个岗共用同一 HR 邮箱
+  //    是正常的（实测红树林基金会两岗共用 yinyuzhu@mcf.org.cn），按次数算会把它们误杀。
+  check('同一家公司重复出现不算共用邮箱（按不同公司数计）', !shared.has('yinyuzhu@mcf.org.cn'));
+  check('单家公司专属邮箱不受影响', !shared.has('hr@only.com'));
+  check('共用邮箱判据确有区分力（不高不低，正好 1 个）',
+    shared.size === 1 && (shared.get('ycjubao@58.com') || []).length === 3);
+
+  // ---- judgeMailbox：本轮的**核心修复** ----
+  const wxUrl = 'https://mp.weixin.qq.com/s/abcdef';
+  check('rootDomain(微信推文) 就是 qq.com（误杀的根因，钉住它）', rootDomain(wxUrl) === 'qq.com');
+  const vOk = judgeMailbox('hr@do1.com.cn', wxUrl, { syndication: true, evidence: true });
+  check('🔴 推文里的企业自有域名邮箱不再被判跨公司串号（旧规则误杀 87.3%）',
+    !vOk.quarantine && vOk.domainRule === 'skipped-syndication', JSON.stringify(vOk));
+  check('推文里没有上下文的邮箱降级隔离（low-context）',
+    (judgeMailbox('x@y.com', wxUrl, { syndication: true, evidence: false }).quarantine || '').startsWith('low-context:'));
+  // 反向：域相等规则**没有**被整体删掉 —— 企业官网页上仍然生效
+  const vCross = judgeMailbox('hr@do1.com.cn', 'https://career.huawei.com/job/1', { evidence: true });
+  check('🔴 企业官网页上的跨公司串号照拦（否则就是把规则删了，而不是修对）',
+    (vCross.quarantine || '').startsWith('cross-company:') && vCross.domainRule === 'enforced', JSON.stringify(vCross));
+  check('常见个人邮箱主机在官网页上本就不算跨公司',
+    !judgeMailbox('ma700zp@163.com', 'https://career.huawei.com/job/1', { evidence: true }).quarantine);
+
+  // ---- 短用户名（OCR 截断残片的替身信号）----
+  check('短得可疑的用户名被标记（s@iflytek.com 实测是 OCR 把前面字符吞掉后的残片）',
+    suspiciousShortLocal('s@iflytek.com'));
+  check('规范前缀不算可疑（hr@ / zp@）',
+    !suspiciousShortLocal('hr@x.com') && !suspiciousShortLocal('zp@x.com'));
+  check('正常长度用户名不受影响', !suspiciousShortLocal('cheng@seadesign.cn'));
+
+  // ---- 真库性质（不断言数量：数量随采集变化，只断言性质）----
+  // 🔴🔴 这段的判据必须是**独立清单（oracle）**，绝不能复用 isPlatformUrl / isSyndicationUrl：
+  //    cands 本身就是被那两个函数过滤出来的 ⇒ 再用它们去验 cands，两边永远自洽，
+  //    把平台域清单改回旧的 4 个域，断言照样绿（**恒真**）。
+  //    这正是 2026-10-09 破坏性对照 M3 当场抓出来的：它确实红了，但**红在别处** ——
+  //    判据自己没红，说明那几条「看起来在验池子」的断言其实一直在自己满足自己。
+  const PLATFORM_ORACLE = ['zhipin.com', 'zhaopin.com', '51job.com', 'nowcoder.com',
+    'iguopin.com', 'liepin.com', 'yingjiesheng.com', 'chinahr.com', '58.com'];
+  const SYND_ORACLE = /(mp\.weixin\.qq\.com|mp\.weixinbridge\.com|doc\.weixin\.qq\.com|docs\.qq\.com|alidocs\.dingtalk\.com|qr61\.cn)/i;
+  const oracleIsPlatform = (u: unknown) => PLATFORM_ORACLE.some((h) => String(u || '').toLowerCase().includes(h));
+  // 仪器自检：独立清单自己得先有区分力，否则下面两条照样恒绿。
+  // ⚠️ 也顺便证明它**不误伤**企业自有子域（真库里有 zhaopin.changhong.com 这种名字里带平台的雇主页）。
+  check('独立平台清单自检：判得出平台页，也不误伤企业子域',
+    oracleIsPlatform('https://www.chinahr.com/detail/x')
+    && oracleIsPlatform('https://q.yingjiesheng.com/x')
+    && !oracleIsPlatform('https://zhaopin.changhong.com/SU6886/pb/school.html')
+    && !oracleIsPlatform('https://career.huawei.com/x'));
+  check('独立托管域清单自检：判得出推文，也不误伤腾讯官网',
+    SYND_ORACLE.test('https://mp.weixin.qq.com/s/x') && !SYND_ORACLE.test('https://qq.com/'));
+
+  // 与库里的数据无关，直接验判据本身（平台域清单被改回旧版 ⇒ 这里必红）
+  check('候选池排除判据：企业自有页收、平台自有页不收',
+    isEmailScanCandidateUrl('https://career.huawei.com/x')
+    && isEmailScanCandidateUrl('https://zhaopin.changhong.com/x')
+    && !isEmailScanCandidateUrl('https://www.chinahr.com/x')
+    && !isEmailScanCandidateUrl('https://www.iguopin.com/x')
+    && !isEmailScanCandidateUrl(''));
+
+  const cands = listEmailScanCandidates({});
+  check('邮箱扫描候选池非空（防「过滤写错 ⇒ 恒空 ⇒ 后几条恒绿」）', cands.length > 0, 'len=' + cands.length);
+  check('🔴 候选池里没有任何平台自有页（判据是独立清单，不是生成候选池的那个函数）',
+    cands.every((j: any) => !oracleIsPlatform(j.apply_url)),
+    '混入：' + cands.filter((j: any) => oracleIsPlatform(j.apply_url)).slice(0, 3).map((j: any) => j.apply_url).join('、'));
+  const candUrls = cands.map((j: any) => String(j.apply_url));
+  check('候选池按 apply_url 去重（同一篇推文被多个岗位引用时只扫一次）',
+    new Set(candUrls).size === candUrls.length, candUrls.length + ' vs ' + new Set(candUrls).size);
+  const wxOnly = listEmailScanCandidates({ scope: 'wechat' });
+  const siteOnly = listEmailScanCandidates({ scope: 'site' });
+  check('扫描范围互补：仅推文 / 仅官网表单 各自正确且加起来等于全池（判据同样是独立清单）',
+    wxOnly.every((j: any) => SYND_ORACLE.test(String(j.apply_url)))
+    && siteOnly.every((j: any) => !SYND_ORACLE.test(String(j.apply_url)))
+    && wxOnly.length + siteOnly.length === cands.length,
+    'wechat=' + wxOnly.length + ' site=' + siteOnly.length + ' all=' + cands.length);
+
+  // ---- 静态断言：扫描流程的顺序与范围 ----
+  const scanSrc = fs.readFileSync(new URL('../server/services/offerbiuEmailScan.ts', import.meta.url), 'utf8');
+  const fnBodyOf = (name: string) => {
+    const i = scanSrc.indexOf('function ' + name + '(');
+    if (i < 0) return '';
+    const j = scanSrc.indexOf('\n}', i);
+    return j > i ? scanSrc.slice(i, j) : '';
+  };
+  const oneBody = fnBodyOf('scanOne');
+  check('抓到了 scanOne 函数体（范围判据自身的存在性自检）', oneBody.length > 500, 'len=' + oneBody.length);
+  const iJd = oneBody.indexOf('extractMailCandidates(String(j.jd');
+  const iNav = oneBody.indexOf("execCdpAction(ctxKey, 'navigate'");
+  check('🔴 「JD 优先」真的排在打开页面之前（反了 ⇒ 推文永远抓不到邮箱，正文在图片里）',
+    iJd >= 0 && iNav >= 0 && iJd < iNav, 'jd@' + iJd + ' nav@' + iNav);
+  check('推文类托管页不会去开页面（开了也抓不到，纯浪费 + 会踩微信限流）',
+    /if \(o\.jdOnly \|\| syndication\)/.test(oneBody));
+  const poolBody = fnBodyOf('listEmailScanCandidates');
+  check('抓到了 listEmailScanCandidates 函数体（存在性自检）', poolBody.length > 200, 'len=' + poolBody.length);
+  check("🔴 候选池不再硬编码 source:'offerbiu'（实测漏掉 chinahr 的 35 个 jd 带邮箱岗位）",
+    !/source:\s*'offerbiu'/.test(poolBody));
+  const scanFnBody = fnBodyOf('scanOfferbiuEmails');
+  check('抓到了 scanOfferbiuEmails 函数体（存在性自检）', scanFnBody.length > 500, 'len=' + scanFnBody.length);
+  check('共用邮箱在扫描前对全池预扫（只看本次窗口发现不了平台页脚邮箱）',
+    /detectSharedMailboxes\(/.test(scanFnBody));
+
+  // ---- 前端面板：范围/开关真接上了 ----
+  const cMail = stripComments(fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8'));
+  for (const id of ['emailScanScope', 'emailScanJdOnly', 'emailScanHasJd', 'emailPickSafe', 'emailPickNone']) {
+    check('面板元素存在：#' + id, new RegExp('<[a-z]+[^>]*\\bid="' + id + '"').test(cMail));
+  }
+  check('范围下拉的选项真接上了（画了控件但 value 对不上 ⇒ 参数发不出去）',
+    /id="emailScanScope"[\s\S]{0,320}?value="wechat"[\s\S]{0,160}?value="site"/.test(cMail));
+  check('扫描请求把 scope / jdOnly / hasJdOnly 发给后端',
+    /scan-emails'[\s\S]{0,240}?scope[\s\S]{0,120}?jdOnly[\s\S]{0,120}?hasJdOnly/.test(cMail));
+  const srvSrc = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+  check('后端先报岗位池覆盖（否则「扫出来是 0」无从解释）',
+    /ev\.type==='pool'/.test(cMail) && /type: 'pool', pool: emailPoolStats/.test(srvSrc));
 }
 
 // ═══════════════════════════════════════════════════════════

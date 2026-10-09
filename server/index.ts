@@ -49,7 +49,7 @@ import {
   readPlatformRiskBlock, clearPlatformRiskBlock,
 } from "./services/apply/batch.js";
 import { rememberCurrentForm } from "./services/apply/offerbiu.js";
-import { scanOfferbiuEmails } from "./services/offerbiuEmailScan.js";
+import { scanOfferbiuEmails, emailPoolStats, type EmailScanScope } from "./services/offerbiuEmailScan.js";
 import { runAutoReply, isAutoReplyPlatform, listAutoReplyPlatforms } from "./services/apply/autoReplyRunner.js";
 import { startWatcher, stopWatcher, watcherStatus, setWatchConfig, bootstrapWatcher, watchEmitter } from "./services/apply/autoReplyWatcher.js";
 import { startWatcher as startApplyWatch, stopWatcher as stopApplyWatch, watcherStatus as applyWatchStatus, setWatchConfig as setApplyWatchConfig, bootstrapWatcher as bootstrapApplyWatch, watchEmitter as applyWatchEmitter } from "./services/apply/autoApplyWatcher.js";
@@ -1929,11 +1929,26 @@ app.post("/api/offerbiu/collect-keywords", async (req, res) => {
   }
 });
 
-// ============= Offerbiu 邮箱直投（无需登录；offerbiu 上真正可规模化的自动投递路径） =============
+// ============= 邮箱直投（无需登录：微信推文 / 企业官网表单上的招聘邮箱） =============
+//
+// 🔴 范围**不再限定 offerbiu**：微信推文(292) 与纯官网表单(626) 固然都在 offerbiu 池内，
+//    但同类岗位也会从别的平台采进来（实测「jd 带邮箱」的 104 个岗位里 chinahr 占 35）。
+//    判据是「apply_url 不在招聘平台自有域上」，与 source 无关。
 
-/** 扫描 offerbiu 岗位中的招聘邮箱（SSE 进度 + 末尾 found 事件） */
+/**
+ * 扫描微信推文 / 官网表单岗位的招聘邮箱（SSE：开头 pool + 进度 + 末尾 found）。
+ *
+ * 入参：limit / offset / workers / settleMs / hrLikeOnly（原有）
+ *      scope:      'all' | 'wechat' | 'site'（岗位范围）
+ *      source:     可选 source 白名单（不传即全平台）
+ *      hasJdOnly:  只处理库内 JD 正文非空的岗位
+ *      jdOnly:     **只用 JD 正文提邮箱、不开浏览器**（零网络成本；微信推文正文在图片里，开页面也抓不到）
+ */
 app.post("/api/offerbiu/scan-emails", async (req, res) => {
-  const { limit, offset, hrLikeOnly, settleMs, workers } = req.body || {};
+  const { limit, offset, hrLikeOnly, settleMs, workers, hasJdOnly, jdOnly } = req.body || {};
+  const scopeRaw = String((req.body || {}).scope || 'all');
+  const scope: EmailScanScope = scopeRaw === 'wechat' || scopeRaw === 'site' ? scopeRaw : 'all';
+  const source = (req.body || {}).source ? String(req.body.source) : undefined;
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -1942,15 +1957,22 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
   });
   const send = (e: unknown) => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
   try {
+    // 先报岗位池覆盖：让「扫出来是 0」这件事有解释（池里没有 JD 正文 / 推文还没跑 OCR），
+    // 而不是让用户对着一个空列表猜。
+    send({ type: 'pool', pool: emailPoolStats(scope, source) });
     const r = await scanOfferbiuEmails({
       limit: Number(limit) || 20,
       offset: Number(offset) || 0,
       hrLikeOnly: hrLikeOnly !== false,
       settleMs: settleMs ? Number(settleMs) : undefined,
       workers: workers ? Number(workers) : 1,
+      scope,
+      source,
+      hasJdOnly: hasJdOnly === true,
+      jdOnly: jdOnly === true,
       onProgress: (ev) => send(ev),
     });
-    send({ type: 'found', scanned: r.scanned, found: r.found });
+    send({ type: 'found', scanned: r.scanned, found: r.found, pool: r.pool, sharedDropped: r.sharedDropped });
     res.write('event: end\ndata: {}\n\n');
   } catch (error: any) {
     send({ type: 'error', message: error?.message || '扫描失败' });
@@ -2562,6 +2584,11 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
       }
       send({ type: 'progress', index: i, total: jobIds.length, jobId: job.id, company: job.company, position: job.position });
       try {
+        // 🔴 `platform: 'offerbiu'` 在这里不是「来源标签」，而是**路由键**：它落到
+        //    `runOfferbiuEmail`（邮箱直投通道）。所以**不要**改成按 `job.source` 分发 ——
+        //    job.source='job51' 会派到 `runJob51` 的表单引擎，把「发邮件」变成「去平台点表单」。
+        //    扫描侧已经把范围放开到「非平台自有域的全部岗位」（含微信推文 / 企业官网表单），
+        //    但投递侧永远只走这一条邮箱通道。
         const r = await runApply({
           platform: 'offerbiu',
           jobUrl: job.apply_url || undefined,

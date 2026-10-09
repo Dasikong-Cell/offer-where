@@ -734,19 +734,34 @@
                 <button class="btn primary sm" id="emailCollect" style="margin-top:8px">采集校招关键词</button></div>
               <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">② 扫描招聘邮箱</h2>
                 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                  <label class="muted">条数 <input id="emailScanLimit" type="number" min="1" max="2000" step="1" value="20" style="width:66px" /></label>
-                  <label class="muted">起点 <input id="emailScanOffset" type="number" min="0" step="1" value="0" style="width:66px" /></label>
+                  <label class="muted">范围 <select id="emailScanScope" style="width:172px">
+                    <option value="all">微信推文 + 官网表单</option>
+                    <option value="wechat">仅微信推文 / 在线文档</option>
+                    <option value="site">仅企业官网 / 表单</option>
+                  </select></label>
+                  <label class="muted">条数 <input id="emailScanLimit" type="number" min="1" max="5000" step="1" value="500" style="width:68px" /></label>
+                  <label class="muted">起点 <input id="emailScanOffset" type="number" min="0" step="1" value="0" style="width:68px" /></label>
                 </div>
+                <label class="muted small" style="display:block;margin-top:7px"><input type="checkbox" id="emailScanJdOnly" checked /> 只用库内 JD 正文提邮箱（不开浏览器，秒出结果）</label>
+                <label class="muted small" style="display:block;margin-top:3px"><input type="checkbox" id="emailScanHasJd" checked /> 只扫「已有 JD 正文」的岗位（微信推文多为图片，需先 OCR）</label>
                 <div class="out" id="emailStep2" style="max-height:110px;margin-top:8px"></div>
                 <div id="emailHits" style="margin-top:8px"></div>
-                <button class="btn primary sm" id="emailScan" style="margin-top:8px">扫描邮箱</button></div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                  <button class="btn primary sm" id="emailScan">扫描邮箱</button>
+                  <button class="btn sm" id="emailPickSafe">只勾高置信</button>
+                  <button class="btn sm" id="emailPickNone">全不勾</button>
+                </div></div>
               <div class="card" style="padding:14px"><h2 style="margin-bottom:10px">③ 批量直投</h2>
                 <div class="muted" id="emailSelSummary">尚未选择命中岗位 —— 先在 ② 扫描并勾选。</div>
-                <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="emailForce" /> 强制投递（忽略「跨公司串号」隔离）</label>
+                <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="emailForce" /> 强制投递（忽略隔离标记）</label>
                 <div class="out" id="emailStep3" style="max-height:110px;margin-top:8px"></div>
                 <button class="btn primary sm" id="emailApply" style="margin-top:8px">开始投递</button></div>
             </div>
-            <div class="note warn">邮箱直投走 offerbiu 微信推文 / 官网表单通道，<b>无需登录平台</b>。真实发送前请先预览，并人工剔除「跨公司串号」候选（个人 QQ / HR-SaaS 平台邮箱已自动隔离）。</div>
+            <div class="note warn">邮箱直投走<b>微信推文 / 企业官网表单</b>通道，<b>无需登录平台</b>。<b>邮件发出不可撤回</b>，请逐条核对「证据」再勾选。<br />
+              · 命中来源两种：<b>JD 正文</b>（库内文本，含 OCR 结果；零网络成本）与<b>已打开页面</b>（现抓）。<br />
+              · 微信推文正文<b>在图片里</b>，页面上抓不到 —— 靠 <code>scripts/ocr_wechat_jd.ts</code> 把长图 OCR 成文本后从 JD 提取；没跑过 OCR 的推文扫不出邮箱（看 ② 的池覆盖行）。<br />
+              · <b>OCR 提取 / 用户名过短 / 无上下文 / 跨公司串号</b> 的默认不勾；每条都会显示「证据」片段。<br />
+              · 企业官网表单类岗位<b>库里没有 JD 正文</b>（实测 608 个全为空），只能打开页面抓 —— 而多数 ATS 页面本就不放邮箱，命中少属正常。</div>
             <div class="progress"><i id="emailBar"></i></div>
           </div>
         </div>
@@ -4137,7 +4152,7 @@ async function emailStream(path, body, outEl, barEl, onEvent){
       const pct = total ? Math.min(100, Math.round((Number(ev.index)||n+1)/total*100)) : Math.min(100, n%100);
       if(ev.type==='progress'){ n++; push(ev.message || (ev.company?('扫描 '+ev.company):'…')); if(barEl) barEl.style.width=pct+'%'; }
       else if(ev.type==='scan'){ push(ev.message||JSON.stringify(ev)); }
-      else if(ev.type==='found'){ n++; push('✅ 扫描完成：共看 '+ev.scanned+' 个页面，命中 '+((ev.found||[]).length)+' 个招聘邮箱（已在下方列出）'); if(barEl) barEl.style.width='100%'; }
+      else if(ev.type==='found'){ n++; push('✅ 扫描完成：共扫 '+ev.scanned+' 个岗位，命中 '+((ev.found||[]).length)+' 个招聘邮箱（已在下方列出）'); if(barEl) barEl.style.width='100%'; }
       else if(ev.type==='result'){ n++;
         const tag = ev.status==='applied' ? '  ✓ 已投 ' : (ev.status==='skipped' ? '  ⊘ 跳过 ' : '  ✗ 失败 ');
         push(tag + (ev.company||ev.position||ev.jobId||'') + (ev.message?(' — '+ev.message):''));
@@ -4152,27 +4167,54 @@ async function emailStream(path, body, outEl, barEl, onEvent){
   }
 }
 
-/* 扫描命中的岗位（含 quarantine 标记）；投递时按勾选项映射成 jobIds + emails */
+/* 扫描命中的岗位（含 flags / quarantine 标记）；投递时按勾选项映射成 jobIds + emails */
 let EMAIL_HITS = [];
+/* flag → 中文标签。新增 flag 时**必须**在这里补一行，否则界面上会出现英文代号（不会报错，只会变丑）。 */
+const MAIL_FLAG_LABEL = {'cross-company':'跨公司串号','low-context':'无上下文','ocr-derived':'OCR 提取','short-local':'用户名过短'};
+/* 🔴 单个命中项是否「默认可勾」的**唯一**判据在 emailHitSafe()，别在别处再写一套。
+   曾经想过只看 quarantine，但那样「有 flag 但没 quarantine」（如 OCR 提取）的项会默默变成
+   默认勾选，等于把「待人工确认」这层语义丢掉 —— 而邮件发出去收不回来。 */
+function emailHitSafe(h){ return h && h.confidence==='high' && !h.quarantine; }
+function emailHitHtml(h,i){
+  const flags = Array.isArray(h.flags) ? h.flags : [];
+  const q = !!h.quarantine;
+  const kind = h.mailKind==='personal' ? ' <b style="color:#8a6d00">个人邮箱</b>'
+    : (h.mailKind==='generic' ? ' <b style="color:#8a6d00">通用邮箱</b>' : '');
+  return '<label style="display:block;padding:7px 4px;border-bottom:1px solid rgba(128,128,128,.25)">'
+    + '<input type="checkbox" class="emailHitChk" data-i="'+i+'"'+(emailHitSafe(h)?' checked':'')+' /> '
+    + '<b>'+esc(h.company||'')+'</b> · '+esc(h.position||'')+(h.city?(' · '+esc(h.city)):'')
+    + ' <span class="tag" style="font-size:10.5px">'+(h.origin==='jd'?'JD 正文':'已打开页面')+'</span>'
+    + (h.ocrDerived?' <span class="tag" style="font-size:10.5px">OCR</span>':'')
+    + kind
+    + (flags.length?' <b style="color:#c0392b">⚠ '+esc(flags.map(f=>MAIL_FLAG_LABEL[f]||f).join(' / '))+'</b>':'')
+    + (h.foldedJobs?(' <span class="muted small">另有 '+h.foldedJobs+' 个岗位同一邮箱，已折叠</span>'):'')
+    + '<br><span class="muted" style="margin-left:20px">'+esc(h.email||'')+'</span>'
+    + (h.context?('<br><span class="muted small" style="margin-left:20px">证据：…'+esc(h.context)+'…</span>'):'')
+    + (q?('<br><span style="margin-left:20px;color:#c0392b">'+esc(h.quarantine||'')+'</span>'):'')
+    + '</label>';
+}
 function renderEmailHits(){
   const box = $('#emailHits'); if(!box) return;
   if(!EMAIL_HITS.length){
-    box.innerHTML = '<div class="muted">尚无命中。多数 offerbiu 岗位是微信推文/官网表单，页面本就没有邮箱 —— 命中少属正常，先加关键词扩池。</div>';
+    box.innerHTML = '<div class="muted">尚无命中。微信推文正文多在图片里 —— 库里没跑过 OCR 的推文扫不出邮箱；先看 ② 输出里的「岗位池」一行确认到底有没有可提的正文。</div>';
     updateEmailSel(); return;
   }
-  box.innerHTML = EMAIL_HITS.map((h,i)=>{
-    const q = !!h.quarantine;
-    return '<label style="display:block;padding:6px 4px;border-bottom:1px solid rgba(128,128,128,.25)">'
-      + '<input type="checkbox" class="emailHitChk" data-i="'+i+'"'+(q?'':' checked')+' /> '
-      + '<b>'+esc(h.company||'')+'</b> · '+esc(h.position||'')+(h.city?(' · '+esc(h.city)):'')
-      + (q ? ' <b style="color:#c0392b">⚠ 跨公司串号</b>' : '')
-      + '<br><span class="muted" style="margin-left:20px">'+esc(h.email||'')+'</span>'
-      + (q ? '<br><span style="margin-left:20px;color:#c0392b">'+esc(h.quarantine||'')+'</span>' : '')
-      + '</label>';
-  }).join('') + '<div class="muted" style="margin-top:6px">带「⚠ 跨公司串号」的默认不勾选；确要认真投请勾上 ③ 的强制开关。</div>';
+  const safeN = EMAIL_HITS.filter(emailHitSafe).length;
+  box.innerHTML = EMAIL_HITS.map((h,i)=>emailHitHtml(h,i)).join('')
+    + '<div class="muted" style="margin-top:6px">共 '+EMAIL_HITS.length+' 条，其中 <b>'+safeN+'</b> 条高置信已默认勾选。'
+    + '带 ⚠ 的默认不勾：看「证据」那一行再决定；<b>跨公司串号</b>的还需勾上 ③ 的强制开关。</div>';
   box.querySelectorAll('.emailHitChk').forEach(c=>c.addEventListener('change', updateEmailSel));
   updateEmailSel();
 }
+function pickEmailHits(mode){
+  $$('#emailHits .emailHitChk').forEach(c=>{
+    const h = EMAIL_HITS[Number(c.dataset.i)] || {};
+    c.checked = mode==='safe' ? emailHitSafe(h) : false;
+  });
+  updateEmailSel();
+}
+$('#emailPickSafe').addEventListener('click', ()=>pickEmailHits('safe'));
+$('#emailPickNone').addEventListener('click', ()=>pickEmailHits('none'));
 function selectedEmailHits(){
   return [...document.querySelectorAll('.emailHitChk')].filter(c=>c.checked)
     .map(c=>EMAIL_HITS[Number(c.dataset.i)]).filter(Boolean);
@@ -4203,13 +4245,31 @@ $('#emailCollect').addEventListener('click', async ()=>{
 $('#emailScan').addEventListener('click', async ()=>{
   const b=$('#emailScan'); b.disabled=true;
   EMAIL_HITS=[]; renderEmailHits();
-  const limit = Math.max(1, Number($('#emailScanLimit').value)||20);
+  const scope = $('#emailScanScope').value || 'all';
+  const limit = Math.max(1, Number($('#emailScanLimit').value)||500);
   const offset = Math.max(0, Number($('#emailScanOffset').value)||0);
-  $('#emailStep2').textContent='扫描中…（'+limit+' 个岗位，起点 '+offset+'；需要 offerbiu 调试窗口已启动）';
+  const jdOnly = $('#emailScanJdOnly').checked;
+  const hasJdOnly = $('#emailScanHasJd').checked;
+  $('#emailStep2').textContent='扫描中…（范围 '+scope+'，最多 '+limit+' 个岗位，起点 '+offset+'）'
+    + (jdOnly ? '；只用 JD 正文，不开浏览器' : '；JD 无邮箱时打开页面兜底，需要调试窗口已启动');
   try{
-    await emailStream('/api/offerbiu/scan-emails', {limit, offset, workers:4, settleMs:1200},
+    await emailStream('/api/offerbiu/scan-emails',
+      {limit, offset, scope, jdOnly, hasJdOnly, workers:4, settleMs:1200},
       $('#emailStep2'), $('#emailBar'),
-      (ev)=>{ if(ev.type==='found'){ EMAIL_HITS = Array.isArray(ev.found)?ev.found:[]; renderEmailHits(); } });
+      (ev)=>{
+        if(ev.type==='pool' && ev.pool){
+          const p=ev.pool;
+          $('#emailStep2').textContent += NL+'岗位池：共 '+p.total+' 个（推文/在线文档 '+p.syndication+' 个），其中已有 JD 正文 '+p.withJd+' 个、JD 含 @ 的 '+p.jdWithAt+' 个'
+            + (p.syndicationNoJd ? '；另有 '+p.syndicationNoJd+' 个推文还没有 JD 正文（先跑 OCR 才可能提到邮箱）' : '');
+        }
+        if(ev.type==='found'){
+          EMAIL_HITS = Array.isArray(ev.found)?ev.found:[]; renderEmailHits();
+          if(Array.isArray(ev.sharedDropped) && ev.sharedDropped.length){
+            $('#emailStep2').textContent += NL+'已丢弃 '+ev.sharedDropped.length+' 个「平台样板邮箱」（同一邮箱横跨多家公司）：'
+              + ev.sharedDropped.slice(0,3).map(s=>s.email+'×'+s.companies+'家').join('、');
+          }
+        }
+      });
   }catch(e){ $('#emailStep2').textContent += NL+'❌ 扫描失败：'+(e.message||e); }
   b.disabled=false;
 });
@@ -4219,14 +4279,15 @@ $('#emailApply').addEventListener('click', async ()=>{
   if(!hits.length){ $('#emailStep3').textContent='请先在 ② 里勾选要投递的命中岗位。'; return; }
   const force = $('#emailForce').checked;
   const risky = hits.filter(h=>h.quarantine).length;
+  const lowConf = hits.filter(h=>!h.quarantine && h.confidence!=='high').length;
   if(risky && !force){
-    $('#emailStep3').textContent='❌ 勾选项里有 '+risky+' 个带「跨公司串号」标记。请取消勾选它们，或勾上「强制投递（忽略隔离）」—— 否则简历可能发给错误的公司（不可撤回）。';
+    $('#emailStep3').textContent='❌ 勾选项里有 '+risky+' 个带隔离标记（跨公司串号 / 无上下文）。请取消勾选它们，或勾上「强制投递（忽略隔离）」—— 否则简历可能发给错误的公司（不可撤回）。';
     return;
   }
   const jobIds = hits.map(h=>h.jobId);
   const emails = {}; hits.forEach(h=>{ emails[h.jobId]=h.email; });
   const preview = hits.slice(0,5).map(h=>'  · '+(h.company||'')+' | '+h.position+' | '+h.email).join('\n');
-  if(!confirm('确认真实发送 '+jobIds.length+' 封邮件（不可撤回）？\n\n'+preview+(hits.length>5?('\n  …另有 '+(hits.length-5)+' 个'):'')+(risky?'\n\n⚠ 含 '+risky+' 个串号项（已强制）':''))) return;
+  if(!confirm('确认真实发送 '+jobIds.length+' 封邮件（不可撤回）？\n\n'+preview+(hits.length>5?('\n  …另有 '+(hits.length-5)+' 个'):'')+(risky?'\n\n⚠ 含 '+risky+' 个隔离项（已强制）':'')+(lowConf?('\n⚠ 含 '+lowConf+' 个低置信项（OCR / 用户名过短 / 无上下文），请确认已核对「证据」行'):''))) return;
   const b=$('#emailApply'); b.disabled=true; $('#emailStep3').textContent='投递中…（一岗一简历会先按 JD 生成定制附件，逐封间隔 8 秒）';
   try{
     await emailStream('/api/offerbiu/email-apply',
