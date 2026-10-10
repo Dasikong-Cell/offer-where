@@ -318,6 +318,13 @@ export interface EmailHit {
   subjectPreview?: string;
   /** 看得见有要求、但文本被打散（多为 OCR 产物）⇒ 必须人工核对，别当「没要求」 */
   subjectDegraded?: boolean;
+  /**
+   * 要求里**没替换上**的占位词（档案缺对应值，如「毕业年份」）。
+   * 🔴 必须让它在**投递之前**可见：`planSubject` 是原位替换、不留白，
+   *    所以拼不出的占位词会**原样留在标题里**（`… - 软件工程 - 毕业年份`）——
+   *    这种标题看着像拼好了，实际会把占位词一起发给 HR（2026-10-10 真实投递实测）。
+   */
+  subjectUnresolved?: string[];
   /** 需人工确认的原因；存在时默认跳过投递，**需 force 才发**（落在 DB `jobs.quarantine` 列上） */
   quarantine?: string;
 }
@@ -496,6 +503,8 @@ function buildHit(
     // 只有拿到档案才回 preview —— 空档案拼出来的是残留占位词，会让人误以为那就是要发的标题
     ...(profile ? { subjectPreview: subjectPlan.subject } : {}),
     ...(subjectPlan.degraded ? { subjectDegraded: true } : {}),
+    // 拼不全不是错误，但**必须可见**：这些占位词会原样留在要发出去的标题里
+    ...(subjectPlan.unresolved.length ? { subjectUnresolved: subjectPlan.unresolved } : {}),
     ...(verdict.quarantine ? { quarantine: verdict.quarantine } : {}),
   };
 }
@@ -605,7 +614,10 @@ export async function scanOfferbiuEmails(opts: ScanOpts = {}): Promise<ScanResul
   const jobs = opts.hasJdOnly === true ? all.filter((j) => String(j.jd || '').trim()) : all;
   const slice = jobs.slice(offset, offset + limit);
 
-  const ctx: ScanCtx = { ep: opts.endpoint || officialEndpoint(), settleMs, hrLikeOnly, jdOnly: opts.jdOnly === true, shared };
+  // 🔴 `profile` 必须装进 ctx：`scanOne` 是拿 `o.profile` 去拼标题的，
+  //    漏了这一项不会报错（类型上是可选字段），只会让每一条的 `subjectPreview` **静默消失**
+  //    —— 2026-10-10 真实扫描实测：档案在库里、端点也传了，命中项里就是没有预览。
+  const ctx: ScanCtx = { ep: opts.endpoint || officialEndpoint(), settleMs, hrLikeOnly, jdOnly: opts.jdOnly === true, shared, profile: opts.profile };
   const found: EmailHit[] = [];
   // 同一邮箱被多个岗位引用（同一家公司一次挂多个岗）⇒ **折叠成一条**：否则一次投递会给
   // 同一个收件箱连发 N 封几乎一样的简历（实测「红树林基金会」两个岗位共用同一邮箱）。

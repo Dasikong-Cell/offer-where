@@ -1063,6 +1063,41 @@ console.log('\n══════ A5. 邮箱直投：JD 优先 + 托管域 + 共
   check('共用邮箱在扫描前对全池预扫（只看本次窗口发现不了平台页脚邮箱）',
     /detectSharedMailboxes\(/.test(scanFnBody));
 
+  // 🔴 2026-10-10 **真实扫描**抓到的接线断点：扫描结果里没有「我们会发的标题」。
+  //    端点传了 profile、buildHit 也读了 `o.profile`，唯独 `ctx` 组装那一步漏装 ——
+  //    类型上 `profile?` 是可选的 ⇒ 编译期不报错，运行时每一条 `subjectPreview` 静默消失。
+  //    教训：**「传进来了」和「装进上下文了」是两件事**，中间那一跳必须单独钉住。
+  const iCtx = scanFnBody.indexOf('const ctx: ScanCtx = {');
+  check('抓到了 ctx 组装行（范围判据自身的存在性自检，否则下面那条会恒绿）', iCtx >= 0, 'idx=' + iCtx);
+  const ctxSlice = iCtx >= 0 ? scanFnBody.slice(iCtx, scanFnBody.indexOf(';', iCtx)) : '';
+  check('🔴 扫描上下文 ctx 必须把 profile 装进去（漏了 ⇒ 命中项里没有「我们会发的标题」预览）',
+    /\bprofile:\s*opts\.profile\b/.test(ctxSlice), 'ctx=' + ctxSlice.slice(0, 140));
+  check('ctx 的 profile 判据确有区分力（把那项删掉必须判假）',
+    ctxSlice.length > 40 && !/\bprofile:\s*opts\.profile\b/.test(ctxSlice.replace(/,\s*profile:\s*opts\.profile/, '')));
+  const hitPasses = oneBody.match(/buildHit\([^)]*o\.profile[^)]*\)/g) || [];
+  check('两处 buildHit 都把 profile 传下去了（JD 路径与页面路径各一，缺一 = 那条路径没预览）',
+    hitPasses.length === 2, 'cnt=' + hitPasses.length);
+
+  // 🔴 2026-10-10 **真实投递**抓到的第二个静默失效：标题里留着没替换的占位词。
+  //    招聘方要求 `应聘岗位 - 姓名 - 学校 - 专业 - 毕业年份`，而档案里没有「毕业年份」，
+  //    `planSubject` 又是原位替换、不留白 ⇒ 拼出的标题长这样：`… - 软件工程 - 毕业年份`，
+  //    看起来像拼好了，实际会把占位词一起发给 HR。**不拦投递**（拼不全不是「发错人」），
+  //    但预览与成功的消息必须把话说全（日志里的红步进不了 SSE，用户只看得到 message）。
+  const ofbSrc = fs.readFileSync(new URL('../server/services/apply/offerbiu.ts', import.meta.url), 'utf8');
+  check('抓到了 subjectCaveat 定义（存在性自检，否则下面两条会被空串或别处字符串满足）',
+    /const subjectCaveat = plan\.unresolved\.length/.test(ofbSrc));
+  const caveatUses = (ofbSrc.match(/\+ subjectCaveat/g) || []).length;
+  check('🔴 预览消息与「已投递」消息都必须带上占位词告警（缺一 ⇒ 那条路径悄悄发占位词）',
+    caveatUses === 2, 'cnt=' + caveatUses);
+  check('占位词告警的判据确有区分力（把 plan.unresolved 去掉必须判假）',
+    !/const subjectCaveat = plan\.unresolved\.length/.test(
+      ofbSrc.replace('const subjectCaveat = plan.unresolved.length', 'const subjectCaveat = 0')));
+
+  const scanHitDecl = scanSrc.indexOf('subjectUnresolved?: string[];');
+  check('EmailHit 声明了 subjectUnresolved（扫描阶段就要能看见「哪些占位词没填上」）', scanHitDecl >= 0);
+  check('buildHit 把 subjectUnresolved 回填进命中项',
+    /subjectUnresolved: subjectPlan\.unresolved/.test(scanSrc));
+
   // ---- 前端面板：范围/开关真接上了 ----
   const cMail = stripComments(fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8'));
   for (const id of ['emailScanScope', 'emailScanJdOnly', 'emailScanHasJd', 'emailPickSafe', 'emailPickNone']) {
@@ -1072,6 +1107,11 @@ console.log('\n══════ A5. 邮箱直投：JD 优先 + 托管域 + 共
     /id="emailScanScope"[\s\S]{0,320}?value="wechat"[\s\S]{0,160}?value="site"/.test(cMail));
   check('扫描请求把 scope / jdOnly / hasJdOnly 发给后端',
     /scan-emails'[\s\S]{0,240}?scope[\s\S]{0,120}?jdOnly[\s\S]{0,120}?hasJdOnly/.test(cMail));
+  // 占位词告警要落在**命中项那一行**：只在汇总里说「3 条有占位词」，人还得自己数到第几条
+  check('面板把「有占位词没替换」直接标在命中项上',
+    cMail.includes('\u26a0 其中 \'+h.subjectUnresolved.length+\' 处占位词没替换'));
+  check('面板汇总行也统计了未替换占位词的条数（否则不翻到那一条就永远看不见）',
+    cMail.includes('const unresolvedN = EMAIL_HITS.filter(h=>h.subjectUnresolved'));
   const srvSrc = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
   check('后端先报岗位池覆盖（否则「扫出来是 0」无从解释）',
     /ev\.type==='pool'/.test(cMail) && /type: 'pool', pool: emailPoolStats/.test(srvSrc));

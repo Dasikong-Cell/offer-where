@@ -229,6 +229,17 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
       );
     }
 
+    // 🔴 「拼不全」必须喊进消息里（2026-10-10 真实投递实测出来的）：
+    //    招聘方要求 `应聘岗位 - 姓名 - 学校 - 专业 - 毕业年份`，但档案里**没有**「毕业年份」这一项
+    //    ⇒ 占位词被**原样留在标题里**，于是「… - 软件工程 - 毕业年份」这种标题会被真的发给 HR。
+    //    而预览/成功的消息原本只回一句「标题「…」」，**看起来像是拼好了**（日志里的红步进不了 SSE）。
+    //    刻意**不拦投递**：拼不全属「不够贴合」，不是「发错人」（拦下会把能投的也拦掉）；
+    //    但必须把话说全 —— 让点「投递」的人先看见。
+    const subjectCaveat = plan.unresolved.length
+      ? ` ⚠ 标题里有 ${plan.unresolved.length} 处占位词没替换（${plan.unresolved.join('；')}）`
+        + '—— 建议先在档案里补上、或人工改标题，否则会原样发给 HR'
+      : '';
+
     // 3) 正文
     const p = input.profile as any;
     const lines = [
@@ -286,7 +297,7 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
       return {
         platform, status: 'need_manual', logs: logs.logs, company, position,
         preview: { to, subject, body, attachment: attachments[0], deliverability: assess, subjectPlan: plan },
-        message: `预览完成（未发送）：将发往 ${to}，标题「${subject}」`,
+        message: `预览完成（未发送）：将发往 ${to}，标题「${subject}」` + subjectCaveat,
       };
     }
 
@@ -308,7 +319,7 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
     logs.step('发送邮件', true, `已发送至 ${to}${resumePath ? '（含简历附件）' : '（无附件）'}${res.sentSaved ? '，副本已存「已发送」' : ''}`);
     return {
       platform, status: 'applied', logs: logs.logs, company, position,
-      message: `已通过邮箱向「${company || to}」投递简历：${to}（标题：${subject}）`,
+      message: `已通过邮箱向「${company || to}」投递简历：${to}（标题：${subject}）` + subjectCaveat,
     };
   } catch (e: any) {
     return { platform, status: 'error', message: e?.message || String(e), logs: logs.logs, company, position };
