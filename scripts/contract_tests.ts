@@ -1115,6 +1115,24 @@ console.log('\n══════ A5. 邮箱直投：JD 优先 + 托管域 + 共
   const srvSrc = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
   check('后端先报岗位池覆盖（否则「扫出来是 0」无从解释）',
     /ev\.type==='pool'/.test(cMail) && /type: 'pool', pool: emailPoolStats/.test(srvSrc));
+
+  // ---- 投递真实性核查器（scripts/mail_verify.ts）的判据纪律 ----
+  // 这个脚本本轮**自己误报了两次**，两次都错在同一件事上：拿「会变的字段」当身份判据。
+  // 先把纪律钉住，再谈结论。
+  const mvSrc = fs.readFileSync(new URL('../scripts/mail_verify.ts', import.meta.url), 'utf8');
+  check('核查器把「服务器侧已发送」当最硬证据（from == 我自己 ⇒ 真的过了 SMTP）',
+    /from\.toLowerCase\(\)\.includes\(me\)/.test(mvSrc));
+  check('抓到了正文指纹定义 CHANNEL_BODY（存在性自检，否则下面那条会被别处字符串满足）',
+    /const CHANNEL_BODY = /.test(mvSrc));
+  check('🔴 本通道判据必须取自**正文模板**，不得用标题（标题由招聘方要求决定：'
+    + '`院校+专业+姓名` 这种要求下标题里既没手机号也没岗位名 ⇒ 实测误报「台账漏记」）',
+    /const isOurChannel = \(r: Rec\) => CHANNEL_BODY\.test\(r\.body/.test(mvSrc));
+  check('退信的被拒地址优先读 DSN 标准字段（QQ 退信正文是 HTML，只扫正文一个地址都抓不到）',
+    /X-Failed-Recipients\|Final-Recipient/.test(mvSrc));
+  check('台账只比「本通道」的已发送（拿窗口内全部已发送比 ⇒ 会把人工/别通道发的误判成「台账漏记」）',
+    /sentCh\.length - apps\.length/.test(mvSrc));
+  check('核查器是**只读**的：不发信、不写库、不改状态',
+    !/sendMail\(|createApplication\(|updateJob\(|\.run\(|saveMailConfig\(/.test(mvSrc));
 }
 
 // ═══════════════════════════════════════════════════════════
