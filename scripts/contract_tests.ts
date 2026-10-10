@@ -5455,6 +5455,70 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     })(), '');
 }
 
+// ═══════════════════════════════════════════════════════════
+// 预览语义 / ok-fail 口径 合约（2026-10-10）
+//
+// 三件事同一个根因：邮箱直投通道的 dryRun 分支返回了 status='need_manual'。
+//   ① 与「闸门拦下」共用同一 status ⇒ 调用方分不清「预览完成」与「被拦下」；
+//   ② ApplyStatus 里 'preview' 早已定义（「走到投递入口但未点击/未提交」），却没人返回它
+//      ⇒ batch.ts 的 res.status === 'preview' 成了**死分支**，previewed 恒为 0；
+//   ③ server/index.ts 的批量 SSE 只认 applied，其余一律 fail++ ⇒ 三条预览报成 ok:0 fail:3。
+// 判定逻辑不需要新单测（status 是字符串常量），但**接线**必须机械钉住。
+// ═══════════════════════════════════════════════════════════
+{
+  const ofbP = fs.readFileSync(new URL('../server/services/apply/offerbiu.ts', import.meta.url), 'utf8');
+  const idxP = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+  const idxN = idxP.replace(/\r\n/g, '\n');
+  const conP = fs.readFileSync(new URL('../public/console.html', import.meta.url), 'utf8');
+  const batP = fs.readFileSync(new URL('../server/services/apply/batch.ts', import.meta.url), 'utf8');
+  const typP = fs.readFileSync(new URL('../server/services/apply/types.ts', import.meta.url), 'utf8');
+
+  // ---- 1) 地基：ApplyStatus 必须有 preview，且语义是 dry-run 未提交 ----
+  check('ApplyStatus 定义了 preview 且注明是 dry-run 未提交（下游判据的地基）',
+    /'preview'\s*\/\/[^\n]*dry-run/.test(typP));
+
+  // ---- 2) 邮箱通道的 dryRun 两处必须返回 preview ----
+  const pvUses = (ofbP.match(/status: 'preview'/g) || []).length;
+  check('🔴 邮箱通道的 dryRun 分支返回 preview（两处：闸门拦下+dryRun / 干净预览）',
+    pvUses === 2, 'cnt=' + pvUses);
+  check('preview 判据确有区分力（把这两处改回 need_manual 必须判假）',
+    (ofbP.split("status: 'preview'").join("status: 'need_manual'").match(/status: 'preview'/g) || []).length === 0);
+  // 存在性自检：need_manual 仍在该文件里被真用（推文正文加载不出 / 找不到 HR 邮箱 / 官网入口）
+  // 否则「两处 preview」可能因为整个词被误删而失去意义
+  check('存在性自检：邮箱通道仍在用 need_manual（真需人工的场景没被一并改掉）',
+    /status: 'need_manual'/.test(ofbP));
+  const pvPayload = (ofbP.match(/preview: \{ to, subject, body, attachment: attachments\[0\], deliverability: assess, subjectPlan: plan \}/g) || []).length;
+  check('两处预览负载都还在（只改 status，不能顺手把负载删掉）', pvPayload === 2, 'cnt=' + pvPayload);
+
+  // ---- 3) 批量 SSE 必须分桶，且 preview 绝不落进 fail ----
+  check('🔴 批量 SSE 声明了 previewed / skipped / manual 三个桶',
+    /let ok = 0, fail = 0, previewed = 0, skipped = 0, manual = 0;/.test(idxP));
+  const iApply = idxN.indexOf("if (r.status === 'applied') {");
+  const iPrev = idxN.indexOf("} else if (r.status === 'preview') {");
+  check('抓到了 preview 分流分支（存在性自检，否则下面那条会恒绿）', iPrev > 0, 'idx=' + iPrev);
+  check('🔴 preview 走 previewed++、不落进 fail（ok:0 fail:3 就是这个 else 造成的）',
+    iApply > 0 && iPrev > iApply
+    && /else if \(r\.status === 'preview'\) \{\s*\n\s*\/\/[^\n]*\n\s*previewed\+\+;/.test(idxN));
+  check('skipped / need_manual 也各自分桶（隔离与「需人工」跟真失败不是一回事）',
+    /\} else if \(r\.status === 'skipped'\) \{[\s\S]{0,200}?skipped\+\+;/.test(idxN)
+    && /\} else if \(r\.status === 'need_manual'\) \{[\s\S]{0,200}?manual\+\+;/.test(idxN));
+  check('done 事件把三个新桶一并推出（只统计不推 ⇒ 前端看不见）',
+    /type: 'done', ok, fail, previewed, skipped, manual, total/.test(idxP));
+  check('隔离岗位计入 skipped（主动跳过 ≠ 失败）',
+    /skipped\+\+; send\(\{ type: 'result', jobId: job\.id, status: 'skipped'/.test(idxP));
+
+  // ---- 4) 面板必须把新桶显示出来 ----
+  check('面板完成行读取 ev.previewed / ev.skipped / ev.manual',
+    /ev\.previewed/.test(conP) && /ev\.skipped/.test(conP) && /ev\.manual/.test(conP));
+  check('新桶「非零才显示」⇒ 老负载（无这三个字段）渲染结果与改动前逐字相同',
+    /if\(ev\.previewed\) _p\.push\('预览 '\+ev\.previewed\);/.test(conP)
+    && /_p\.push\('失败 '\+ev\.fail\);/.test(conP));
+
+  // ---- 5) batch.ts 那条曾被判死的分支现在真的活了 ----
+  check('🔴 batch.ts 的 preview 分支不再是死代码（现在确有通道返回 preview）',
+    /else if \(res\.status === 'preview'\)/.test(batP) && pvUses === 2);
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`

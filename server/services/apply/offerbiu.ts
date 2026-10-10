@@ -282,7 +282,7 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
       const message = `收件邮箱不可投递，已拦下不发：${assess.reason}（人工核实过确实是有效邮箱时，可勾选「强制」放行）`;
       if (input.dryRun) {
         return {
-          platform, status: 'need_manual', logs: logs.logs, company, position,
+          platform, status: 'preview', logs: logs.logs, company, position,
           preview: { to, subject, body, attachment: attachments[0], deliverability: assess, subjectPlan: plan },
           message,
         };
@@ -291,11 +291,20 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
     }
 
     // 5) 预览模式：只把解析结果写进日志，不真正发信，返回结构化预览供前端确认
+    //
+    // 🔴 status 必须是 'preview'，**不能**用 'need_manual'（2026-10-10 修）：
+    //    ApplyStatus 里 'preview' 的定义是「走到投递入口但未点击/未提交（dry-run）」，
+    //    而 'need_manual' 的含义是「遇到非标准流程，需人工在浏览器完成」—— 两者语义不同。
+    //    此前这里错用 need_manual，连带三处失真：
+    //      ① 调用方（server/index.ts 的批量 SSE）分不清「预览完成」与「闸门拦下」；
+    //      ② 三条预览被统计成「ok:0 fail:3」（看着像全失败）；
+    //      ③ batch.ts 里 res.status === preview 的那个分支成了**死分支**
+    //         （全仓库没有任何通道返回 preview），previewed 恒为 0。
     if (input.dryRun) {
       logs.step('预览（未发送）', true, `收件人=${to}；标题=${subject}；附件=${attachments[0] || '无'}`);
       logs.step('预览正文', true, body.slice(0, 300));
       return {
-        platform, status: 'need_manual', logs: logs.logs, company, position,
+        platform, status: 'preview', logs: logs.logs, company, position,
         preview: { to, subject, body, attachment: attachments[0], deliverability: assess, subjectPlan: plan },
         message: `预览完成（未发送）：将发往 ${to}，标题「${subject}」` + subjectCaveat,
       };

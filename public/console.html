@@ -4158,7 +4158,15 @@ async function emailStream(path, body, outEl, barEl, onEvent){
         push(tag + (ev.company||ev.position||ev.jobId||'') + (ev.message?(' — '+ev.message):''));
         if(barEl && total) barEl.style.width=pct+'%';
       }
-      else if(ev.type==='done'){ push('■ 完成：成功 '+ev.ok+' · 失败 '+ev.fail+' · 共 '+ev.total); if(barEl) barEl.style.width='100%'; }
+      else if(ev.type==='done'){
+        var _p=['成功 '+ev.ok];
+        if(ev.previewed) _p.push('预览 '+ev.previewed);
+        if(ev.skipped) _p.push('跳过 '+ev.skipped);
+        if(ev.manual) _p.push('待人工 '+ev.manual);
+        _p.push('失败 '+ev.fail);
+        push('■ 完成：'+_p.join(' · ')+' · 共 '+ev.total);
+        if(barEl) barEl.style.width='100%';
+      }
       else if(ev.type==='error'){ push('❌ '+(ev.message||'未知错误')); }
       // 无 type 的事件（如后端收尾固定的 `data: {}`）静默忽略 —— 否则输出尾部会多一行 `{}`
       else if(ev && ev.type) push(JSON.stringify(ev));

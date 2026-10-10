@@ -2544,7 +2544,10 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
   });
   const send = (e: unknown) => { res.write(`data: ${JSON.stringify(e)}\n\n`); };
   const profile = db.getProfile() as Record<string, unknown> | undefined;
-  let ok = 0, fail = 0;
+  // 🔴 五个桶各自对应一个语义，别再压成一个 fail：
+  //    ok=已投递 / previewed=预览未发信 / skipped=主动跳过（隔离、闸门拦下）
+  //    / manual=需人工 / fail=真失败
+  let ok = 0, fail = 0, previewed = 0, skipped = 0, manual = 0;
   try {
     if (!jobIds.length) {
       send({ type: 'error', message: '未选择任何岗位' });
@@ -2583,7 +2586,7 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
       if (!job) { fail++; send({ type: 'result', jobId: jobIds[i], status: 'error', message: '岗位不存在' }); continue; }
       // 跨公司串号隔离：扫描阶段已标记的 quarantine 默认跳过，避免简历发错公司（force 可强制）
       if (job.quarantine && !req.body?.force) {
-        fail++; send({ type: 'result', jobId: job.id, status: 'skipped', message: `已隔离（${job.quarantine}）；如需投递请勾选强制` });
+        skipped++; send({ type: 'result', jobId: job.id, status: 'skipped', message: `已隔离（${job.quarantine}）；如需投递请勾选强制` });
         continue;
       }
       send({ type: 'progress', index: i, total: jobIds.length, jobId: job.id, company: job.company, position: job.position });
@@ -2633,6 +2636,15 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
             });
             db.updateJob(job.id, { status: 'applied' });
           } catch { /* 记录失败不阻断 */ }
+        } else if (r.status === 'preview') {
+          // dry-run 预览：没发信，但也**不是失败** —— 单列一桶，别混进 fail
+          previewed++;
+        } else if (r.status === 'skipped') {
+          // 主动跳过：闸门拦下「不发」/ 其他明确不投
+          skipped++;
+        } else if (r.status === 'need_manual') {
+          // 需人工：推文正文加载不出、找不到 HR 邮箱、官网入口识别不到…
+          manual++;
         } else {
           fail++;
         }
@@ -2643,7 +2655,7 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
       }
       if (i < jobIds.length - 1 && intervalMs > 0) await new Promise((rr) => setTimeout(rr, intervalMs));
     }
-    send({ type: 'done', ok, fail, total: jobIds.length });
+    send({ type: 'done', ok, fail, previewed, skipped, manual, total: jobIds.length });
     res.write('event: end\ndata: {}\n\n');
   } catch (error: any) {
     send({ type: 'error', message: error?.message || '邮箱直投失败' });
