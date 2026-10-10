@@ -14,6 +14,7 @@
  * 防幻觉硬规则（与 resumeTailor 一致）：不得编造简历里没有的经历、学校、公司、数字。
  */
 import { chatText } from './aiClient.js';
+import { jobPositionLabel } from './jobText.js';
 import {
   getCoverLetter, saveCoverLetter, coverLetterKey,
   kvGet, kvSet, getJob, updateJob, type JobRow,
@@ -79,7 +80,7 @@ export function renderLetterTemplate(tpl: string, vars: Record<string, string | 
 function varsOf(profile: Record<string, any> | null | undefined, job?: Partial<JobRow> | null): Record<string, string> {
   const p = profile || {};
   return {
-    '{职位名称}': String(job?.position || p.expectedPositions || '').slice(0, 40),
+    '{职位名称}': jobPositionLabel(job?.position || p.expectedPositions, ''),
     '{公司名称}': String(job?.company || '').slice(0, 40),
     '{工作地点}': String(job?.city || p.city || '').slice(0, 20),
     '{我的姓名}': String(p.name || '').slice(0, 20),
@@ -128,7 +129,7 @@ export interface ComposeResult {
 /** 本地兜底文案（AI 未配置 / 调用失败时使用；保证链路不空转） */
 function fallbackContent(input: ComposeInput): string {
   const com = input.job?.company || '贵公司';
-  const pos = input.job?.position || '该岗位';
+  const pos = jobPositionLabel(input.job?.position);
   if (input.kind === 'reply') {
     return `您好，感谢回复！我对${com}「${pos}」仍然很感兴趣，方便的话希望能再沟通一下，谢谢！`;
   }
@@ -177,7 +178,7 @@ export async function composeCoverLetter(input: ComposeInput): Promise<ComposeRe
   const resumePoints = [p.summary, p.skills, p.experience, p.projects, p.education, p.school, p.major]
     .filter(Boolean).join('\n').slice(0, 3000);
   const com = input.job?.company || '（未提供公司）';
-  const pos = input.job?.position || '（未提供岗位）';
+  const pos = jobPositionLabel(input.job?.position, '（未提供岗位）');
 
   const prompt =
     kind === 'reply'

@@ -488,8 +488,12 @@ export async function runBatchApply(
       // `<=0` 也算「未评分」：老库 match_score 列默认 0，未算分的岗位会落成 0（同 greetDecision 的注释）
       if (j.match_score == null || j.match_score <= 0) {
         // AI 语义匹配；失败时 matchResumeToJobAi 内部回退规则匹配。
-        // 单条打分异常（偶发 AI 响应异常）绝不能拖垮整批：try/catch 兜底为「不评分」，
-        // 该岗位按「无匹配分」处理（若设了 minScore 则自然被分数闸门过滤掉）。
+        // 单条打分异常（偶发 AI 响应异常）绝不能拖垮整批：try/catch 兜底为「不评分」。
+        // 🔴 打分失败时该岗位**会被放行**，不是被分数闸门拦下 —— 过滤条件是
+        //    hasJdText && score != null && score < minScore，打分失败 ⇒ score 为 undefined
+        //    ⇒ score != null 不成立 ⇒ 不拦。这与「无 JD 文本放行」是同一取舍：
+        //    分数缺失时宁可投出去，也不让一次 AI 抖动把岗位判死。
+        //    （旧注释写「若设了 minScore 则自然被分数闸门过滤掉」，与代码相反 —— 2026-10-10 更正。）
         try {
           const r = await matchResumeToJobAi({
             resumeBlob: struct.searchBlob,

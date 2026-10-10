@@ -5519,6 +5519,167 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     /else if \(res\.status === 'preview'\)/.test(batP) && pvUses === 2);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 岗位名输出侧清洗 / 匹配分门槛 合约（2026-10-10）
+//
+// 两个尾巴任务的共同形状都是「接线断了但没人报错」：
+//   A. position 的脏值在**输出侧**没人管 —— 写库口的 sanitizePosition 只治新增、
+//      不管反斜杠、不管长度、允许空（实测库内 3200 行：19 行空 / 4 行含反斜杠 / 138 行超 40 字）。
+//      于是要么各清各的、要么有人漏接；这里机械钉住「服务端 7 点 + 控制台 35 点 + 小程序 3 点」，
+//      并把**必须保真的 7 处**（检索 blob / 编辑 payload / CSV 导出）反向钉住。
+//   B. 匹配分门槛在**批量投递**侧早已端到端打通（面板 → criteria → 端点 → batch.ts），
+//      但**监视器**侧「配得进、读不出」：/config 白名单收了 intervalMs 与 minScore，
+//      watcherStatus() 却不返回 ⇒ 前端无从回填。判据：白名单 ⊆ status 返回键。
+// ═══════════════════════════════════════════════════════════
+{
+  const jobT = readText('server/services/apply/jobText.ts');
+  const ofbJ = readText('server/services/apply/offerbiu.ts');
+  const covJ = readText('server/services/apply/coverLetter.ts');
+  const subJ = readText('server/services/apply/subjectSpec.ts');
+  const conJ = readText('public/console.html');
+  const recJ = readText('miniprogram/pages/records/records.js');
+  const detJ = readText('miniprogram/pages/job-detail/job-detail.js');
+  const batJ = readText('server/services/apply/batch.ts').replace(/\r\n/g, '\n');
+  const idxJ = readText('server/index.ts').replace(/\r\n/g, '\n');
+  const watJ = stripComments(readText('server/services/apply/autoApplyWatcher.ts'));
+
+  // ---- A1) 地基：纯函数 + 两个常量 ----
+  check('jobText.ts 导出 jobPositionLabel，且常量口径为 40 / 「该岗位」',
+    /export function jobPositionLabel\(/.test(jobT)
+    && jobT.includes('export const POSITION_LABEL_MAX = 40;')
+    && jobT.includes("export const POSITION_LABEL_FALLBACK = '该岗位';"));
+
+  // ---- A2) 服务端对外文案 7 点全接线 ----
+  const srvUses = (ofbJ + '\n' + covJ + '\n' + subJ).match(/jobPositionLabel\(/g) || [];
+  check('服务端对外文案接满 7 点（正文 /官网 message /{职位名称} /兜底信 /AI prompt /占位符 /兜底标题）',
+    srvUses.length === 7, 'cnt=' + srvUses.length);
+  check('邮箱正文那一句走清洗（此前会把 80 字噪音整串拼进给 HR 的句子）',
+    ofbJ.includes('jobPositionLabel(position)}」'));
+  check('官网通道成功 message 走清洗', ofbJ.includes('company || jobPositionLabel(position)'));
+  check('求职信 {职位名称} 走清洗，且不再自行 slice(0, 40)',
+    covJ.includes("'{职位名称}': jobPositionLabel(") && !covJ.includes('String(job?.position || p.expectedPositions'));
+  check('求职信兜底文案 / AI prompt 目标都走清洗',
+    covJ.includes('const pos = jobPositionLabel(input.job?.position);')
+    && covJ.includes("const pos = jobPositionLabel(input.job?.position, '（未提供岗位）');"));
+  check("🔴 邮件标题两处显式传 ''：标题里「空」是有语义的，注入「该岗位」会变成「应聘该岗位-张三-138…」",
+    (subJ.match(/jobPositionLabel\(job\?\.position, ''\)/g) || []).length === 2
+    && !subJ.includes('jobPositionLabel(job?.position)'));
+
+  // ---- A3) 四处实现的关键规则必须同源（防只改一处）----
+  const RULE_BACKSLASH = String.raw`\s*\\+\s*/g`;
+  const RULE_ZW = String.raw`[\u200B-\u200F\uFEFF]`;
+  const SEPS = "['、','，',',','/','|','·']";
+  const noSpace = (s: string) => s.replace(/[ \t]/g, '');
+  const SOURCES: Array<[string, string]> = [
+    ['jobText.ts', jobT], ['console.html', conJ],
+    ['records.js', recJ], ['job-detail.js', detJ],
+  ];
+  for (const [name, src] of SOURCES) {
+    check(`清洗规则同源 · ${name}：反斜杠→斜杠`, src.includes(RULE_BACKSLASH));
+    check(`清洗规则同源 · ${name}：零宽字符类`, src.includes(RULE_ZW));
+    check(`清洗规则同源 · ${name}：强分隔符集合`, noSpace(src).includes(SEPS));
+  }
+  check('三处上限口径一致（40）：jobText / 控制台 / 小程序',
+    jobT.includes('POSITION_LABEL_MAX = 40')
+    && conJ.includes('const POS_MAX = 40;')
+    && recJ.includes('s.length <= 40') && detJ.includes('s.length <= 40'));
+
+  // ---- A4) 控制台：调用点数量 + 必须保真的 7 处 ----
+  const posCalls = (conJ.match(/posLabel\(/g) || []).length;
+  check('控制台 posLabel 调用点 ≥ 30（防「只接了几处也算过」）', posCalls >= 30, 'cnt=' + posCalls);
+  const RAW_KEEP = [
+    'const blob = [j.company,j.position,j.city,j.job_type',
+    'const blob = [a.company, a.position, a.city',
+    'const blob = [j.company, j.position, j.city',
+    'body.position = pos;',
+    'if(position) got.position = position;',
+    "put('#jaPosition', got.position);",
+    'const body = list.map(a=>[ a.company, a.position',
+  ];
+  const leaked = RAW_KEEP.filter((k) => {
+    const line = conJ.split('\n').find((l) => l.includes(k));
+    return !line || line.includes('posLabel');
+  });
+  check('🔴 必须保真的 7 处原值（检索 blob / 编辑 payload / CSV 导出）都没被清洗碰到',
+    leaked.length === 0, 'leaked=' + JSON.stringify(leaked));
+
+  // ---- A5) 小程序 ----
+  check('小程序两页各有 posLabel，并接在「职位」标题上',
+    recJ.includes('function posLabel(v, fb)') && detJ.includes('function posLabel(v, fb)')
+    && recJ.includes('title: posLabel(j.position,')
+    && detJ.includes('title: posLabel(raw.position,'));
+
+  // ---- B1) 批量投递：minScore 链路端到端（面板 → criteria → 端点 → batch.ts）----
+  check('面板有「最低匹配分」控件（0 = 不限制）', conJ.includes('id="batchMinScore"'));
+  check('面板读值并 clamp 到 0~100',
+    conJ.includes("const minScoreRaw = $('#batchMinScore').value.trim();")
+    && conJ.includes("Math.max(0, Math.min(100, Number(minScoreRaw)||0))"));
+  check('面板把 minScore 放进 body.criteria（不是散在 body 顶层）',
+    /criteria: \{[\s\S]{0,400}?\n        minScore,/.test(conJ));
+  check('端点 /api/apply/batch 把 criteria 整体透传（逐字段重建会漏掉新字段）',
+    idxJ.includes('app.post("/api/apply/batch"')
+    && idxJ.includes('\n      platform,\n      source: effectiveSource,\n      criteria,\n'));
+  check('batch.ts 三条消费点都在（算分开关 / 过滤闸门 / 0 候选诊断）',
+    batJ.includes('const needScore = input.criteria?.minScore != null;')
+    && batJ.includes('score < (input.criteria!.minScore as number)')
+    && batJ.includes('匹配分<${input.criteria!.minScore} 的'));
+
+  // ---- B2) 监视器：「配得进 ⇒ 读得出」不变量（机械比对，本轮修的就是它）----
+  const cfgKeys = (() => {
+    // ⚠️ 必须锚到**自动投递**那个端点：/api/auto-reply/watch/config 也有一个同形的
+    //    白名单（8 项）。不锚定就会抓到它 —— 实测踩过：第一版正则报出
+    //    missing=["realSend","useAi",…] 的**假**问题，靠 cfg.length===7 的反向护栏才发现。
+    const ep = idxJ.indexOf('app.post("/api/auto-apply/watch/config"');
+    const m = ep < 0 ? null : idxJ.slice(ep).match(/for \(const k of \[([^\]]+)\] as const\)/);
+    return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
+  })();
+  const watchKeys = (() => {
+    const at = watJ.indexOf('export function watcherStatus()');
+    if (at < 0) return [];
+    const start = watJ.indexOf('return {', at);
+    const end = watJ.indexOf('};', start);
+    if (start < 0 || end < 0) return [];
+    return [...watJ.slice(start, end).matchAll(/^\s*([A-Za-z_$][\w$]*)\s*[:,]/gm)].map((m) => m[1]);
+  })();
+  const holdsInvariant = (keys: string[]) => cfgKeys.every((k) => keys.includes(k));
+  check('「配得进 ⇒ 读得出」：/watch/config 白名单 ⊆ watcherStatus 返回键',
+    cfgKeys.length === 7 && watchKeys.length >= 9 && holdsInvariant(watchKeys),
+    'cfg=' + cfgKeys.length + ' status=' + watchKeys.length
+    + ' missing=' + JSON.stringify(cfgKeys.filter((k) => !watchKeys.includes(k))));
+  check('上述不变量有区分力：抠掉 minScore 或 intervalMs 必须判假（防解析器恒绿）',
+    !holdsInvariant(watchKeys.filter((k) => k !== 'minScore'))
+    && !holdsInvariant(watchKeys.filter((k) => k !== 'intervalMs')));
+  check('status 真的把这两个值读出来了（不是只写进类型注解）',
+    watJ.includes('minScore: config.minScore,') && watJ.includes('intervalMs: config.intervalMs,'));
+
+  // 同一类缺陷在**自动回复**那套里并不存在（它的 status 本来就把 8 个白名单键全返回了）——
+  // 一并钉住，避免以后只改一边，让「配得进、读不出」在新字段上重现。
+  const replyCfgKeys = (() => {
+    const ep = idxJ.indexOf('app.post("/api/auto-reply/watch/config"');
+    const m = ep < 0 ? null : idxJ.slice(ep).match(/for \(const k of \[([^\]]+)\] as const\)/);
+    return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
+  })();
+  const replyWatJ = stripComments(readText('server/services/apply/autoReplyWatcher.ts'));
+  const replyWatchKeys = (() => {
+    const at = replyWatJ.indexOf('export function watcherStatus()');
+    if (at < 0) return [];
+    const start = replyWatJ.indexOf('return {', at);
+    const end = replyWatJ.indexOf('};', start);
+    if (start < 0 || end < 0) return [];
+    return [...replyWatJ.slice(start, end).matchAll(/^\s*([A-Za-z_$][\w$]*)\s*[:,]/gm)].map((m) => m[1]);
+  })();
+  check('自动回复监视器同样满足「配得进 ⇒ 读得出」（8 项白名单 ⊆ status 返回键）',
+    replyCfgKeys.length === 8 && replyWatchKeys.length >= 9
+    && replyCfgKeys.every((k) => replyWatchKeys.includes(k)),
+    'cfg=' + replyCfgKeys.length + ' status=' + replyWatchKeys.length
+    + ' missing=' + JSON.stringify(replyCfgKeys.filter((k) => !replyWatchKeys.includes(k))));
+
+  // ---- B3) batch.ts 注释与代码相反的那句已更正 ----
+  check('打分失败分支的注释与代码对齐（旧注释谎称会被分数闸门拦下）',
+    batJ.includes('打分失败时该岗位**会被放行**')
+    && !/该岗位按「无匹配分」处理（若设了 minScore 则自然被分数闸门过滤掉）。/.test(batJ));
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`

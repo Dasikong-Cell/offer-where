@@ -40,6 +40,8 @@
  * 其余字符（分隔符、括号、空格、标点）**逐字节原样保留** —— 这也正是人工照做时的动作。
  */
 
+import { jobPositionLabel } from './jobText.js';
+
 export interface SubjectPart {
   kind: 'field' | 'literal' | 'unknown';
   /** 要求里的原始片段（已归一化全角符号） */
@@ -124,7 +126,7 @@ const FIELD_RULES: Array<{
     //    只吃 `岗位` 会留下 `应聘XXX后端开发工程师`（实测 `浙江嘉兴数字城市` 一条）。
     re: /^实习岗位名称|^应聘[^，。+\-、/|]{0,6}?岗位|^应聘职位|^意向岗位|^期望岗位|^岗位名称|^岗位|^职位/,
     field: '岗位',
-    get: (_p, job) => str(job?.position),
+    get: (_p, job) => jobPositionLabel(job?.position, ''),
   },
   { re: /^意向城市|^期望城市|^城市|^地点/, field: '城市', get: p => str(p.city) },
   { re: /^工作年限|^工作经验|^年限/, field: '工作年限', get: p => str(p.workYears) },
@@ -413,7 +415,7 @@ export function planSubject(
 /** 兜底标题：JD 没写要求、或要求拼不出来时用。**必须诚实、不含猜测** */
 export function defaultSubject(profile: SubjectProfile, job?: SubjectJobRef): string {
   const name = str(profile.name) || '应聘者';
-  const pos = str(job?.position);
+  const pos = jobPositionLabel(job?.position, '');
   const phone = str(profile.phone);
   if (pos) return phone ? `应聘${pos}-${name}-${phone}` : `应聘${pos}-${name}`;
   return `应聘简历-${name}`;

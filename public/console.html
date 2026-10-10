@@ -1682,6 +1682,36 @@ function el(tag, cls, html){ const e=document.createElement(tag); if(cls)e.class
 // esc：HTML 转义。⚠️ 2026-09-25 补上引号 —— 此前只转 &<> ，属性上下文（src="…"/title='…'）
 // 仍可被引号突破形成注入面；转义 " 与 ' 后，文本/属性两种上下文都安全。
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* 【岗位名输出侧清洗】—— 与 `server/services/apply/jobText.ts` 的 `jobPositionLabel` **同口径**。
+   为什么前端也要一份：库内的 position 是**采集侧原样入库**的，写库口那道清洗（db.ts 的
+   sanitizePosition）只治新增、治不了存量，也**不管反斜杠、不管长度、允许空**。于是三处失真：
+     ① 反斜杠残留（`软件工程师Java\C#（3-6个月长期出差）`）；
+     ② 超长「多岗位并列」串（最长 80 字，如 `A、B、C 等 9 项 民企 … 需要笔试`）把表格撑爆；
+     ③ 空值 → 单元格里出现 `公司 · `（后面空着）或 `undefined`。
+   ⚠️ 只清洗**展示**。三处必须保持原值，否则会改变行为：
+     · 岗位库检索的 blob（`[j.company, j.position, …]`）—— 清洗会让关键词搜不到；
+     · 「自动填充」的输入框与 payload —— 用户要看到、也要原样提交库内的真实值；
+     · 台账 CSV 导出 —— 导出应当保真，不是展示。
+   判据：`posLabel` 只出现在 `esc(...)`/文本拼接里，绝不出现在数组构造、`body.*=`、`put('#…')` 里。 */
+const POS_MAX = 40;      // 与服务端 POSITION_LABEL_MAX 一致（也与 coverLetter 的 {职位名称} 口径一致）
+const POS_FB = '该岗位';  // 与 POSITION_LABEL_FALLBACK 一致
+function posLabel(v, fb){
+  var d = (fb===undefined ? POS_FB : fb);
+  if(v===null||v===undefined) return d;
+  // 反斜杠是解析残留的分隔符 ⇒ `/`（吃掉两侧空白）；零宽字符删掉（换空格会凭空造词边界）；
+  // 换行/制表换成空格（它们原本确实是词边界）后再折叠。
+  var s = String(v).replace(/\s*\\+\s*/g,'/').replace(/[\u200B-\u200F\uFEFF]/g,'')
+    .replace(/[\u0000-\u001F\u007F\u2028\u2029]/g,' ').replace(/\s+/g,' ').trim();
+  if(!s) return d;
+  if(s.length<=POS_MAX) return s;
+  // 优先切在**强分隔符**（顿号/逗号/斜杠…）处；没有才退到空格。
+  // 不把空格混进强档：`……工程师 等 2 项` 的最后一个空格落在 `等 2` 之后，会切成 `…… 等 2…`。
+  var head=s.slice(0,POS_MAX), min=POS_MAX/2, cut=-1;
+  ['、','，',',','/','|','·'].forEach(function(sep){ var i=head.lastIndexOf(sep); if(i>cut) cut=i; });
+  if(cut<min){ var sp=head.lastIndexOf(' '); cut = (sp>=min ? sp : -1); }
+  var body = (cut>=min ? head.slice(0,cut) : head);
+  return body.replace(/[\s、，,/|·]+$/,'')+'…';
+}
 /* 换行常量必须定义在**顶层**：曾把它写在 `#replyRun` 处理器体内，结果自动回复面板能用、
    邮箱直投面板一调用就 ReferenceError（而 console:check 只查语法，查不出作用域问题）。
    凡是被多个面板共用的常量/函数，一律放顶层。 */
@@ -2070,8 +2100,8 @@ async function loadEvidence(){
       const letterTag = strat[0]==='letter' ? '带求职信' : (strat[0]==='no_letter' ? '无求职信' : (strat[0]||'未打标'));
       const rvTag = strat[1]||'—';
       html+='<div style="width:200px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff">'
-        +'<img src="'+esc(a.evidence_path)+'" data-ev="'+esc(a.evidence_path)+'" data-cap="'+esc((a.company||'')+' · '+(a.position||''))+'" style="width:100%;height:120px;object-fit:cover;display:block;cursor:zoom-in" onerror="this.style.display=\'none\'">'
-        +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(a.position||''))+'<br>'
+        +'<img src="'+esc(a.evidence_path)+'" data-ev="'+esc(a.evidence_path)+'" data-cap="'+esc((a.company||'')+' · '+(posLabel(a.position, '')))+'" style="width:100%;height:120px;object-fit:cover;display:block;cursor:zoom-in" onerror="this.style.display=\'none\'">'
+        +'<div style="padding:6px 8px;color:#222;font-size:12px">'+esc((a.company||'')+' · '+(posLabel(a.position, '')))+'<br>'
         +'<span class="muted">'+esc(a.platform)+' · '+(a.created_at||'').slice(0,10)+'</span><br>'
         +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#eef4ff;color:#2a5bd7;font-size:11px">'+esc(letterTag)+'</span> '
         +'<span style="display:inline-block;margin-top:4px;padding:1px 6px;border-radius:6px;background:#f3f3f3;color:#555;font-size:11px">'+esc('简历:'+rvTag)+'</span>'
@@ -2258,7 +2288,7 @@ async function renderSoon(){
   }
   host.innerHTML = soon.slice(0,8).map(x=>{
     const cls = x.d.days === 0 ? 'b-bad' : 'b-warn';
-    const full = (x.j.company||'–') + ' · ' + (x.j.position||'–');
+    const full = (x.j.company||'–') + ' · ' + (posLabel(x.j.position, '–'));
     return '<div class="kv" style="gap:10px;align-items:center">'
       + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(full)+'">'+esc(full)+'</span>'
       + '<span class="badge '+cls+'" style="flex:none">'+esc(x.d.text)+'</span></div>';
@@ -2299,7 +2329,7 @@ function matchReportHtml(r){
   const job = r.job || {};
   return '<div class="stat" style="margin-bottom:12px">'
     + '<div class="v">'+esc(String(r.score))+'<span style="font-size:13px;color:var(--muted)"> / 100</span></div>'
-    + '<div class="l">'+esc(job.company||'（未指定公司）')+(job.position ? ' · '+esc(job.position) : '')+'</div></div>'
+    + '<div class="l">'+esc(job.company||'（未指定公司）')+(job.position ? ' · '+esc(posLabel(job.position)) : '')+'</div></div>'
     + '<b style="font-size:13px">简历优势（命中 '+((r.matched||[]).length)+' 项）</b>' + li(r.matched)
     + '<b style="font-size:13px;display:block;margin-top:14px">优先短板（待补 '+((r.missing||[]).length)+' 项）</b>' + li(r.missing)
     + '<b style="font-size:13px;display:block;margin-top:14px">建议方向</b>' + li(r.suggestions);
@@ -2337,7 +2367,7 @@ async function mtPreviewJd(){
   const j = MT_JOBS.filter(x=>x.id === id)[0];
   if(!j){ host.textContent = '从上方选择岗位后显示…'; return; }
   const d = deadlineInfo(j.deadline);
-  const head = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>'
+  const head = '<b>'+esc(j.company||'–')+' · '+esc(posLabel(j.position, '–'))+'</b>'
     + '<div class="small muted" style="margin:4px 0 8px">'+esc(jobSrcName(j.source))
     + (j.city ? ' · '+esc(j.city) : '') + (j.job_type ? ' · '+esc(j.job_type) : '')
     + ' · '+esc(d.text)+'</div>';
@@ -2375,7 +2405,7 @@ async function loadMatch(){
     const MT_JOB_MAX = 300;
     const mtShown = MT_JOBS.slice(0, MT_JOB_MAX);
     js.innerHTML = '<option value="">选择岗位…</option>' + mtShown.map(j=>
-      '<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('')
+      '<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(posLabel(j.position, '')))+'</option>').join('')
       + (MT_JOBS.length > mtShown.length
           ? '<option value="" disabled>—— 下拉只列前 ' + mtShown.length + ' 个（共 ' + MT_JOBS.length
             + ' 个）；要挑其它岗位请到「校招信息库」搜索后点「详情」——</option>'
@@ -2671,7 +2701,7 @@ async function optimizePreviewJd(){
   const id = ($('#opJob') && $('#opJob').value) || '';
   const j = OP_JOBS.filter(x=>x.id === id)[0];
   if(!j){ host.textContent = '选择岗位后显示…'; return; }
-  const head = '<b>'+esc(j.company||'–')+' · '+esc(j.position||'–')+'</b>';
+  const head = '<b>'+esc(j.company||'–')+' · '+esc(posLabel(j.position, '–'))+'</b>';
   const none = '<div class="muted" style="margin-top:6px">该岗位无真 JD 文本 —— 定制效果会打折。</div>';
   if(!j.has_jd){ host.innerHTML = head + none; return; }
   host.innerHTML = head + '<div class="muted" style="margin-top:6px">读取 JD 正文…</div>';
@@ -2847,18 +2877,18 @@ function renderReviewActions(plan, revErr){
   const pri = (b.priority||[]).map(p=>{
     const days = p.daysLeft === 0 ? '今天' : '剩 '+p.daysLeft+' 天';
     const what = p.kind === 'deadline' ? ('截止 '+String(p.at).slice(5)) : (String(p.at).slice(5)+' 笔面');
-    return item(p.daysLeft === 0 ? 'd0' : 'd1', days, p.company+' · '+p.position,
+    return item(p.daysLeft === 0 ? 'd0' : 'd1', days, p.company+' · '+posLabel(p.position),
       esc(jobSrcName(p.platform)) + ' · ' + esc(what));
   }).join('') || none('这几天没有临近截止的岗位，也没有安排在即的笔面。');
 
   const sch = (b.schedule||[]).slice(0,20).map(s=>{
     const kind = s.kind === 'written' ? '笔试' : '面试';
     if(!s.scheduled){
-      return item('', '时间未定', s.company+' · '+s.position,
+      return item('', '时间未定', s.company+' · '+posLabel(s.position),
         esc(jobSrcName(s.platform))+' · '+kind+' · 还没记时间 —— 去「我的投递」那条记录上点「改时间」');
     }
     const rel = s.daysLeft === 0 ? '今天' : (s.daysLeft > 0 ? '剩 '+s.daysLeft+' 天' : '已过去 '+(-s.daysLeft)+' 天');
-    return item(s.daysLeft === 0 ? 'd0' : '', rel, s.company+' · '+s.position,
+    return item(s.daysLeft === 0 ? 'd0' : '', rel, s.company+' · '+posLabel(s.position),
       esc(jobSrcName(s.platform))+' · '+kind+' '+esc(s.at)+(s.round ? ' · '+esc(s.round) : ''));
   }).join('') || none('还没有记录笔试或面试时间。');
 
@@ -2868,7 +2898,7 @@ function renderReviewActions(plan, revErr){
     const sub = isMiss
       ? esc(jobSrcName(x.platform)) + ' · 状态已是「' + (APP_STATUS[x.status] || x.status) + '」但没记时间'
       : esc(jobSrcName(x.platform)) + ' · 投出去 ' + x.days + ' 天了，一直停在「' + (APP_STATUS[x.status] || x.status) + '」';
-    return item(isMiss ? 'd1' : '', tag, x.company+' · '+x.position, sub);
+    return item(isMiss ? 'd1' : '', tag, x.company+' · '+posLabel(x.position), sub);
   }).join('') || none('没有长期无进展的投递。');
 
   const sug = (b.nextWeek||[]).map((s,i)=>
@@ -2950,7 +2980,7 @@ function renderReviewList(apps, total){
     + '<th>公司</th><th>职位</th><th>阶段</th><th>平台</th><th>城市</th><th style="width:150px">投递时间</th><th>笔面 / 结果时间</th></tr></thead><tbody>'
     + sorted.slice(0,100).map(a=>{
       const n = appNodeText(a);
-      return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(a.position||'–')+'</td>'
+      return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(posLabel(a.position, '–'))+'</td>'
         + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span></td>'
         + '<td>'+esc(jobSrcName(a.platform))+'</td><td>'+esc(a.city||'–')+'</td>'
         + '<td class="small muted">'+esc(fmtTs(a.created_at))+'</td>'
@@ -3040,7 +3070,7 @@ async function loadProfileHistory(){
       ? '<div class="note small" style="margin-top:0"><b>仅本机（'+local.length+' 条）</b>：'
         + '这些是当场粘贴 JD 跑的匹配，库里没有对应岗位行，所以只存在这台浏览器 —— 清缓存会丢。'
         + '<div style="margin-top:6px">' + local.slice(0, 5).map(function(r){
-            return '<div class="kv"><span>'+esc(((r.job&&r.job.company)||'—')+' · '+((r.job&&r.job.position)||''))+'</span>'
+            return '<div class="kv"><span>'+esc(((r.job&&r.job.company)||'—')+' · '+posLabel((r.job&&r.job.position),''))+'</span>'
               + '<b>'+esc(String(r.score))+' 分</b></div>';
           }).join('') + '</div></div>'
       : '';
@@ -3050,7 +3080,7 @@ async function loadProfileHistory(){
 /** AI 匹配历史行。`atUnknown` = 老数据只有 updated_at，不伪装成精确匹配时刻。 */
 function pfMatchRow(x){
   const when = x.at ? new Date(x.at).toLocaleString('zh-CN') : '—';
-  return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+x.position : ''))
+  return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+posLabel(x.position) : ''))
     + ' <span class="muted small">'+(x.atUnknown ? '（时间未知）' : esc(when))+'</span></span>'
     + '<b>'+esc(String(x.score))+' 分</b></div>';
 }
@@ -3059,7 +3089,7 @@ function pfMatchRow(x){
 function pfTailorRow(x){
   const when = x.generatedAt ? new Date(x.generatedAt).toLocaleString('zh-CN') : '';
   const link = x.hasPdf ? ' <a href="'+esc(x.url)+'" data-open-link="'+esc(x.url)+'" data-open-label="定制简历 PDF">PDF</a>' : '';
-  return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+x.position : ''))
+  return '<div class="kv"><span>'+esc((x.company||'—') + (x.position ? ' · '+posLabel(x.position) : ''))
     + (when ? ' <span class="muted small">'+esc(when)+'</span>' : '') + '</span>'
     + '<b>'+(x.matchScore == null ? '—' : esc(String(x.matchScore))+' 分')+link+'</b></div>';
 }
@@ -3720,7 +3750,7 @@ $('#batchRun').addEventListener('click', async ()=>{
     if(host && manual.length){
       let h = '<div class="note warn" style="margin-top:8px"><b>需人工介入 '+manual.length+' 条</b>'
         + '（账号/验证码/页面结构类，自动投递无法代劳）：<ul style="margin:6px 0 6px 18px">';
-      for(const x of manual.slice(0,8)) h += '<li>'+esc((x.company||'')+' · '+(x.position||''))+' — '+esc(x.message||x.status)+'</li>';
+      for(const x of manual.slice(0,8)) h += '<li>'+esc((x.company||'')+' · '+(posLabel(x.position, '')))+' — '+esc(x.message||x.status)+'</li>';
       h += '</ul><button class="btn sm" id="batchOpenDbg">打开该平台调试窗口</button> '
         + '<span class="muted">在窗口里处理完（登录 / 过滑块 / 完善在线简历）再重跑本批即可。</span></div>';
       host.innerHTML = h;
@@ -3766,7 +3796,7 @@ $('#batchRoutePreview').addEventListener('click', async ()=>{
     for(const k of keys){ if(r.byPlatform && r.byPlatform[k]) s += '  • '+(labels[k]||k)+'：'+r.byPlatform[k]+'\n'; }
     if(r.wangshenJobs && r.wangshenJobs.length){
       s += '\n▶ 自动走网申通道的岗位（'+r.wangshenJobs.length+' 个）：\n';
-      for(const j of r.wangshenJobs.slice(0,30)) s += '   - '+(j.company||'?')+' · '+(j.position||'?')+'  ['+(j.reason||'')+']\n     '+(j.url||'')+'\n';
+      for(const j of r.wangshenJobs.slice(0,30)) s += '   - '+(j.company||'?')+' · '+(posLabel(j.position, '?'))+'  ['+(j.reason||'')+']\n     '+(j.url||'')+'\n';
       if(r.wangshenJobs.length>30) s += '   …（其余 '+(r.wangshenJobs.length-30)+' 个省略）\n';
     }
     if(r.skippedExternal) s += '\n⚠️ 另有 '+r.skippedExternal+' 个外部链接 auto 模式无法自动路由（非网申/非已知平台），将跳过，需手动投递。';
@@ -4155,7 +4185,7 @@ async function emailStream(path, body, outEl, barEl, onEvent){
       else if(ev.type==='found'){ n++; push('✅ 扫描完成：共扫 '+ev.scanned+' 个岗位，命中 '+((ev.found||[]).length)+' 个招聘邮箱（已在下方列出）'); if(barEl) barEl.style.width='100%'; }
       else if(ev.type==='result'){ n++;
         const tag = ev.status==='applied' ? '  ✓ 已投 ' : (ev.status==='skipped' ? '  ⊘ 跳过 ' : '  ✗ 失败 ');
-        push(tag + (ev.company||ev.position||ev.jobId||'') + (ev.message?(' — '+ev.message):''));
+        push(tag + (ev.company||posLabel(ev.position,'')||ev.jobId||'') + (ev.message?(' — '+ev.message):''));
         if(barEl && total) barEl.style.width=pct+'%';
       }
       else if(ev.type==='done'){
@@ -4190,7 +4220,7 @@ function emailHitHtml(h,i){
     : (h.mailKind==='generic' ? ' <b style="color:#8a6d00">通用邮箱</b>' : '');
   return '<label style="display:block;padding:7px 4px;border-bottom:1px solid rgba(128,128,128,.25)">'
     + '<input type="checkbox" class="emailHitChk" data-i="'+i+'"'+(emailHitSafe(h)?' checked':'')+' /> '
-    + '<b>'+esc(h.company||'')+'</b> · '+esc(h.position||'')+(h.city?(' · '+esc(h.city)):'')
+    + '<b>'+esc(h.company||'')+'</b> · '+esc(posLabel(h.position, ''))+(h.city?(' · '+esc(h.city)):'')
     + ' <span class="tag" style="font-size:10.5px">'+(h.origin==='jd'?'JD 正文':'已打开页面')+'</span>'
     + (h.ocrDerived?' <span class="tag" style="font-size:10.5px">OCR</span>':'')
     + kind
@@ -4308,7 +4338,7 @@ $('#emailApply').addEventListener('click', async ()=>{
   }
   const jobIds = hits.map(h=>h.jobId);
   const emails = {}; hits.forEach(h=>{ emails[h.jobId]=h.email; });
-  const preview = hits.slice(0,5).map(h=>'  · '+(h.company||'')+' | '+h.position+' | '+h.email).join('\n');
+  const preview = hits.slice(0,5).map(h=>'  · '+(h.company||'')+' | '+posLabel(h.position)+' | '+h.email).join('\n');
   if(!confirm('确认真实发送 '+jobIds.length+' 封邮件（不可撤回）？\n\n'+preview+(hits.length>5?('\n  …另有 '+(hits.length-5)+' 个'):'')+(risky?'\n\n⚠ 含 '+risky+' 个隔离项（已强制）':'')+(lowConf?('\n⚠ 含 '+lowConf+' 个低置信项（OCR / 用户名过短 / 无上下文），请确认已核对「证据」行'):''))) return;
   const b=$('#emailApply'); b.disabled=true; $('#emailStep3').textContent='投递中…（一岗一简历会先按 JD 生成定制附件，逐封间隔 8 秒）';
   try{
@@ -4606,7 +4636,7 @@ async function loadRecList(){
     const sc = (j.match_score!=null)? j.match_score : '–';
     const stt = j.status==='applied'?'<span class="badge b-ok">已投</span>': j.status==='unavailable'?'<span class="badge b-bad">不可用</span>':'<span class="badge b-mut">候选</span>';
     const hasImg = (j.jd_source==='image'||(j.jd_images&&j.jd_images!=='[]'&&j.jd_images));
-    return '<tr><td>'+esc(j.company||'–')+'</td><td>'+esc(j.position||'–')+'</td>'
+    return '<tr><td>'+esc(j.company||'–')+'</td><td>'+esc(posLabel(j.position, '–'))+'</td>'
       + '<td><span class="badge b-info">'+esc(pfName(j.source))+'</span></td><td>'+jd+'</td>'
       + '<td>'+sc+'</td><td>'+stt+'</td>'
       + '<td>'+(hasImg?'<button class="btn sm" data-jdimg="'+esc(j.id)+'">看长图</button> ':'')
@@ -4654,7 +4684,7 @@ async function showJob(id){
   const j = await fetchJobFull(id);
   if(!j){ openModal('岗位详情', '<div class="empty">读不到这个岗位（可能已被删除，或服务暂时不可用）。</div>'); return; }
   openModal('岗位详情', '<div class="kv"><span>公司</span><b>'+esc(j.company)+'</b></div>'
-    + '<div class="kv"><span>职位</span><b>'+esc(j.position)+'</b></div>'
+    + '<div class="kv"><span>职位</span><b>'+esc(posLabel(j.position,'–'))+'</b></div>'
     + '<div class="kv"><span>平台</span><b>'+esc(pfName(j.source))+'</b></div>'
     + '<div class="kv"><span>城市</span><b>'+esc(j.city)+'</b></div>'
     + '<div class="kv"><span>薪资</span><b>'+esc(j.salary)+'</b></div>'
@@ -4668,7 +4698,7 @@ async function showJdImage(id){
   const j = imgs[0];
   const list = j&&j.jd_images ? JSON.parse(j.jd_images||'[]') : [];
   if(!list.length){ openModal('JD 长图', '<div class="empty">该岗位无 JD 长图</div>'); return; }
-  openModal(pfName(j.source)+' · '+esc(j.company||'')+' · '+esc(j.position||''),
+  openModal(pfName(j.source)+' · '+esc(j.company||'')+' · '+esc(posLabel(j.position, '')),
     list.map(u=>'<img src="'+esc(u)+'" style="margin-bottom:12px" />').join(''));
 }
 
@@ -4762,7 +4792,7 @@ $('#clAdd').addEventListener('click', async ()=>{
 });
 async function loadJdImgSelect(){
   let jobs=[]; try{ const r = await api('/api/jobs/image-jd'); jobs=r.jobs||[]; }catch(e){}
-  $('#jdImgJob').innerHTML = '<option value="">选择岗位…</option>' + jobs.map(j=>'<option value="'+esc(j.id)+'">'+esc(pfName(j.source)+' · '+(j.company||'')+' · '+(j.position||''))+'</option>').join('');
+  $('#jdImgJob').innerHTML = '<option value="">选择岗位…</option>' + jobs.map(j=>'<option value="'+esc(j.id)+'">'+esc(pfName(j.source)+' · '+(j.company||'')+' · '+(posLabel(j.position, '')))+'</option>').join('');
   $('#jdImgJob').onchange = ()=>{
     const j = jobs.find(x=>x.id===$('#jdImgJob').value); const list = j&&j.jd_images?JSON.parse(j.jd_images||'[]'):[];
     $('#jdImgWrap').innerHTML = list.map(u=>'<img src="'+esc(u)+'" style="margin-bottom:10px" />').join('') || '<div class="empty">无长图</div>';
@@ -4778,7 +4808,7 @@ async function fillJobSelect(sel){
   //    返回值仍是**全量**（调用方用它做 id → 岗位的查找，不该被显示上限影响）。
   const ADV_JOB_MAX = 200;
   const shown = jobs.slice(0, ADV_JOB_MAX);
-  sel.innerHTML = '<option value="">选择岗位…</option>' + shown.map(j=>'<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(j.position||''))+'</option>').join('')
+  sel.innerHTML = '<option value="">选择岗位…</option>' + shown.map(j=>'<option value="'+esc(j.id)+'">'+esc((j.company||'')+' · '+(posLabel(j.position, '')))+'</option>').join('')
     + (jobs.length > shown.length
         ? '<option value="" disabled>—— 只列前 ' + shown.length + ' 个（共 ' + jobs.length + ' 个）——</option>'
         : '');
@@ -5298,7 +5328,7 @@ function renderJobsTable(list){
     const applied = j.status === 'applied' ? ' <span class="badge b-ok">已投</span>' : '';
     const gy = jobGrad(j);
     return '<tr><td>'+esc(j.company||'–')+'</td>'
-      + '<td>'+esc(j.position||'–')+applied+'</td>'
+      + '<td>'+esc(posLabel(j.position, '–'))+applied+'</td>'
       + '<td>'+(j.job_type ? '<span class="badge b-pur">'+esc(j.job_type)+'</span>' : '<span class="muted small">–</span>')+'</td>'
       + '<td>'+(gy ? '<span class="badge b-info">'+esc(gy)+' 届</span>' : '<span class="muted small">–</span>')+'</td>'
       + '<td>'+esc(j.city||'–')+'</td>'
@@ -5697,7 +5727,7 @@ $('#jaSave').addEventListener('click', async ()=>{
   try{
     const r = await api('/api/jobs', { method:'POST', body: JSON.stringify(body) });
     const j = r && r.job;
-    jaMsg('已保存：'+(j && (j.position || j.company) || '岗位')+'（可在「校招信息库」里筛选）');
+    jaMsg('已保存：'+(j && (posLabel(j.position,'') || j.company) || '岗位')+'（可在「校招信息库」里筛选）');
     ['#jaCompany','#jaPosition','#jaCity','#jaUrl','#jaDeadline','#jaJd','#jaImportText'].forEach(s=>{ $(s).value=''; });
     $('#jaType').value = '';
     $('#jaImportBox').style.display = 'none';
@@ -5890,7 +5920,7 @@ function appStatusOptions(a){
  *  否则「未留证」（多为证据功能上线前的历史投递），无法独立核实。 */
 function appVerifiedBadge(a){
   if(a.evidence_path){
-    const cap = esc((a.company||'')+' · '+(a.position||'')+' @ '+(jobSrcName(a.platform)||''));
+    const cap = esc((a.company||'')+' · '+(posLabel(a.position, ''))+' @ '+(jobSrcName(a.platform)||''));
     return '<span class="badge b-ok" title="已留存投递瞬间平台页截图（点击查看物证）" data-ev="'+esc(a.evidence_path)+'" data-cap="'+cap+'" style="cursor:zoom-in">✅ 已验证真实投递</span>';
   }
   return '<span class="badge b-mut" title="无投递瞬间截图（多为证据功能上线前的历史投递），无法独立核实">未留证</span>';
@@ -5900,7 +5930,7 @@ function appCardHtml(a){
   const n = appNodeText(a);
   return '<div class="kcard">'
     + '<div class="t">'+esc(a.company||'–')+'</div>'
-    + '<div class="m"><span>'+esc(a.position||'–')+'</span></div>'
+    + '<div class="m"><span>'+esc(posLabel(a.position, '–'))+'</span></div>'
     + '<div class="m"><span class="badge b-info">'+esc(jobSrcName(a.platform))+'</span>'
     +   (a.city ? '<span>'+esc(a.city)+'</span>' : '')
     +   '<span class="small">'+esc(fmtTs(a.created_at))+'</span>'
@@ -5935,7 +5965,7 @@ function jobCardHtml(j, actions){
   const tg = jobTags(j);
   return '<div class="kcard">'
     + '<div class="t">'+esc(j.company||'–')+'</div>'
-    + '<div class="m"><span>'+esc(j.position||'–')+'</span></div>'
+    + '<div class="m"><span>'+esc(posLabel(j.position, '–'))+'</span></div>'
     + '<div class="m"><span class="badge b-mut">'+esc(jobSrcName(j.source))+'</span>'
     +   (j.job_type ? '<span class="badge b-pur">'+esc(j.job_type)+'</span>' : '')
     +   (gy ? '<span class="badge b-info">'+esc(gy)+' 届</span>' : '')
@@ -5972,7 +6002,7 @@ function openAppsTimeEditor(id){
   set('#ateOffer', a.offer_at);
   set('#ateClosed', a.closed_at);
   const rs = $('#ateRound'); if(rs) rs.innerHTML = roundOptions(a);
-  const who = $('#appsTimeWho'); if(who) who.textContent = (a.company||'–') + ' · ' + (a.position||'–');
+  const who = $('#appsTimeWho'); if(who) who.textContent = (a.company||'–') + ' · ' + (posLabel(a.position, '–'));
   const msg = $('#appsTimeMsg'); if(msg) msg.textContent = '';
   card.hidden = false;
   card.scrollIntoView({ block:'nearest' });
@@ -6092,7 +6122,7 @@ function renderAppsTable(list){
   // 留两处的话，哪天把每页调大就会静默少画行，而页面看起来完全正常。
   tb.innerHTML = list.map(a=>{
     const n = appNodeText(a);
-    return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(a.position||'–')+'</td>'
+    return '<tr><td>'+esc(a.company||'–')+'</td><td>'+esc(posLabel(a.position, '–'))+'</td>'
       + '<td><span class="badge b-info">'+esc(APP_STATUS[a.status] || a.status || '–')+'</span> '+appVerifiedBadge(a)+'</td>'
       + '<td>'+esc(jobSrcName(a.platform))+'</td>'
       + '<td>'+esc(a.city||'–')+'</td>'
@@ -6271,7 +6301,7 @@ async function loadOcrFailed(){
     if(!items.length){ tb.innerHTML='<tr><td colspan="5" class="empty">'+(q?'无匹配项':'暂无失败项')+'</td></tr>'; return; }
     tb.innerHTML = items.map(it=>{
       const preview = String(it.text||'').replace(/\s+/g,' ').slice(0,90);
-      return '<tr><td>'+esc(it.company||'–')+'</td><td class="small">'+esc(it.position||'–')+'</td>'
+      return '<tr><td>'+esc(it.company||'–')+'</td><td class="small">'+esc(posLabel(it.position, '–'))+'</td>'
         +'<td class="small muted">'+it.chars+' 字</td><td class="small muted">'+esc(preview)+'…</td>'
         +'<td><button class="btn sm" data-ocrview="'+esc(it.jobId)+'">查看</button></td></tr>';
     }).join('');
@@ -6279,7 +6309,7 @@ async function loadOcrFailed(){
       const it = items.find(x=>x.jobId===b.dataset.ocrview); if(!it) return;
       openModal('OCR 失败原文 · '+(it.company||it.jobId),
         '<div class="kv"><span>公司</span><b>'+esc(it.company||'–')+'</b></div>'
-        +'<div class="kv"><span>职位</span><b>'+esc(it.position||'–')+'</b></div>'
+        +'<div class="kv"><span>职位</span><b>'+esc(posLabel(it.position, '–'))+'</b></div>'
         +'<div class="kv"><span>原文长度</span><b>'+it.chars+' 字'+(it.truncated?'（已截断显示）':'')+'</b></div>'
         +'<pre style="white-space:pre-wrap;margin-top:12px;font-size:12.5px;line-height:1.6">'+esc(it.text||'')+'</pre>');
     }));
@@ -6303,7 +6333,7 @@ async function loadLogs(){
   if(!apps.length){ tb.innerHTML='<tr><td colspan="6" class="empty">无记录</td></tr>'; return; }
   tb.innerHTML = apps.slice(0,100).map(a=>{
     const co = a.company||(a.job&&a.job.company)||'–';
-    const po = a.position||(a.job&&a.job.position)||'–';
+    const po = posLabel(a.position||(a.job&&a.job.position),'–');
     const pf = a.platform||(a.job&&a.job.source)||'–';
     const st = a.status==='applied'?'<span class="badge b-ok">已投</span>': a.status==='skipped'?'<span class="badge b-warn">跳过</span>':'<span class="badge b-mut">'+esc(a.status||'–')+'</span>';
     const t = a.appliedAt||a.createdAt||a.updatedAt||'';

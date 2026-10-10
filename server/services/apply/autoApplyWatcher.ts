@@ -182,6 +182,8 @@ export function watcherStatus(): {
   keyword: string;
   limit: number;
   intervalSec: number;
+  intervalMs: number;
+  minScore: number;
   lastRun: Record<string, { at: string; applied: number; skipped: number; error?: string }>;
 } {
   return {
@@ -191,6 +193,12 @@ export function watcherStatus(): {
     keyword: config.keyword,
     limit: config.limit,
     intervalSec: config.intervalSec,
+    // 🔴 「配得进」必须「读得出」（2026-10-10 修）：
+    //    `/api/auto-apply/watch/config` 的白名单里有 intervalMs 与 minScore，但 status
+    //    原先**不返回**它们 ⇒ 前端/运维无从回填，「当前到底配了什么」只能去翻
+    //    data/auto_apply_watch.json。合约测试机械比对「白名单 ⊆ status 返回键」。
+    intervalMs: config.intervalMs,
+    minScore: config.minScore,
     lastRun,
   };
 }

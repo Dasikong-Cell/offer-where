@@ -167,7 +167,7 @@ function decorateJob(j) {
   return {
     id: j.id,
     // 后端列名是 position，界面文案叫「职位」
-    title: j.position || '',
+    title: posLabel(j.position, ''),
     company: stripCompanySuffix(j.company),
     city: j.city || '',
     salary: j.salary || '',
@@ -180,6 +180,44 @@ function decorateJob(j) {
     scoreText: score === null || score === undefined ? '' : String(score),
     quarantined: !!j.quarantine,
   };
+}
+
+/**
+ * 岗位名输出侧清洗 —— 与 `server/services/apply/jobText.ts` 的 `jobPositionLabel`、
+ * 以及 `public/console.html` 的 `posLabel` **同口径**（三处必须一致，合约测试有锚定）。
+ *
+ * 为什么小程序也要：**后端 `/api/*` 返回的是数据库原始行**，position 由采集器原样入库。
+ * 写库口那道清洗（server/db.ts 的 sanitizePosition）只治新增、治不了存量，也**不管反斜杠、
+ * 不管长度、允许空**。三处失真在小屏上更明显：
+ *   ① 反斜杠残留（`软件工程师Java\C#（3-6个月长期出差）`）；
+ *   ② 超长「多岗位并列」串（最长 80 字，实测 138/3200 条超 40 字）直接把列表项挤成两行；
+ *   ③ 空值 → 卡片标题空白。
+ * ⚠️ 只清洗**展示**：详情页的 JD / 表单提交仍用原始值。
+ */
+function posLabel(v, fb) {
+  var d = (fb === undefined ? '该岗位' : fb);
+  if (v === null || v === undefined) return d;
+  var s = String(v)
+    .replace(/\s*\\+\s*/g, '/')
+    .replace(/[\u200B-\u200F\uFEFF]/g, '')
+    .replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return d;
+  if (s.length <= 40) return s;
+  var head = s.slice(0, 40);
+  var min = 20;
+  var cut = -1;
+  ['、', '，', ',', '/', '|', '·'].forEach(function (sep) {
+    var i = head.lastIndexOf(sep);
+    if (i > cut) cut = i;
+  });
+  if (cut < min) {
+    var sp = head.lastIndexOf(' ');
+    cut = (sp >= min ? sp : -1);
+  }
+  var body = (cut >= min ? head.slice(0, cut) : head);
+  return body.replace(/[\s、，,/|·]+$/, '') + '\u2026';
 }
 
 /**

@@ -23,6 +23,7 @@ import * as db from '../../db.js';
 import { sendMail } from '../mail.js';
 import { assessMailbox, describeAssessment } from '../mailDeliverability.js';
 import { buildSubjectPlan, describeSubjectPlan, extractSubjectRequirement, looksDegraded } from './subjectSpec.js';
+import { jobPositionLabel } from './jobText.js';
 import type { ApplyInput, ApplyResult, ApplyLog } from './types.js';
 
 /** offerbiu 官网通道专用浏览器上下文（与 wangshen 的 'wangshen' 区分） */
@@ -245,7 +246,7 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
     const lines = [
       '您好！',
       '',
-      `我在招聘信息中看到贵单位${position ? `「${position}」` : ''}岗位，非常感兴趣，特此投递简历，恳请查阅。`,
+      `我在招聘信息中看到贵单位${position ? `「${jobPositionLabel(position)}」` : ''}岗位，非常感兴趣，特此投递简历，恳请查阅。`,
       '',
       '【基本信息】',
       `姓名：${p.name || ''}`,
@@ -693,7 +694,7 @@ export async function runOfficialApply(input: ApplyInput, ctx: string): Promise<
       if (site && Object.keys(finalFields).length) {
         try { db.saveFormMemory(site, finalFields); logs.step('表单记忆', true, `已记忆 ${Object.keys(finalFields).length} 个字段，下次同站自动填写`); } catch {}
       }
-      return { platform, status: 'applied', message: `已在官网向「${company || position || '该岗位'}」完成投递`, logs: logs.logs, company, position, screenshot: shot };
+      return { platform, status: 'applied', message: `已在官网向「${company || jobPositionLabel(position)}」完成投递`, logs: logs.logs, company, position, screenshot: shot };
     }
     return { platform, status: 'need_manual', message: '已点击投递但未能确认成功，请检查打开的浏览器（可能需补填必填项）', logs: logs.logs, company, position, screenshot: shot };
   } catch (e: any) {
