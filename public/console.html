@@ -655,6 +655,56 @@
             <div class="progress"><i id="batchBar"></i></div>
             <div class="out" id="batchOut"></div>
             <div id="batchManual"></div>
+
+            <!-- 后台自动连投（常驻监视器）—— 后端 /api/auto-apply/watch 五个端点的**唯一入口**
+                 ⚠️ 与上面「自动回复 · 持续跟进」完全同构：后端能力其实早就完整
+                 （intervalSec 轮询 / running 互斥 / AbortController 可中断 / 配置落盘
+                 / bootstrapWatcher 启动自动恢复 / watchEmitter → SSE 实时广播），
+                 但界面上没有任何入口 ⇒ 默认 enabled:false 之下 = 功能不存在，
+                 七个配置项只能手敲 curl 才设得上。
+                 🔴 本注释里**不得出现**斜杠加星号：scripts/lib/stripComments.ts 不认 HTML 注释，
+                 会把它当成块注释开始、一路剥到下一个星号加斜杠 ⇒ 静默吃掉几千行。 -->
+            <div class="card" style="margin-top:16px;padding:14px">
+              <h2 style="margin-bottom:6px">后台自动连投（常驻监视器）</h2>
+              <!-- ⚠️ 本卡片里所有**正文**（说明段 / 警示）各只占**一行源码**：HTML 里换行会折叠成
+                   一个空格，排到中文字符之间就是可见的空隙（截图实测：「…跳过）， 不必再手点…」）。
+                   隔壁自动回复那块是多行写法，同样有这个毛病 —— 别照抄那个换行。 -->
+              <div class="muted small" style="margin-bottom:10px">
+                开启后后端每隔「轮询间隔」秒自动跑一轮投递（已投过的按「排除已投递」跳过），不必再手点上面的「开始投递」。<b>仅在后端进程运行时生效</b>；本设置会落盘，后端下次启动自动恢复。<b>与「自动回复」共用同一平台会话锁</b>：一方占用浏览器时另一方本轮跳过、下一轮再试，互不打架。
+              </div>
+              <div class="row2">
+                <div><label class="f">轮询间隔（秒，最小 30）</label>
+                  <input id="awIntervalSec" type="number" min="30" step="30" value="600" style="width:110px" /></div>
+                <div><label class="f">每轮最多投递</label>
+                  <input id="awLimit" type="number" min="1" step="1" value="10" style="width:110px" /></div>
+              </div>
+              <div class="row2" style="margin-top:8px">
+                <div><label class="f">两次投递间隔（毫秒，防风控）</label>
+                  <input id="awIntervalMs" type="number" min="0" step="1000" value="20000" style="width:110px" /></div>
+                <div><label class="f">最低匹配分（0 = 不启用）</label>
+                  <input id="awMinScore" type="number" min="0" max="100" step="1" value="0" style="width:110px" /></div>
+              </div>
+              <label class="f" style="margin-top:8px;display:block">职位关键词（留空 = 全部岗位）</label>
+              <input id="awKeyword" placeholder="如：Java 后端" />
+              <div class="muted small" id="awPlatforms" style="margin-top:10px">运行平台：加载中…</div>
+              <!-- ⚠️ 这两条警示的正文各**只占一行源码**：HTML 里换行会折叠成一个空格，
+                   排到「。」「，」之后就变成句中多一个可见空隙（截图实测）。
+                   隔壁自动回复那块也是两行写法，同样有这个毛病 —— 别照抄那个换行。 -->
+              <div class="note warn" style="margin-top:8px">
+                ⚠️ 「最低匹配分」默认 0（不启用）。<b>没配大模型时不要调大</b>：算分会回退到规则词表、分数天然趋近 0，开成大于 0 会把所有岗位误杀成「每轮 0 投递」。要按分数投，先在上面用「仅预览」跑一轮看清分数分布再设。
+              </div>
+              <div class="note warn" style="margin-top:8px">
+                ⚠️ 监视器会<b>真实投递</b>（发出即不可撤回），且只投库里已存在、未投过的岗位。建议先在本页用「仅预览」跑一轮核对口径，再开启后台连投；账号风控风险自负。
+              </div>
+              <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <button class="btn primary sm" id="awStart">开启后台连投</button>
+                <button class="btn sm" id="awStop">停止</button>
+                <button class="btn sm" id="awSaveCfg">保存参数</button>
+                <span class="muted small" id="awState"></span>
+              </div>
+              <div class="out" id="awLog"></div>
+              <div class="muted small" id="awLastRun" style="margin-top:8px"></div>
+            </div>
           </div>
 
           <!-- reply -->
@@ -3695,6 +3745,9 @@ $('#deliverTabs').addEventListener('click', e=>{
   ['batch','reply','email'].forEach(t=>{ $('#tab-'+t).style.display = (t===b.dataset.tab)?'block':'none'; });
   // 切到「自动回复」页时顺手探一次登录态，避免用户盲跑
   if(b.dataset.tab==='reply'){ checkReplyLogin(); refreshWatchStatus(true); watchPlatformBoxes(); watchOpenStream(); }
+  // 切到「批量投递」页时同步「后台自动连投」面板：平台勾选框要按 PLATFORMS 现渲染，
+  // 状态要从后端回填（否则刷新页面后面板显示成空白，让人以为没这功能）
+  if(b.dataset.tab==='batch'){ awRefreshStatus(true); awPlatformBoxes(); awOpenStream(); }
 });
 
 /* batch apply */
@@ -4155,6 +4208,247 @@ $('#watchSaveCfg').addEventListener('click', async ()=>{
 
 /* 首次载入取一次状态：面板默认不在前台，但状态/参数要显示对（避免显示成空白让人以为没这功能） */
 refreshWatchStatus(true);
+
+/* ---------- 批量投递：后台自动连投（常驻监视器）----------
+   🔴 与上一块完全同构的缺陷、完全同构的修法：后端 autoApplyWatcher.ts + /api/auto-apply/watch/*
+      五个端点早已写完（`data/auto_apply_watch.log` 有真实 tick 记录），能力齐全
+      （intervalSec 轮询 / running 互斥防叠加 / AbortController 可中断 / 配置落盘
+      / bootstrapWatcher 启动自动恢复 / watchEmitter→SSE 实时广播），
+      但**前端零调用方** ⇒ 默认 enabled:false 且界面上开不了 = 功能不存在。
+      上一轮已修好后端「配得进、读不出」（status 补 intervalMs/minScore），
+      这一轮补上唯一入口，「配得进」才真正可用。
+
+   ⚠️ 键名必须**逐字**对齐后端白名单（server/index.ts 里 /api/auto-apply/watch/config 的
+      for..of 数组：enabled / platforms / keyword / limit / intervalSec / intervalMs / minScore）。
+      写错一个字母 ⇒ 后端静默丢弃、界面照样显示「已保存」 ⇒ 用户以为改了、其实没改。
+      合约测试机械比对「本函数发出的键 ⊆ 后端白名单」与「白名单除 enabled 外 ⊆ 本函数发出的键」。
+
+   ⚠️ SSE 事件格式与单次投递不同，别照抄 #batchRun 的解析：
+        POST /api/apply            直发 {type:'start'|'progress'|'result'|'done'|…}
+        GET  /api/auto-apply/watch 发 {type:'status'|'tick',…}，tick 的真实事件在 ev 字段里；
+        且外层 kind 是投递侧独有的：start/end/platform-done/platform-error/event/collect/collect-error。
+      ⚠️ platform-done 带的是 applied / skipped（**不是**自动回复那边的 sent）。 */
+let AW_STREAM_STARTED = false;
+
+/** 渲染「运行平台」勾选框。
+ *  🔴 平台清单来自 PLATFORMS，且只留 tier !== 'pending' 的 —— 后端 autoApplyWatcher.setWatchConfig()
+ *     会用 isSupported() 把「已登记但投递未接入」的平台过滤掉，勾了也进不去；
+ *     反过来，若这里少列了，已接入的平台就被挡在门外（历史上「自动回复只有 BOSS 和猎聘」
+ *     正是前后端各写一份名单造成的）。合约测试机械比对这两个集合**相等**。 */
+function awPlatformBoxes(){
+  const box = $('#awPlatforms');
+  if(!box) return;
+  const prev = {};
+  $$('.awpf').forEach(c=>{ prev[c.value] = c.checked; });
+  const list = PLATFORMS.filter(p=>p.tier !== 'pending');
+  box.innerHTML = '运行平台：' + list.map(p=>{
+    // 首次渲染默认只勾 BOSS（后端 DEFAULT_CONFIG.platforms = ['boss']，两边默认值一致）
+    const on = (p.id in prev) ? prev[p.id] : (p.id === 'boss');
+    return '<label class="toggle" style="margin-right:14px">'
+      + '<input type="checkbox" class="awpf" value="' + esc(p.id) + '"' + (on?' checked':'') + ' /> '
+      + esc(p.name) + '</label>';
+  }).join('');
+}
+
+/** 读面板参数 ⇒ POST /api/auto-apply/watch/config 的 patch。
+ *  platforms 一个都没勾时**不传**（保留后端原值），避免把平台列表清空成 [] 后监视器空转。 */
+function collectAwCfg(){
+  const num = (sel, def, min) => {
+    const el = $(sel);
+    const v = el ? Number(el.value) : NaN;
+    return Number.isFinite(v) ? Math.max(min, Math.floor(v)) : def;
+  };
+  const cfg = {
+    intervalSec: num('#awIntervalSec', 600, 30),
+    limit: num('#awLimit', 10, 1),
+    intervalMs: num('#awIntervalMs', 20000, 0),
+    minScore: num('#awMinScore', 0, 0),
+    keyword: ($('#awKeyword') && $('#awKeyword').value.trim()) || '',
+  };
+  const pfs = $$('.awpf').filter(c=>c.checked).map(c=>c.value);
+  if(pfs.length) cfg.platforms = pfs;
+  return cfg;
+}
+
+/** 渲染状态。fillCfg=true 时**同时回填参数控件**（只在首次载入/用户主动操作后做，
+ *  否则会跟用户正在输入的框抢值）。回填依赖后端 status 返回这些键 ——
+ *  这正是上一轮补 `intervalMs`/`minScore` 的原因：不返回就无从回填，面板会显示成默认值。 */
+function applyAwStatus(s, fillCfg){
+  if(!s) return;
+  const el = $('#awState');
+  if(el){
+    if(s.running){
+      el.textContent = '● 运行中 · 每 ' + s.intervalSec + ' 秒一轮 · 每轮至多 ' + s.limit + ' 个'
+        + (s.minScore > 0 ? ' · 匹配分不低于 ' + s.minScore : ' · 不限匹配分');
+      el.style.color = '#3fb950';
+    } else if(s.enabled){
+      // enabled 却没有定时器：后端进程被重启过（bootstrapWatcher 只挂定时器、不立即跑）
+      el.textContent = '⚠ 已启用但定时器未运行（后端可能刚重启，等首个间隔）';
+      el.style.color = '#e8a33d';
+    } else {
+      el.textContent = '○ 已停止（不会自动投递）';
+      el.style.color = '';
+    }
+  }
+  if(fillCfg){
+    const back = (sel, v) => { const i = $(sel); if(i && v !== undefined && v !== null) i.value = String(v); };
+    back('#awIntervalSec', s.intervalSec);
+    back('#awLimit', s.limit);
+    back('#awIntervalMs', s.intervalMs);
+    back('#awMinScore', s.minScore);
+    back('#awKeyword', s.keyword);
+    if(Array.isArray(s.platforms)) $$('.awpf').forEach(c=>{ c.checked = s.platforms.indexOf(c.value) >= 0; });
+  }
+  const lr = $('#awLastRun');
+  if(lr){
+    const keys = Object.keys(s.lastRun || {});
+    if(!keys.length){ lr.textContent = '尚无运行记录（开启后每轮结束会在这里留一行）。'; }
+    else{
+      lr.textContent = '最近一轮：' + keys.map(k=>{
+        const r = s.lastRun[k] || {};
+        const t = r.at ? new Date(r.at).toLocaleTimeString('zh-CN',{hour12:false}) : '?';
+        return r.error ? (k + ' ' + t + ' 出错：' + r.error)
+                       : (k + ' ' + t + ' 投出 ' + r.applied + ' · 跳过 ' + r.skipped);
+      }).join('；');
+    }
+  }
+}
+
+const awOut = (line)=>{
+  const out = $('#awLog'); if(!out || !line) return;
+  out.textContent += (out.textContent?NL:'') + line;
+  out.scrollTop = out.scrollHeight;
+};
+
+/** 把一条 tick 事件翻译成人话（外层 kind 见本块顶部注释；ev 里的类型见 batch.ts 的 BatchEvent）。 */
+function awLine(ev){
+  const at = ev.at ? new Date(ev.at).toLocaleTimeString('zh-CN',{hour12:false}) : '';
+  switch(ev.kind){
+    case 'start': return '▶ [' + at + '] 本轮开始 · ' + ((ev.platforms||[]).join(' / ') || '无平台');
+    case 'end': return '■ [' + at + '] 本轮结束';
+    case 'platform-done': return '  ✓ [' + at + '] ' + ev.platform + '：投出 ' + ev.applied + ' · 跳过 ' + ev.skipped;
+    case 'platform-error': return '  ✗ [' + at + '] ' + ev.platform + '：错误 ' + (ev.error || '');
+    case 'collect': return '  ⌕ [' + at + '] ' + ev.platform + '：本轮 0 投递 → 自动搜索采集 ' + ev.added + ' 个新岗位（下轮再算分投）';
+    case 'collect-error': return '  ✗ [' + at + '] ' + ev.platform + '：自动采集失败 ' + (ev.error || '');
+    case 'event': {
+      const e = ev.ev || {};
+      // ⚠️ 岗位名走 posLabel：库里存在含反斜杠 / 超 40 字的脏值（上一轮的输出侧清洗），
+      //    直接拼进来会把日志撑断行。检索 blob / payload / 导出那几处则必须保持原值。
+      const who = [e.company, e.position ? posLabel(e.position, '') : ''].filter(Boolean).join(' · ');
+      switch(e.type){
+        case 'start': return '  ▷ 候选 ' + (e.total||0) + ' 个' + (e.message ? '（' + e.message + '）' : '');
+        case 'progress': return '    · [' + ((e.index||0)+1) + '/' + (e.total||0) + '] ' + (who || ev.platform) + (e.message ? ' — ' + e.message : '');
+        case 'need_input': return '    ⚠ 需要人工介入（' + (e.inputType === 'captcha' ? '验证码' : '手动') + '）：' + (who || '');
+        case 'result': {
+          const msg = e.message ? '：' + String(e.message).slice(0,120) : '';
+          if(e.status === 'applied') return '    ✓ 已投递 ' + who + msg;
+          if(e.status === 'rate_limited') return '    ⏳ 触发风控，本轮暂停 ' + who + msg;
+          if(e.status === 'error') return '    ✗ 出错 ' + who + msg;
+          return '    ⊘ 跳过 ' + who + msg;
+        }
+        case 'done': {
+          const s = e.summary || {};
+          return '  ■ 本轮完成：投出 ' + (s.applied||0) + ' · 跳过 ' + (s.skipped||0);
+        }
+        default: return e.message ? '    · ' + String(e.message).slice(0,120) : '';
+      }
+    }
+    default: return '';
+  }
+}
+
+async function awRefreshStatus(fillCfg){
+  try{
+    const s = await api('/api/auto-apply/watch/status');
+    applyAwStatus(s, !!fillCfg);
+    if(s && s.running) awOpenStream();   // 已在运行（例如刷新页面）⇒ 自动接上实时日志
+    return s;
+  }catch(e){
+    const el = $('#awState');
+    if(el){ el.textContent = '状态获取失败：' + e.message; el.style.color = '#f85149'; }
+    return null;
+  }
+}
+
+/** 订阅监视器 SSE（用 fetch 而不是 EventSource：EventSource 不能带令牌头）。 */
+function awOpenStream(){
+  if(AW_STREAM_STARTED) return;
+  AW_STREAM_STARTED = true;
+  fetch('/api/auto-apply/watch', {headers:authHeaders()}).then(resp=>{
+    if(!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+    const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    const pump = () => reader.read().then(({done,value})=>{
+      if(done) throw new Error('流已结束');
+      buf += dec.decode(value,{stream:true});
+      let idx;
+      while((idx = buf.indexOf(NL+NL)) >= 0){
+        const chunk = buf.slice(0,idx); buf = buf.slice(idx+2);
+        const dataLine = chunk.split(NL).find(l=>l.startsWith('data: '));
+        if(!dataLine) continue;
+        let ev; try{ ev = JSON.parse(dataLine.slice(6)); }catch(_){ continue; }
+        if(ev.type === 'status'){ applyAwStatus(ev); awOut('— 已接上后台连投日志流'); }
+        else if(ev.type === 'tick'){
+          if(ev.kind === 'end') awRefreshStatus(false);
+          awOut(awLine(ev));
+        }
+      }
+      return pump();
+    });
+    return pump();
+  }).catch(e=>{
+    AW_STREAM_STARTED = false;
+    awOut('后台连投日志流断开（' + e.message + '）· 重新开启或刷新页面可重连');
+  });
+}
+
+function awFail(msg, e){
+  const el = $('#awState');
+  if(el){ el.textContent = msg + '：' + (e && e.message ? e.message : e); el.style.color = '#f85149'; }
+}
+
+$('#awStart').addEventListener('click', async ()=>{
+  const btn = $('#awStart'); btn.disabled = true;
+  try{
+    // 🔴 顺序不能反：startWatcher() 内部先 loadConfig()（读盘覆盖内存）再置 enabled=true，
+    //    所以必须**先**把面板参数 POST 落盘，**再** start，否则「改完参数直接点开启」会静默沿用旧值。
+    // 🔴 先订阅 SSE 再启动：startWatcher() 是 immediate，首轮事件会在 POST 返回**之前**就推出去；
+    //    等拿到响应才连流 ⇒ 第一轮最早那批事件静默丢失。
+    awOpenStream();
+    await api('/api/auto-apply/watch/config', {method:'POST', body:JSON.stringify(collectAwCfg())});
+    const r = await api('/api/auto-apply/watch/start', {method:'POST'});
+    const st = (r && r.status) || null;
+    applyAwStatus(st, true);
+    const out = $('#awLog'); if(out) out.textContent = '';
+    awOut('已开启：每 ' + ((st&&st.intervalSec)||'?') + ' 秒一轮，每轮至多 '
+      + ((st&&st.limit)||'?') + ' 个' + ((st&&st.minScore>0) ? '，匹配分不低于 ' + st.minScore : '')
+      + ' · 等待后端第一轮…（真实投递，可在下方日志观察）');
+  }catch(e){ awFail('开启失败', e); }
+  btn.disabled = false;
+});
+
+$('#awStop').addEventListener('click', async ()=>{
+  const btn = $('#awStop'); btn.disabled = true;
+  try{
+    const r = await api('/api/auto-apply/watch/stop', {method:'POST'});
+    applyAwStatus((r && r.status) || null, true);
+    awOut('已停止后台连投（已投出的记录不受影响）');
+  }catch(e){ awFail('停止失败', e); }
+  btn.disabled = false;
+});
+
+$('#awSaveCfg').addEventListener('click', async ()=>{
+  const btn = $('#awSaveCfg'); btn.disabled = true;
+  try{
+    const r = await api('/api/auto-apply/watch/config', {method:'POST', body:JSON.stringify(collectAwCfg())});
+    applyAwStatus((r && r.status) || null, true);
+    awOut('参数已保存' + (r && r.status && r.status.enabled ? '（监视器在运行，轮询间隔变更已即时生效）' : '（监视器未运行，启动时生效）'));
+  }catch(e){ awFail('保存失败', e); }
+  btn.disabled = false;
+});
+
+/* 首次载入先渲染平台勾选框并取一次状态：面板默认不在前台，但状态/参数要显示对 */
+awPlatformBoxes();
+awRefreshStatus(true);
 
 /* ---------- email apply (offerbiu) ----------
    ⚠️ 后端 SSE 事件的文案字段是 **`message`**（不是 `msg`）。曾全写成 `ev.msg` ⇒ `undefined`：

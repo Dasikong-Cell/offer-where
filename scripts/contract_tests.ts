@@ -5680,6 +5680,188 @@ console.log('\n══════ H. 首跑安装链路（解压后弹出安装�
     && !/该岗位按「无匹配分」处理（若设了 minScore 则自然被分数闸门过滤掉）。/.test(batJ));
 }
 
+// ── 后台自动连投（常驻监视器）接线 ────────────────────────────────────────────
+// 与「自动回复 · 持续跟进」是**同一类缺陷的第二次出现**：后端 autoApplyWatcher.ts 与
+// /api/auto-apply/watch/* 五个端点早已写完并真跑过（data/auto_apply_watch.log 有真实 tick），
+// 能力齐全（intervalSec 轮询 / running 互斥 / AbortController / 配置落盘 / bootstrap 自动恢复
+// / watchEmitter→SSE），但**前端零调用方** ⇒ 默认 enabled:false 且界面上开不了 = 功能不存在。
+// 上一轮刚修完后端「配得进、读不出」（status 补 intervalMs/minScore），这一轮补唯一入口。
+//
+// 判据三层，全部锚到**端点 / 函数体**、不靠匹配形状：
+//   ① 白名单 \{enabled} ⊆ collectAwCfg 发出的键  —— 每个可配项都得有控件（否则「配不进去」）
+//   ② collectAwCfg 发出的键 ⊆ 白名单            —— 控件不许发会被后端静默丢弃的键
+//   ③ collectAwCfg 发出的键 ⊆ watcherStatus() 返回键 —— 能设就得能读回（否则刷新后回填成默认值）
+//   ④ 前端「可投递」平台集 == 后端 SUPPORTED_PLATFORMS —— 防「硬编码名单把已接入平台挡在门外」
+// ═══════════════════════════════════════════════════════════
+{
+  const awIdx = readText('server/index.ts').replace(/\r\n/g, '\n');
+  const awWat = stripComments(readText('server/services/apply/autoApplyWatcher.ts'));
+  const awBat = stripComments(readText('server/services/apply/batch.ts').replace(/\r\n/g, '\n'));
+  const awSrv = stripComments(readText('server/services/apply/index.ts'));
+  const awCon = readText('public/console.html');
+  const awCode = stripComments(awCon);
+
+  /** 取「从 marker 到下一个 marker2」之间的源码 —— 用真实的下一个绑定当终止符，
+   *  比按字符数截窗稳（截短了抓不到、截长了串到下一个 handler 里，两头都会造成假红/假绿）。 */
+  const sliceBetween = (src: string, a: string, b: string) => {
+    const i = src.indexOf(a);
+    if (i < 0) return '';
+    const j = src.indexOf(b, i + a.length);
+    return j < 0 ? src.slice(i) : src.slice(i, j);
+  };
+
+  // ---- ① 后端白名单。⚠️ 必须锚到**自动投递**那个端点：
+  //         /api/auto-reply/watch/config 也有一处同形的 for..of 白名单（8 项），
+  //         只按形状抓会抓到它 ⇒ 报出假 missing（上一轮实测踩过）。----
+  const awWhitelist = (() => {
+    const ep = awIdx.indexOf('app.post("/api/auto-apply/watch/config"');
+    const m = ep < 0 ? null : awIdx.slice(ep).match(/for \(const k of \[([^\]]+)\] as const\)/);
+    return m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
+  })();
+  // 扫描量护栏：证明「解析到的确实是那 7 项」而不是抓到了别处（抓错端点会变 8）
+  check('后台连投：/watch/config 白名单恰 7 项（扫描量护栏；抓错同形端点会变成 8）',
+    awWhitelist.length === 7, 'wl=' + JSON.stringify(awWhitelist));
+
+  // ---- collectAwCfg 真正发出的键（锚到函数体）----
+  const awCollectBody = sliceBetween(awCode, 'function collectAwCfg(', 'function applyAwStatus(');
+  const awSent = new Set<string>();
+  for (const m of awCollectBody.matchAll(/\n\s+([A-Za-z_$][\w$]*)\s*:/g)) awSent.add(m[1]);
+  if (/cfg\.platforms\s*=/.test(awCollectBody)) awSent.add('platforms');
+  check('后台连投：collectAwCfg 解析出 6 个键（扫描量护栏，防正则写错 ⇒ 下面两条恒绿）',
+    awSent.size === 6, 'sent=' + JSON.stringify([...awSent]));
+
+  const awSet = new Set<string>(awWhitelist);
+  const holdsShape = (s: Set<string>) => awWhitelist.filter((k) => k !== 'enabled').every((k) => s.has(k));
+  check('后台连投：白名单除 enabled 外每个键都有控件（缺一个 ⇒ 那一项永远配不进去）',
+    holdsShape(awSent),
+    'missing=' + JSON.stringify(awWhitelist.filter((k) => k !== 'enabled' && !awSent.has(k))));
+  check('后台连投：控件发出的键 ⊆ 后端白名单（多发会被静默丢弃，界面却显示「已保存」）',
+    [...awSent].every((k) => awSet.has(k)),
+    'extra=' + JSON.stringify([...awSent].filter((k) => !awSet.has(k))));
+  // 区分力自证：抠掉任一键，上面第一条必须**变假**（否则它测的不是不变量、是同义反复）
+  check('后台连投：上面那条不变量确有区分力（抠掉任一键必须变假）',
+    holdsShape(awSent)
+    && !holdsShape(new Set([...awSent].filter((k) => k !== 'intervalSec')))
+    && !holdsShape(new Set([...awSent].filter((k) => k !== 'minScore'))),
+    '抠键后仍判真 ⇒ 该断言无区分力');
+
+  // ---- ③ 能设就得能读回：控件发出的键 ⊆ status 返回键 ----
+  const awStatusKeys = (() => {
+    const at = awWat.indexOf('export function watcherStatus()');
+    if (at < 0) return [];
+    const start = awWat.indexOf('return {', at);
+    const end = awWat.indexOf('};', start);
+    if (start < 0 || end < 0) return [];
+    return [...awWat.slice(start, end).matchAll(/^\s*([A-Za-z_$][\w$]*)\s*[:,]/gm)].map((m) => m[1]);
+  })();
+  check('后台连投：status 返回键 ≥7（扫描量护栏）', awStatusKeys.length >= 7, 'status=' + awStatusKeys.length);
+  check('后台连投：控件设得进的键都能从 status 读回（否则刷新页面后面板回填成默认值）',
+    [...awSent].every((k) => awStatusKeys.includes(k)),
+    'missing=' + JSON.stringify([...awSent].filter((k) => !awStatusKeys.includes(k))));
+
+  // ---- ④ 平台名单跨文件一致 ----
+  // ⚠️ 解析后端清单必须先跳到 `= [` 再找收尾的 `]`：声明行本身写着
+  //    `export const SUPPORTED_PLATFORMS: ApplyPlatform[] = [` —— 类型注解里的那个 `]`
+  //    比数组开括号还靠前，直接 indexOf(']') 会截在类型上，切片里一个字符串都没有 ⇒ 静默空集。
+  const awBePlatforms = (() => {
+    const i = awSrv.indexOf('export const SUPPORTED_PLATFORMS');
+    const open = i < 0 ? -1 : awSrv.indexOf('= [', i);
+    const j = open < 0 ? -1 : awSrv.indexOf(']', open);
+    return open < 0 || j < 0 ? [] : [...awSrv.slice(open, j).matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  })();
+  const awFePlatforms = (() => {
+    const i = awCode.indexOf('const PLATFORMS = [');
+    const j = awCode.indexOf('];', i);
+    if (i < 0 || j < 0) return [];
+    return [...awCode.slice(i, j).matchAll(/\{id:'([^']+)'[^}]*tier:'([^']+)'/g)]
+      .filter((m) => m[2] !== 'pending').map((m) => m[1]);
+  })();
+  check('后台连投：两侧平台清单都解析出了量（扫描量护栏，防任一侧静默空集 ⇒ 下面那条恒绿）',
+    awBePlatforms.length >= 10 && awFePlatforms.length >= 10,
+    `fe=${awFePlatforms.length} be=${awBePlatforms.length}`);
+  // 🔴 上面那条集合比对有个**盲区**：前端那一侧是测试**自己**拿静态表按 `tier !== 'pending'`
+  //    算出来的，压根没读面板真实用的过滤表达式。于是「把面板过滤改成 tier === 'full'」
+  //    这种改动（静默少列 7 个平台 = 复现历史事故）**仍然是绿的**。
+  //    必须再锚一条：面板里那句谓词必须**逐字**是这个。两条合起来才闭环 ——
+  //    谓词对了（本条）+ 谓词的语义等于后端清单（上一条）。
+  check("后台连投：平台勾选框的过滤谓词逐字是 tier !== 'pending'（否则上一条是测试自己算出来的，恒绿）",
+    awCode.includes("const list = PLATFORMS.filter(p=>p.tier !== 'pending');"));
+  check('后台连投：前端「可投递」平台集与后端 SUPPORTED_PLATFORMS 完全相等（任一侧少列都把平台挡在门外）',
+    awFePlatforms.length > 0 && awFePlatforms.length === awBePlatforms.length
+    && awFePlatforms.every((id) => awBePlatforms.includes(id))
+    && awBePlatforms.every((id) => awFePlatforms.includes(id)),
+    'fe=' + JSON.stringify(awFePlatforms) + ' be=' + JSON.stringify(awBePlatforms));
+
+  // ---- ⑤ 控件锚到**元素** ----
+  const AW_IDS = ['awIntervalSec', 'awLimit', 'awIntervalMs', 'awMinScore', 'awKeyword', 'awPlatforms',
+    'awStart', 'awStop', 'awSaveCfg', 'awState', 'awLog', 'awLastRun'];
+  const awAnchor = (id: string) => new RegExp('<[a-z]+[^>]*\\bid="' + id + '"', 'i').test(awCon);
+  const awAnchorMiss = AW_IDS.filter((id) => !awAnchor(id));
+  check('后台连投：12 个控件都锚到真实元素（只测 includes 会被 JS 里的 #id 引用满足）',
+    awAnchorMiss.length === 0, '缺元素：' + awAnchorMiss.join('、'));
+  check('后台连投：控件锚元素扫描确有区分力（防「正则写错 ⇒ 恒绿」）',
+    awAnchor('awStart') && !awAnchor('awNotExistXyz'),
+    '同一正则对真实 id 必须命中、对不存在的 id 必须不命中');
+  // 🔴 既有那道「JS $('#'+id) ⊆ HTML id」的机械比对**抓不到本面板的多数引用**：
+  //    collectAwCfg 走 num('#awIntervalSec', …)、applyAwStatus 走 back('#awIntervalSec', …)，
+  //    都不是 $('#'… 形式 ⇒ 拼错 id 不会被任何门禁发现（面板静默不生效）。
+  const awLitRefs = new Set([...awCode.matchAll(/'#(aw[A-Za-z0-9_-]*)'/g)].map((m) => m[1]));
+  const awLitMiss = [...awLitRefs].filter((id) => !awAnchor(id));
+  check("后台连投：JS 里每个 '#aw…' 字面量都有对应元素（num/back 这类引用绕过既有那道比对）",
+    awLitMiss.length === 0, '缺元素：' + awLitMiss.join('、'));
+  check('后台连投：字面量扫描确有产出（防正则写错 ⇒ 上面那条恒绿）',
+    awLitRefs.size >= 10, 'litRefs=' + awLitRefs.size);
+
+  // ---- ⑥ 真打端点 + 安全默认 + 顺序不变量 ----
+  const awStartH = sliceBetween(awCode, "$('#awStart').addEventListener", "$('#awStop').addEventListener");
+  check('后台连投：三个按钮真打端点（start / stop / config 一个都不能少）',
+    awStartH.includes("api('/api/auto-apply/watch/start'")
+    && awCode.includes("api('/api/auto-apply/watch/stop'")
+    && (awCode.match(/api\('\/api\/auto-apply\/watch\/config'/g) || []).length >= 2,
+    'start 处理函数里必须能看到 /start 调用');
+  check('后台连投：订阅 SSE 用 fetch + 令牌头（EventSource 不能带令牌头）',
+    awCode.includes("fetch('/api/auto-apply/watch', {headers:authHeaders()})"));
+  // 🔴 顺序不变量：startWatcher() 内部先 loadConfig()（读盘覆盖内存）再置 enabled=true
+  //    ⇒ 必须「先连流 → 再 POST config 落盘 → 最后 POST start」，顺序反了会静默沿用旧参数、
+  //      且首轮最早那批 SSE 事件会在 POST 返回前就推完 ⇒ 日志看不到「本轮开始」。
+  {
+    const iStream = awStartH.indexOf('awOpenStream()');
+    const iCfg = awStartH.indexOf("api('/api/auto-apply/watch/config'");
+    const iStart = awStartH.indexOf("api('/api/auto-apply/watch/start'");
+    check('后台连投：开启顺序正确（先连 SSE → 再落盘 config → 最后 start）',
+      iStream >= 0 && iCfg > iStream && iStart > iCfg,
+      `stream=${iStream} cfg=${iCfg} start=${iStart}`);
+  }
+
+  // ---- ⑦ 日志翻译：覆盖后端全部事件类型，且用对字段名 ----
+  const awLineBody = sliceBetween(awCode, 'function awLine(', 'async function awRefreshStatus(');
+  const awEventTypes = [...awBat.matchAll(/\|\s*\{\s*type:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  check('后台连投：batch.ts 的 BatchEvent 类型解析出 5 种（扫描量护栏）',
+    awEventTypes.length === 5, 'types=' + JSON.stringify(awEventTypes));
+  const awLineMiss = awEventTypes.filter((t) => !awLineBody.includes("case '" + t + "':"));
+  check('后台连投：日志翻译覆盖后端全部事件类型（新增事件类型时前端不会静默无输出）',
+    awLineMiss.length === 0, '未覆盖：' + awLineMiss.join('、'));
+  check("后台连投：platform-done 读 applied/skipped（照抄自动回复那边的 sent 会恒显示 undefined）",
+    awLineBody.includes("'：投出 ' + ev.applied + ' · 跳过 ' + ev.skipped"));
+  check('后台连投：日志里的岗位名走 posLabel（库内存在含反斜杠 / 超 40 字的脏值，直接拼会撑断行）',
+    /posLabel\(e\.position\b/.test(awLineBody));
+
+  // ---- ⑧ 渲染正文里不得出现「中文标点 + 空白」（HTML 换行折叠出来的可见空隙）----
+  // 本轮截图实测：说明段原写成多行 ⇒ 浏览器把行尾换行折叠成一个空格，排到「跳过），」与
+  // 「不必再手点」之间就是一处可见空隙（看着像排版事故）。
+  // ⚠️ 判据必须**逐文本节点**：节点**末尾**的换行是无害的（源码行尾空白，紧挨下一个标签），
+  //    只有节点**内部**的换行才是真缺陷。先剥注释（注释里正写着这条教训本身）、再取文本节点、再 trim。
+  const awCardStart = awCon.indexOf('后台自动连投（常驻监视器）</h2>');
+  const awCardEnd = awCardStart < 0 ? -1 : awCon.indexOf('<div class="out" id="awLog">', awCardStart);
+  const awTextNodes = (awCardStart < 0 || awCardEnd < 0) ? []
+    : [...awCon.slice(awCardStart, awCardEnd).replace(/<!--[\s\S]*?-->/g, '').matchAll(/>([^<]+)</g)]
+      .map((m) => m[1].trim()).filter((s) => s.length > 0);
+  const awGaps = awTextNodes.filter((s) => /[\u3002\uff0c\u3001\uff1b\uff1a]\s/.test(s));
+  check('后台连投：卡片正文不含「中文标点 + 空白」（HTML 换行折叠成的可见空隙）',
+    awTextNodes.length >= 5 && awGaps.length === 0,
+    'nodes=' + awTextNodes.length + ' bad=' + JSON.stringify(awGaps.map((s) => s.slice(0, 26))));
+}
+
 console.log(`\n══════ 合约测试汇总 ══════`);
 console.log(`通过 ${pass} / 共 ${pass + fail}${skipped > 0
   ? `（跳过 ${skipped} 项：${[...skipReasons.entries()].map(([r, n]) => `${r} × ${n}`).join('；')} —— 这些断言本次未执行，不在分母内）`
