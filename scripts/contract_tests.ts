@@ -1078,6 +1078,100 @@ console.log('\n══════ A5. 邮箱直投：JD 优先 + 托管域 + 共
 }
 
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// 邮箱直投「发信前两道闸门」合约（2026-10-10）
+//
+// 起因两件事，都发生在同一天、同一批真实投递上：
+//   ① `huangy@ieit.com` 被 QQ 退回（NDR：No MX Record Found）
+//   ② 用真库 14 条含「标题」的 JD 压旧解析器，**只有 1 条解析成功** ——
+//      其余 13 条静默用了默认标题，日志里还写着「已按格式」
+// 两者同一个根因：收件邮箱与标题要求都是**从 OCR 文本里抠出来的**，而 OCR 会读错、会读散。
+//
+// 本段只做**接线断言**（机械盯住这四件事不被后人摘掉），判定逻辑本身由
+// `tests/unit/mailDeliverability.test.ts` / `tests/unit/subjectSpec.test.ts` 覆盖。
+// ═══════════════════════════════════════════════════════════
+{
+  const offerbiu = stripComments(fs.readFileSync(new URL('../server/services/apply/offerbiu.ts', import.meta.url), 'utf8'));
+  const mailmod = stripComments(fs.readFileSync(new URL('../server/services/mailDeliverability.ts', import.meta.url), 'utf8'));
+  // ⚠️ subjectSpec.ts 里有多条**含双引号的正则字面量**（`/["“「『【]/`），
+  //    `stripComments` 的已知边界会把引号当成字符串起点 ⇒ 对它用**原文**，
+  //    但下面挑的 needle 全是代码专有串（注释里不出现），所以不剥注释也不会自证。
+  const subj = fs.readFileSync(new URL('../server/services/apply/subjectSpec.ts', import.meta.url), 'utf8');
+  const idxMail = fs.readFileSync(new URL('../server/index.ts', import.meta.url), 'utf8');
+
+  // ---- 1) 可投递性闸门必须接在 sendMail 之前 ----
+  check('offerbiu.ts 真的导入了可投递性闸门（assessMailbox / describeAssessment）',
+    /import \{[^}]*assessMailbox[^}]*\} from '\.\.\/mailDeliverability\.js'/.test(offerbiu));
+  const iAssess = offerbiu.indexOf('await assessMailbox(');
+  const iSend = offerbiu.indexOf('await sendMail(');
+  check('🔴 可投递性闸门排在 sendMail **之前**（反了 ⇒ 死域名照样发出去，正是 huangy@ieit.com 那一封）',
+    iAssess >= 0 && iSend >= 0 && iAssess < iSend, 'assess@' + iAssess + ' send@' + iSend);
+  check('上面那条「顺序」判据确有区分力（空串 / 倒序 / 缺 needle 都必须判假）',
+    (() => {
+      const ok = (a: number, b: number) => a >= 0 && b >= 0 && a < b;
+      return ok(10, 20) === true && ok(20, 10) === false && ok(-1, 20) === false && ok(10, -1) === false;
+    })(), '');
+  check('🔴 只有 verdict==="dead" 且**没有** force 才拦（force 是人工核实后的放行口）',
+    /assess\.verdict === 'dead' && !input\.force/.test(offerbiu));
+  check('被拦下时返回 skipped（不是 applied）——「已投递」的账不能被闸门污染',
+    /input\.force[\s\S]{0,900}?status: 'skipped'/.test(offerbiu));
+
+  // ---- 2) 「探针失败不判死」是硬不变量 ----
+  const iNull = mailmod.indexOf('if (dns === null)');
+  const iNx = mailmod.indexOf('if (dns.status === 3)');
+  check('抓到了 dns===null 分支（存在性自检，否则下面那条会恒绿）', iNull >= 0, 'idx=' + iNull);
+  check('🔴 dns===null（探针失败）判 unverified，且**排在** NXDOMAIN 判定之前',
+    iNull >= 0 && iNx > iNull && /if \(dns === null\)[\s\S]{0,300}?verdict: 'unverified'/.test(mailmod),
+    'null@' + iNull + ' nx@' + iNx);
+  check('🔴 探针失败时不得判死（源码里不许出现 unverified→dead 的写法）',
+    !/unverified'[\s\S]{0,80}?verdict: 'dead'/.test(mailmod));
+
+  // ---- 3) 招聘邮箱不算风险账号（本轮修的 bug：`hr@do1.com.cn` 被判 risky）----
+  const roleBlock = (mailmod.match(/const ROLE_LOCAL =[\s\S]{0,300}?\/i;/) || [''])[0];
+  check('抓到了 ROLE_LOCAL 表（存在性自检，否则下面那条会恒绿）', roleBlock.length > 80, 'len=' + roleBlock.length);
+  const RECRUIT_WORDS = /\|(hr|hrbp|humanresource\w*|jobs?|careers?|zhaopin|campus|xiaozhao|talent|hiring|recruit\w*|employ\w*|apply|resume|cv|staffing)\|/;
+  check('🔴 通用角色账号表里**不许**出现招聘语义的词（回归：hr@ 曾被判 risky，真库实测踩到）',
+    !RECRUIT_WORDS.test(roleBlock), 'role=' + roleBlock.replace(/\s+/g, ' ').slice(0, 150));
+  check('上一条确有区分力（把 hr 塞回通用表必须判假，否则它可能是恒绿）',
+    // 变异点必须落在**真实写法**上：把 `(info|` 改成 `(info|hr|`
+    RECRUIT_WORDS.test(roleBlock.replace('(info|', '(info|hr|')) === true
+    && RECRUIT_WORDS.test(roleBlock) === false,
+    'mutated=' + roleBlock.replace('(info|', '(info|hr|').replace(/\s+/g, ' ').slice(0, 80));
+  check('noreply / no-reply 仍留在通用角色表（招聘系统常从 noreply@ 发信，那类确实不该回信）',
+    roleBlock.includes('noreply') && roleBlock.includes('no-reply'));
+
+  // ---- 4) 标题要求解析：旧的窄实现必须已被摘掉 ----
+  check('🔴 offerbiu.ts 已不再使用旧的窄触发词（只认「标题格式」这四个字 ⇒ 真库 14 条只中 1 条）',
+    !/标题格式\[」》/.test(offerbiu) && !offerbiu.includes('SUBJECT_TOKENS'));
+  check('标题解析改走 buildSubjectPlan（新模块）',
+    /import \{[^}]*buildSubjectPlan[^}]*\} from '\.\/subjectSpec\.js'/.test(offerbiu)
+    && offerbiu.includes('buildSubjectPlan(text'));
+  check('🔴 锚点必须含「主题」而不只是「标题」（实测西飞民机 JD 写的是「邮件主题及附件文件名格式」）',
+    /const ANCHOR_RE = \/标题\|主题\/g;/.test(subj));
+  check('🔴 原位替换时必须把跳过的字符写回 out（漏了这句 ⇒ 分隔符与方括号全丢，实测踩过）',
+    /out \+= n\[i\];\r?\n\s*run \+= n\[i\];/.test(subj));
+  check('🔴 OCR 打散的 JD 要显式告警（「抽不到」≠「没有」）—— 模块要导出 looksDegraded、调用方要用 degraded',
+    subj.includes('export function looksDegraded') && /plan\.degraded/.test(offerbiu));
+  check('拼不全时必须 matched=false（不许猜）—— 判据是 unresolved 非空即 false',
+    /matched: dedup\.length === 0/.test(subj));
+  // ---- 4.5) 「标题要求」的来源兜底（少了它，上面那套解析器等于没接）----
+  check('🔴 标题要求必须有「库内 JD 正文」兜底（批量走预取证邮箱时跳过页面加载 ⇒ 没有它解析器一次都不生效）',
+    /\n\s*if \(!extractSubjectRequirement\(text\)\) \{/.test(offerbiu));
+  check('🔴 兜底判据必须含 looksDegraded（只认「抽得到要求」⇒ 被 OCR 打散的 JD 永远发不出告警）',
+    /looksDegraded\(jd\)/.test(offerbiu));
+  check('🔴 端点把 job.jd 作为 jdText 传进 runApply（少了它，兜底拿不到库内正文）',
+    /jdText: job\.jd \|\| undefined/.test(idxMail));
+
+  // ---- 5) force 从端点到引擎 ----
+  const iApply = idxMail.indexOf('const r = await runApply(');
+  check('抓到了 email-apply 里的 runApply 调用点（存在性自检）', iApply > 0, 'idx=' + iApply);
+  const applyBlock = idxMail.slice(iApply, iApply + 2000);
+  check('🔴 端点的 force 真传进了 runApply（否则闸门只能拦、不能人工放行）',
+    /force: req\.body\?\.force === true/.test(applyBlock));
+  check('runApply 调用块里同时带着 email / resumeOverride（确认没截错区块）',
+    applyBlock.includes('email: emails[job.id]') && applyBlock.includes('resumeOverride:'));
+}
+
 console.log('\n══════ B. 自动回复引擎合约（mock 驱动，无需真实浏览器） ══════');
 
 interface MockCalls {

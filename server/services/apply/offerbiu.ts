@@ -21,6 +21,8 @@ import path from 'node:path';
 import { ApplyLogger, bexec, pageText, tryScreenshot, sleep, pollEmailCode, resolveResumePath } from './common.js';
 import * as db from '../../db.js';
 import { sendMail } from '../mail.js';
+import { assessMailbox, describeAssessment } from '../mailDeliverability.js';
+import { buildSubjectPlan, describeSubjectPlan, extractSubjectRequirement, looksDegraded } from './subjectSpec.js';
 import type { ApplyInput, ApplyResult, ApplyLog } from './types.js';
 
 /** offerbiu 官网通道专用浏览器上下文（与 wangshen 的 'wangshen' 区分） */
@@ -100,66 +102,14 @@ const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 /** 明显不是 HR 邮箱的地址 */
 const EMAIL_BLACKLIST = /(no-?reply|donotreply|do-not-reply|bounce|postmaster|abuse|webmaster@)/i;
 
-/** 标题格式占位符 → 档案字段 */
-const SUBJECT_TOKENS: Array<[RegExp, (p: ApplyInput['profile'] & Record<string, any>, job?: ApplyInput['job']) => string]> = [
-  [/学历|学位/, p => p.education || ''],
-  [/专业/, p => p.major || ''],
-  [/学校|院校|毕业院校/, p => p.school || ''],
-  [/姓名|名字/, p => p.name || ''],
-  [/电话|手机|联系方式/, p => p.phone || ''],
-  [/岗位|职位|应聘岗位|意向岗位/, (_p, job) => job?.position || ''],
-  [/城市|意向城市|地点/, p => p.city || ''],
-  [/届|毕业年份|毕业届/, p => (p as any).graduationYear || ''],
-];
-
-/** 占位符词表：只有这些词才会被替换成档案值，遇到其它词说明格式串已经越界 */
-const KNOWN_TOKEN_RE =
-  /^(学历|学位|专业|学校|院校|毕业院校|姓名|名字|电话|手机|联系方式|岗位|职位|应聘岗位|意向岗位|城市|意向城市|地点|届|毕业年份|毕业届)$/;
-
-/** 解析「邮件标题格式：学历+专业+学校+姓名」这类说明 */
-function parseSubjectSpec(text: string): { tokens: string[]; sep: string } | null {
-  const m = text.match(/标题格式[」》"'“”\s:：]*([^\n。；;，,]{2,60})/);
-  if (!m) return null;
-  // 只取「中文词(+中文词)+」这条链，避免把后面正文（如「内推举荐 鼓励通过导师…」）一起吃进来
-  const chain = m[1].match(/[\u4e00-\u9fa5A-Za-z]{2,8}(?:\+[\u4e00-\u9fa5A-Za-z]{2,8})+/);
-  const sepMatch = m[1].match(/([+\-、\/|])/);
-  const spec = (chain ? chain[0] : m[1]).trim();
-  const sep = sepMatch ? sepMatch[1] : '+';
-  const raw = spec.split(/[+\-、\/|]/).map(s => s.trim()).filter(Boolean);
-  // 从第一个已知占位符起，遇到未知词立即截断
-  const tokens: string[] = [];
-  for (const t of raw) {
-    if (!KNOWN_TOKEN_RE.test(t)) break;
-    tokens.push(t);
-  }
-  return tokens.length ? { tokens, sep } : null;
-}
-
-/** 按岗位要求拼邮件标题 */
-function buildSubject(
-  text: string,
-  profile: ApplyInput['profile'] & Record<string, any>,
-  job?: ApplyInput['job'],
-): { subject: string; matched: boolean } {
-  const spec = parseSubjectSpec(text);
-  if (!spec) {
-    const name = profile.name || '应聘者';
-    const pos = job?.position || '';
-    return { subject: pos ? `应聘${pos}-${name}-${profile.phone || ''}` : `应聘简历-${name}`, matched: false };
-  }
-  const parts = spec.tokens.map(tok => {
-    const hit = SUBJECT_TOKENS.find(([re]) => re.test(tok));
-    return hit ? (hit[1](profile, job) || tok) : tok;
-  });
-  const subject = parts.join(spec.sep);
-  // 档案缺字段时会残留「学历/专业/学校/姓名」这类占位词，这种标题发了等于没发，回退默认标题
-  if (parts.some(p => KNOWN_TOKEN_RE.test(p))) {
-    const name = profile.name || '应聘者';
-    const pos = job?.position || '';
-    return { subject: pos ? `应聘${pos}-${name}` : `应聘简历-${name}`, matched: false };
-  }
-  return { subject, matched: true };
-}
+/**
+ * 「邮件标题格式」的解析与拼装已抽到 `./subjectSpec.ts`。
+ *
+ * 2026-10-10 迁出的原因：旧实现（本节原来的 `SUBJECT_TOKENS` / `parseSubjectSpec` /
+ * `buildSubject`）只认「标题格式」这四个字 + 只认 `+` 分隔符，用**真库 14 条含「标题」
+ * 字样的 JD** 压下来**只解析成功 1 条** —— 其余 13 条静默用了默认标题，
+ * 日志里还写着「已按格式」。抽出后也才好写零网络单测。
+ */
 
 /**
  * 微信推文 / 纯官网「邮箱投递」通道
@@ -243,9 +193,41 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
       logs.step('提取邮箱', true, `${to}（候选 ${candidates.length} 个：${candidates.join(', ')}）`);
     }
 
+    // 1.5) 标题要求的来源兜底
+    //
+    // 🔴 这段是必须的，否则上面新写的解析器**在真实批量投递里一次都不会生效**：
+    //    批量流程走「预取证邮箱」（`input.email`，扫描阶段从库内 JD 抠出来的），
+    //    它会**跳过页面加载** ⇒ `text` 是空串 ⇒ 解析不到要求 ⇒ 又回落成默认标题。
+    //    另外微信推文的正文在长图里，就算开了页面也取不到要求（OCR 结果只在库里）。
+    //    最坏情况也不能拿「页面上没有」当成「招聘方没写」——那正是本轮要修的那个静默失效。
+    //
+    // ⚠️ 判据必须包含 `looksDegraded`，**不能只看「JD 里抽得到要求」**：
+    //    被 OCR 打散的那两条 JD 恰恰是**抽不到但看得出有**，
+    //    只认前者的话，「待人工核对」这条告警永远发不出来（E2E F 组实测踩到）。
+    if (!extractSubjectRequirement(text)) {
+      const jd = String(input.jdText || '');
+      if (jd && (extractSubjectRequirement(jd) || looksDegraded(jd))) {
+        text = jd;
+        logs.step(
+          '标题要求来源',
+          true,
+          `页面正文里没有，改用库内 JD 正文（${extractSubjectRequirement(jd) ? `要求：${extractSubjectRequirement(jd)}` : 'JD 像写了要求但文本被打散'}）`,
+        );
+      }
+    }
+
     // 2) 按推文给的「标题格式」拼标题（预取证邮箱无页面正文时回落默认标题）
-    const { subject, matched } = buildSubject(text, input.profile as any, input.job);
-    logs.step('邮件标题', true, matched ? `按推文指定格式：${subject}` : `未识别到指定格式，使用默认：${subject}`);
+    const plan = buildSubjectPlan(text, input.profile as any, input.job);
+    const subject = plan.subject;
+    // JD 没写要求时 matched 恒 false，那是正常的，不算红
+    logs.step('邮件标题', !plan.requirement || plan.matched, describeSubjectPlan(plan));
+    if (plan.degraded) {
+      logs.step(
+        '标题要求待人工核对',
+        false,
+        'JD 里像写了标题要求，但文本被打散（多为 OCR 产物），未能解析 —— 已用默认标题，建议人工核对后重投',
+      );
+    }
 
     // 3) 正文
     const p = input.profile as any;
@@ -270,19 +252,45 @@ export async function runOfferbiuEmail(input: ApplyInput): Promise<ApplyResult> 
     ].filter(l => l !== undefined);
     const body = lines.filter(l => l !== '' || true).join('\n');
 
-    // 4) 预览模式：只把解析结果写进日志，不真正发信，返回结构化预览供前端确认
+    // 4) 附件
     const attachments = resumePath && fs.existsSync(resumePath) ? [resumePath] : [];
+
+    // 4.5) 发信前可投递性闸门
+    //
+    // 起因（2026-10-10）：`huangy@ieit.com` 被 QQ 退回 —— NDR 原文
+    //   「收件人（huangy@ieit.com）所属域名不存在，邮件无法送达。No MX Record Found.」
+    // 而这个地址是从**微信推文长图的 OCR 文本**里提出来的。
+    // 🔴 与上面「标题要求被 OCR 打散」是**同一个根因**：OCR 既读错域名，也读散要求。
+    //
+    // 🔴 纪律：探针失败（DoH 不可达）判 `unverified` 并**照发** ——
+    //    「一次失败的探测是关于你自己网络的证据，不是关于对方域名的证据」，绝不据此判死。
+    //    只有确认「域名不存在 / 无 MX」才拦，且可用 `force` 人工放行。
+    const assess = await assessMailbox(to);
+    logs.step('收件箱可投递性', assess.verdict !== 'dead', `${describeAssessment(assess)}（闸门 ${assess.gate || '-'}）`);
+    if (assess.verdict === 'dead' && !input.force) {
+      const message = `收件邮箱不可投递，已拦下不发：${assess.reason}（人工核实过确实是有效邮箱时，可勾选「强制」放行）`;
+      if (input.dryRun) {
+        return {
+          platform, status: 'need_manual', logs: logs.logs, company, position,
+          preview: { to, subject, body, attachment: attachments[0], deliverability: assess, subjectPlan: plan },
+          message,
+        };
+      }
+      return { platform, status: 'skipped', logs: logs.logs, company, position, message };
+    }
+
+    // 5) 预览模式：只把解析结果写进日志，不真正发信，返回结构化预览供前端确认
     if (input.dryRun) {
       logs.step('预览（未发送）', true, `收件人=${to}；标题=${subject}；附件=${attachments[0] || '无'}`);
       logs.step('预览正文', true, body.slice(0, 300));
       return {
         platform, status: 'need_manual', logs: logs.logs, company, position,
-        preview: { to, subject, body, attachment: attachments[0] },
+        preview: { to, subject, body, attachment: attachments[0], deliverability: assess, subjectPlan: plan },
         message: `预览完成（未发送）：将发往 ${to}，标题「${subject}」`,
       };
     }
 
-    // 5) 发送
+    // 6) 发送
     const res = await sendMail({
       to,
       subject,

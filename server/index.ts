@@ -1960,6 +1960,9 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
     // 先报岗位池覆盖：让「扫出来是 0」这件事有解释（池里没有 JD 正文 / 推文还没跑 OCR），
     // 而不是让用户对着一个空列表猜。
     send({ type: 'pool', pool: emailPoolStats(scope, source) });
+    // 带上档案：扫描结果里就能预览**最终邮件标题**，让用户在点投递之前
+    // 看见招聘方要求什么、我们会发什么（2026-10-10：旧解析器在真库 14 条里只中 1 条）
+    const scanProfile = (db.getProfile() as Record<string, any>) || {};
     const r = await scanOfferbiuEmails({
       limit: Number(limit) || 20,
       offset: Number(offset) || 0,
@@ -1970,6 +1973,7 @@ app.post("/api/offerbiu/scan-emails", async (req, res) => {
       source,
       hasJdOnly: hasJdOnly === true,
       jdOnly: jdOnly === true,
+      profile: toApplyProfile(scanProfile) as any,
       onProgress: (ev) => send(ev),
     });
     send({ type: 'found', scanned: r.scanned, found: r.found, pool: r.pool, sharedDropped: r.sharedDropped });
@@ -2602,6 +2606,13 @@ app.post("/api/offerbiu/email-apply", async (req, res) => {
           preview: req.body?.preview === true,
           dryRun: req.body?.preview === true,
           email: emails[job.id] || undefined,
+          /**
+           * 🔴 库内 JD 正文：走「预取证邮箱」时会跳过页面加载 ⇒ 没有它，
+           * 「招聘方要求的邮件标题」就永远解析不到（见 runOfferbiuEmail 的 1.5 步）。
+           */
+          jdText: job.jd || undefined,
+          /** 强制：越过「隔离」与「收件箱不可投递」两道闸门（见 runOfferbiuEmail 的 4.5 步） */
+          force: req.body?.force === true,
           /** 一岗一简历：该岗位的定制 PDF（未生成成功则不传 → 回退固定简历） */
           resumeOverride: resumeOverrides[job.id],
         });

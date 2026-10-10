@@ -1,6 +1,8 @@
 /**
  * 跨平台专用投递脚本：公共类型
  */
+import type { MailboxAssessment } from '../mailDeliverability.js';
+import type { SubjectPlan } from './subjectSpec.js';
 
 /**
  * 支持的投递平台。
@@ -185,6 +187,16 @@ export interface ApplyInput {
   resumeOverride?: string;
   /** 预览模式：只解析收件人/标题/正文并写入日志，不真正发信 */
   dryRun?: boolean;
+  /**
+   * 强制投递：越过「收件箱可投递性」闸门（`verdict==='dead'` 时默认拦下不发）。
+   *
+   * 用途：闸门是**基于 DNS 的判断**，而 DNS 会变（企业刚上线邮箱、临时故障都可能
+   * 让一个其实存在的域名查不到 MX）。人工核实过「这个地址确实收得到信」时用这个开关放行。
+   *
+   * 🔴 默认 false。刻意做成「要显式勾」：2026-10-10 真实退信 `huangy@ieit.com`
+   *    （QQ NDR：「No MX Record Found」）就是没这道闸门直接发出去的。
+   */
+  force?: boolean;
   /** 真实投递开关（官网/offerbiu 通道专用）：只有显式 true 才真正提交；
    *  其余情况（含 dryRun 或 realSend 缺省）一律只做只读预览，防止批量误投 */
   realSend?: boolean;
@@ -234,7 +246,24 @@ export interface ApplyResult {
    * - 官网投递预览：{ jobUrl?, needLogin, entryHits, resumePath? }
    */
   preview?:
-    | { to: string; subject: string; body: string; attachment?: string }
+    | {
+        to: string;
+        subject: string;
+        body: string;
+        attachment?: string;
+        /**
+         * 收件箱可投递性评估（2026-10-10 新增）。
+         * 起因：`huangy@ieit.com` 真实退信（No MX Record Found）——
+         * 收件邮箱是从**微信推文长图的 OCR 文本**里抠出来的，OCR 会把域名读错。
+         */
+        deliverability?: MailboxAssessment;
+        /**
+         * 邮件标题要求的落实情况（2026-10-10 新增）。
+         * `requirement` 是 JD 原文里的要求片段，`unresolved` 是没做到的部分 ——
+         * 投递前给人看一眼，就是「确定招聘方要求再投递」。
+         */
+        subjectPlan?: SubjectPlan;
+      }
     | {
         jobUrl?: string;
         needLogin: boolean;

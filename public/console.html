@@ -4189,6 +4189,12 @@ function emailHitHtml(h,i){
     + (flags.length?' <b style="color:#c0392b">⚠ '+esc(flags.map(f=>MAIL_FLAG_LABEL[f]||f).join(' / '))+'</b>':'')
     + (h.foldedJobs?(' <span class="muted small">另有 '+h.foldedJobs+' 个岗位同一邮箱，已折叠</span>'):'')
     + '<br><span class="muted" style="margin-left:20px">'+esc(h.email||'')+'</span>'
+    + (h.subjectRequirement ?
+        '<br><span class="muted small" style="margin-left:20px">✉ JD 要求标题：<b>'+esc(h.subjectRequirement)+'</b></span>'
+        + (h.subjectPreview ? '<br><span class="muted small" style="margin-left:20px">&nbsp;&nbsp;我们会发：<b>'+esc(h.subjectPreview)+'</b></span>' : '')
+      : (h.subjectDegraded
+        ? '<br><span style="margin-left:20px;color:#c0392b">✉ JD 里像写了标题要求，但文本被打散（多为 OCR 产物）—— 投递前请人工核对标题</span>'
+        : ''))
     + (h.context?('<br><span class="muted small" style="margin-left:20px">证据：…'+esc(h.context)+'…</span>'):'')
     + (q?('<br><span style="margin-left:20px;color:#c0392b">'+esc(h.quarantine||'')+'</span>'):'')
     + '</label>';
@@ -4200,9 +4206,14 @@ function renderEmailHits(){
     updateEmailSel(); return;
   }
   const safeN = EMAIL_HITS.filter(emailHitSafe).length;
+  const subjN = EMAIL_HITS.filter(h=>h.subjectRequirement).length;
+  const degradedN = EMAIL_HITS.filter(h=>h.subjectDegraded).length;
   box.innerHTML = EMAIL_HITS.map((h,i)=>emailHitHtml(h,i)).join('')
     + '<div class="muted" style="margin-top:6px">共 '+EMAIL_HITS.length+' 条，其中 <b>'+safeN+'</b> 条高置信已默认勾选。'
-    + '带 ⚠ 的默认不勾：看「证据」那一行再决定；<b>跨公司串号</b>的还需勾上 ③ 的强制开关。</div>';
+    + '带 ⚠ 的默认不勾：看「证据」那一行再决定；<b>跨公司串号</b>的还需勾上 ③ 的强制开关。'
+    + '<br>其中 <b>'+subjN+'</b> 条 JD 写明了邮件标题要求（会在投递日志里按它拼标题）'
+    + (degradedN ? '；<b style="color:#c0392b">'+degradedN+'</b> 条 JD 有要求但被 OCR 打散，建议人工核对' : '')
+    + '</div>';
   box.querySelectorAll('.emailHitChk').forEach(c=>c.addEventListener('change', updateEmailSel));
   updateEmailSel();
 }

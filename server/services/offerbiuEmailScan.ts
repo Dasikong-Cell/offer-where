@@ -38,6 +38,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from '../db.js';
 import { execCdpAction } from './cdpDriver.js';
+import { buildSubjectPlan } from './apply/subjectSpec.js';
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -305,6 +306,18 @@ export interface EmailHit {
   flags: MailFlag[];
   /** 同一邮箱还被另外 N 个岗位引用（已折叠，避免给同一个收件箱重复投递） */
   foldedJobs: number;
+  /**
+   * JD 原文里写的「邮件标题要求」片段（`邮件标题格式：学历+专业+学校+姓名` → `学历+专业+学校+姓名`）。
+   *
+   * 2026-10-10 加：起因是**用真库 14 条含「标题」的 JD 压旧解析器只成功 1 条** ——
+   * 招聘方白纸黑字写了格式，我们 13 条全用了默认标题，而且不报错。
+   * 这个字段的意义就是让用户在**点投递之前**看见招聘方到底要求什么。
+   */
+  subjectRequirement?: string | null;
+  /** 我们会用的标题（按上面的要求拼；拼不出则是诚实的默认标题） */
+  subjectPreview?: string;
+  /** 看得见有要求、但文本被打散（多为 OCR 产物）⇒ 必须人工核对，别当「没要求」 */
+  subjectDegraded?: boolean;
   /** 需人工确认的原因；存在时默认跳过投递，**需 force 才发**（落在 DB `jobs.quarantine` 列上） */
   quarantine?: string;
 }
@@ -336,6 +349,14 @@ export type EmailScanScope = 'all' | 'wechat' | 'site';
 export interface ScanOpts {
   limit?: number;
   offset?: number;
+  /**
+   * 求职者档案（可选）。给了才能在扫描结果里**预览最终邮件标题**（`subjectPreview`）。
+   *
+   * 不给也照样扫 —— 那时只回 `subjectRequirement`（招聘方要求的原文）。
+   * 刻意**不拿空档案凑一个标题**：空档案拼出来的会是 `学历+专业+学校+姓名` 这种
+   * 残留占位词，让人误以为那就是要发的标题。宁可不显示。
+   */
+  profile?: import('./apply/subjectSpec.js').SubjectProfile;
   /** 仅保留「像招聘邮箱」的（默认 true）。判定放宽为「前缀像 HR **或** 常见邮箱主机 **或** 有上下文证据」*/
   hrLikeOnly?: boolean;
   /** 每站停留毫秒（等 SPA 渲染），默认 2400 */
@@ -414,6 +435,8 @@ interface ScanCtx {
   jdOnly: boolean;
   /** 共用邮箱表（email → 命中过的公司名列表） */
   shared: Map<string, string[]>;
+  /** 求职者档案；缺省则不生成 `subjectPreview`（见 `ScanOpts.profile` 的说明） */
+  profile?: import('./apply/subjectSpec.js').SubjectProfile;
 }
 
 /**
@@ -437,6 +460,7 @@ function buildHit(
   idx: number,
   total: number,
   company: string,
+  profile?: import('./apply/subjectSpec.js').SubjectProfile,
 ): EmailHit {
   const verdict = judgeMailbox(cand.email, j.apply_url, {
     syndication: isSyndicationUrl(j.apply_url),
@@ -451,17 +475,27 @@ function buildHit(
   if (ocrDerived) flags.push('ocr-derived');
   if (suspiciousShortLocal(cand.email)) flags.push('short-local');
 
+  // 「招聘方要求的邮件标题」——扫描阶段就算出来，好在**投递之前**给人看。
+  // 但**不进 flags**：拼不出标题不该拦投递（那是「邮件内容不够贴合」，不是「发错人」），
+  // 所以它只影响展示与日志，不影响 confidence/默认勾选。
+  const subjectPlan = buildSubjectPlan(String(j.jd || ''), profile || {}, { position: j.position, company });
+
   onProgress?.({
     type: 'progress', index: idx, total, company,
     message: `  ✓ ${origin === 'jd' ? 'JD 正文' : '页面'}发现招聘邮箱 ${cand.email}`
       + (altCount > 1 ? `（另有 ${altCount - 1} 个）` : '')
-      + (flags.length ? ` ⚠ 待人工确认（${flags.join(' / ')}）` : ''),
+      + (flags.length ? ` ⚠ 待人工确认（${flags.join(' / ')}）` : '')
+      + `；标题：${subjectPlan.requirement ? `按 JD 要求「${subjectPlan.requirement}」` : (subjectPlan.degraded ? 'JD 有要求但被 OCR 打散，待人工核对' : 'JD 未写要求')}`,
   });
   return {
     jobId: j.id, company, position: j.position || '', city: j.city,
     email: cand.email, applyUrl: j.apply_url,
     origin, confidence: flags.length ? 'low' : 'high', mailKind: mailKindOf(cand.email),
     context: cand.around, ocrDerived, flags, foldedJobs: 0,
+    subjectRequirement: subjectPlan.requirement,
+    // 只有拿到档案才回 preview —— 空档案拼出来的是残留占位词，会让人误以为那就是要发的标题
+    ...(profile ? { subjectPreview: subjectPlan.subject } : {}),
+    ...(subjectPlan.degraded ? { subjectDegraded: true } : {}),
     ...(verdict.quarantine ? { quarantine: verdict.quarantine } : {}),
   };
 }
@@ -488,7 +522,7 @@ async function scanOne(
     const jdCands = keepCandidates(raw, o);
     if (jdCands.length) {
       const best = jdCands.find((c) => c.evidence) || jdCands[0];
-      return buildHit(j, best, 'jd', jdCands.length, onProgress, idx, total, company);
+      return buildHit(j, best, 'jd', jdCands.length, onProgress, idx, total, company, o.profile);
     }
     if (raw.length) {
       const sharedHit = raw.find((c) => o.shared.has(c.email));
@@ -524,7 +558,7 @@ async function scanOne(
     const pageCands = keepCandidates(extractMailCandidates(String(r?.data || '')), o);
     if (pageCands.length) {
       const best = pageCands.find((c) => c.evidence) || pageCands[0];
-      return buildHit(j, best, 'page', pageCands.length, onProgress, idx, total, company);
+      return buildHit(j, best, 'page', pageCands.length, onProgress, idx, total, company, o.profile);
     }
     onProgress?.({ type: 'progress', index: idx, total, company, message: '  未发现招聘邮箱（该岗位需人工/官网表单）' });
     return null;
